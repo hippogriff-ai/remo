@@ -70,7 +70,7 @@ struct ShoppingContent: View {
             // Grouped products
             ForEach(groupedItems, id: \.category) { group in
                 Section(group.category) {
-                    ForEach(group.items, id: \.productName) { item in
+                    ForEach(group.items, id: \.productUrl) { item in
                         ProductCard(item: item)
                     }
                 }

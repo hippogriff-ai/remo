@@ -134,6 +134,7 @@ public struct IntakeChatScreen: View {
     }
 
     private func sendMessage(_ message: String) async {
+        guard !isSending else { return }
         guard let projectId = projectState.projectId else {
             assertionFailure("sendMessage() called without projectId")
             errorMessage = "Project not initialized"

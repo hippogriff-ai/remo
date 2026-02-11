@@ -153,10 +153,15 @@ struct HomeScreen: View {
             )
             let state = ProjectState()
             state.projectId = projectId
-            let workflowState = try await client.getState(projectId: projectId)
-            state.apply(workflowState)
+            // Persist ID before getState so the project survives a transient failure
             projects.append((id: projectId, state: state))
             persistProjectIds()
+            do {
+                let workflowState = try await client.getState(projectId: projectId)
+                state.apply(workflowState)
+            } catch {
+                // Project is saved; state will refresh on next app launch
+            }
             navigationPath.append(projectId)
         } catch {
             errorMessage = error.localizedDescription
