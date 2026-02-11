@@ -51,6 +51,7 @@ public struct DesignSelectionScreen: View {
             .disabled(selectedIndex == nil || isSelecting)
             .padding(.horizontal)
             .accessibilityLabel(isSelecting ? "Selecting design" : "Choose this design")
+            .accessibilityIdentifier("selection_choose")
 
             // Start over
             Button("Start Over", role: .destructive) {
@@ -59,6 +60,7 @@ public struct DesignSelectionScreen: View {
             .font(.subheadline)
             .padding(.bottom)
             .accessibilityHint("Discards generated designs and returns to design chat")
+            .accessibilityIdentifier("selection_start_over")
         }
         .navigationTitle("Choose a Design")
         #if os(iOS)
@@ -176,6 +178,7 @@ struct DesignCard: View {
                 .font(.subheadline.bold())
         }
         .onTapGesture { onTap() }
+        .accessibilityIdentifier("selection_card_\(option.caption.lowercased().replacingOccurrences(of: " ", with: "_"))")
     }
 }
 

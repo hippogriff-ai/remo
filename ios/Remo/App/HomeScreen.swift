@@ -26,14 +26,16 @@ struct HomeScreen: View {
                         systemImage: "house.fill",
                         description: Text("Tap the button below to redesign your first room.")
                     )
+                    .accessibilityIdentifier("home_empty_state")
                 } else {
                     List {
-                        ForEach(projects, id: \.id) { project in
+                        ForEach(Array(projects.enumerated()), id: \.element.id) { index, project in
                             Button {
                                 navigationPath.append(project.id)
                             } label: {
                                 ProjectRow(projectState: project.state)
                             }
+                            .accessibilityIdentifier("home_project_\(index)")
                         }
                         .onDelete { indexSet in
                             deleteProjects(at: indexSet)
@@ -68,6 +70,7 @@ struct HomeScreen: View {
                     }
                     .disabled(isCreating)
                     .accessibilityLabel("New Project")
+                    .accessibilityIdentifier("home_new_project")
                 }
             }
             .task {
@@ -90,49 +93,46 @@ struct HomeScreen: View {
 
         // Refresh state from backend concurrently, removing purged projects
         let projectsCopy = projects
-        let results: [(index: Int, state: WorkflowState?)] = await withTaskGroup(
-            of: (Int, WorkflowState?).self,
-            returning: [(Int, WorkflowState?)].self
+        let results: [(id: String, state: WorkflowState?)] = await withTaskGroup(
+            of: (String, WorkflowState?).self,
+            returning: [(String, WorkflowState?)].self
         ) { group in
-            for i in projectsCopy.indices {
+            for project in projectsCopy {
                 group.addTask {
                     do {
-                        let state = try await self.client.getState(projectId: projectsCopy[i].id)
-                        return (i, state)
+                        let state = try await self.client.getState(projectId: project.id)
+                        return (project.id, state)
                     } catch let error as APIError {
                         if case .httpError(let code, _) = error, code == 404 {
-                            return (i, nil) // Purged on server
+                            return (project.id, nil) // Purged on server
                         }
-                        return (i, WorkflowState(step: "")) // Keep project, show stale
+                        return (project.id, WorkflowState(step: "")) // Keep project, show stale
                     } catch is CancellationError {
-                        return (i, WorkflowState(step: "")) // Keep on cancel
+                        return (project.id, WorkflowState(step: "")) // Keep on cancel
                     } catch {
-                        return (i, WorkflowState(step: "")) // Keep on unknown error
+                        return (project.id, WorkflowState(step: "")) // Keep on unknown error
                     }
                 }
             }
-            var collected: [(Int, WorkflowState?)] = []
+            var collected: [(String, WorkflowState?)] = []
             for await result in group {
                 collected.append(result)
             }
             return collected
         }
 
-        // Apply results and remove purged projects
-        var validIndices: [Int] = []
-        for (index, state) in results {
+        // Apply results keyed by projectId (safe against concurrent mutations)
+        var purgedIds: Set<String> = []
+        for (projectId, state) in results {
+            guard let index = projects.firstIndex(where: { $0.id == projectId }) else { continue }
             if let state, !state.step.isEmpty {
                 projects[index].state.apply(state)
-                validIndices.append(index)
-            } else if state != nil {
-                // Empty step = kept due to error, don't apply but keep
-                validIndices.append(index)
+            } else if state == nil {
+                purgedIds.insert(projectId)
             }
-            // nil = 404 purged, not added to validIndices
         }
-        validIndices.sort()
-        if validIndices.count < projects.count {
-            projects = validIndices.map { projects[$0] }
+        if !purgedIds.isEmpty {
+            projects.removeAll { purgedIds.contains($0.id) }
             persistProjectIds()
         }
     }
@@ -153,6 +153,8 @@ struct HomeScreen: View {
             )
             let state = ProjectState()
             state.projectId = projectId
+            let workflowState = try await client.getState(projectId: projectId)
+            state.apply(workflowState)
             projects.append((id: projectId, state: state))
             persistProjectIds()
             navigationPath.append(projectId)

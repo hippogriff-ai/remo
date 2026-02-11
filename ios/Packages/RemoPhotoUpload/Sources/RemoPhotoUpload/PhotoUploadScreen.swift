@@ -93,6 +93,7 @@ public struct PhotoUploadScreen: View {
                                 .frame(maxWidth: .infinity)
                         }
                         .buttonStyle(.bordered)
+                        .accessibilityIdentifier("photos_add_room")
                     }
 
                     // Inspiration photos (optional, max 3)
@@ -108,6 +109,7 @@ public struct PhotoUploadScreen: View {
                         }
                         .buttonStyle(.bordered)
                         .tint(.purple)
+                        .accessibilityIdentifier("photos_add_inspiration")
                     }
                 }
                 .padding(.horizontal)

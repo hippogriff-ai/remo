@@ -74,6 +74,7 @@ public struct IntakeChatScreen: View {
                     TextField("Type your message...", text: $inputText, axis: .vertical)
                         .textFieldStyle(.roundedBorder)
                         .lineLimit(1...4)
+                        .accessibilityIdentifier("chat_input")
 
                     Button {
                         Task { await sendMessage(inputText) }
@@ -83,6 +84,7 @@ public struct IntakeChatScreen: View {
                     }
                     .disabled(inputText.trimmingCharacters(in: .whitespaces).isEmpty || isSending)
                     .accessibilityLabel("Send message")
+                    .accessibilityIdentifier("chat_send")
                 }
                 .padding()
             }
@@ -97,6 +99,7 @@ public struct IntakeChatScreen: View {
                     Task { await skipIntake() }
                 }
                 .font(.subheadline)
+                .accessibilityIdentifier("chat_skip")
             }
         }
         .task {
@@ -234,6 +237,7 @@ struct QuickReplyChips: View {
                 }
                 .buttonStyle(.plain)
                 .accessibilityLabel("Option \(option.number): \(option.label)")
+                .accessibilityIdentifier("chat_option_\(option.number)")
             }
         }
     }
@@ -273,6 +277,7 @@ struct SummaryCard: View {
             }
             .buttonStyle(.borderedProminent)
             .frame(maxWidth: .infinity)
+            .accessibilityIdentifier("chat_confirm_brief")
         }
         .padding()
         .background(Color.secondary.opacity(0.12))

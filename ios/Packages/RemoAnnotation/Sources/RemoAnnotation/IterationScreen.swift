@@ -80,6 +80,7 @@ public struct IterationScreen: View {
             .padding()
             .accessibilityLabel(isSubmitting ? "Generating revision" : "Generate Revision")
             .accessibilityHint("Sends your edits to generate a revised design")
+            .accessibilityIdentifier("iteration_submit")
 
             Button("Approve This Design") {
                 Task { await approve() }
@@ -87,6 +88,7 @@ public struct IterationScreen: View {
             .font(.subheadline)
             .padding(.bottom)
             .accessibilityHint("Approve the current design and continue to shopping list")
+            .accessibilityIdentifier("iteration_approve")
         }
         .navigationTitle("Refine Design")
         #if os(iOS)
@@ -156,6 +158,7 @@ public struct IterationScreen: View {
             .textFieldStyle(.roundedBorder)
             .lineLimit(2...6)
             .padding(.horizontal)
+            .accessibilityIdentifier("iteration_text_input")
     }
 
     private func submit() async {
@@ -356,8 +359,9 @@ struct AnnotationCanvas: View {
                 onWillMutate?()
                 let nx = location.x / geometry.size.width
                 let ny = location.y / geometry.size.height
+                let nextId = (regions.map(\.regionId).max() ?? 0) + 1
                 let newRegion = AnnotationRegion(
-                    regionId: regions.count + 1,
+                    regionId: nextId,
                     centerX: nx,
                     centerY: ny,
                     radius: 0.08,

@@ -20,7 +20,10 @@ public actor PollingManager {
     public func pollUntilStepChanges(projectId: String, currentStep: String) async throws -> WorkflowState {
         var consecutiveErrors = 0
         while !Task.isCancelled {
-            try await Task.sleep(for: interval)
+            // On retry, backoff sleep already happened — skip the normal interval
+            if consecutiveErrors == 0 {
+                try await Task.sleep(for: interval)
+            }
             do {
                 let state = try await client.getState(projectId: projectId)
                 consecutiveErrors = 0

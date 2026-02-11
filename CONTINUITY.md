@@ -79,7 +79,15 @@ Build the T1 iOS app for Remo (AI room redesign). P1 Independent Build substanti
 - Done: HomeScreen `loadAndRefreshProjects` uses `withTaskGroup` for concurrent project state fetching (was sequential waterfall)
 - Done: HomeScreen `deleteProjects` surfaces server-side delete errors via alert (was silent `try?` swallowing)
 - Done: Test coverage expansion — 11 new tests: ProjectStep ordering (4), preview factory for all 9 steps (6 new), GenerationStatus Codable round-trip (1)
-- Now: All P1+P2+P3 deliverables done except real API swap. **99 tests**, 0 warnings, 8/8 packages build.
+- Done: Maestro UI testing — happy path passes end-to-end (8 screenshots: home→scan→chat→selection→iteration→approve→shopping→output)
+- Done: accessibilityIdentifier on all interactive elements (8 screen files), test backdoor (skipPhotos via launch arg), composable subflows (8 YAML files)
+- Done: Fixed nested NavigationStack crash — ProjectFlowScreen uses direct view switch instead of nested NavigationStack
+- Done: HomeScreen.createProject() now fetches server state after creation (was defaulting to .photoUpload)
+- Done: PR fix — Annotation regionId collision uses `max() + 1` instead of `count + 1` (avoids duplicate IDs after deletion)
+- Done: PR fix — HomeScreen refresh merges by projectId instead of array index (safe against concurrent mutations)
+- Done: PR fix — PollingManager skips interval sleep when retrying (was double-sleeping: interval + backoff)
+- Done: Maestro kept as local-only tool (GitHub Free plan: macOS runners too expensive). Commands documented in CLAUDE.md for Claude Code sessions.
+- Now: All P1+P2+P3 deliverables done except real API swap. **99 tests** + Maestro happy path, 0 warnings, 8/8 packages build.
 - Next: P2 integration (swap mock for real API)
 
 ## Open Questions

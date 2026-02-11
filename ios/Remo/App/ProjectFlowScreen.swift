@@ -2,28 +2,18 @@ import SwiftUI
 import RemoModels
 import RemoNetworking
 
-/// Drives the full project flow via NavigationStack.
-/// Observes ProjectState and pushes the correct screen.
+/// Drives the full project flow by observing ProjectState.step.
+/// Uses a direct view switch instead of a nested NavigationStack to avoid
+/// the nested-NavigationStack crash in SwiftUI (EXC_BREAKPOINT in boundPathChange).
+/// The outer NavigationStack from HomeScreen provides the navigation chrome.
 struct ProjectFlowScreen: View {
     @Bindable var projectState: ProjectState
     let client: any WorkflowClientProtocol
 
-    @State private var path: [ProjectStep] = []
-
     var body: some View {
-        NavigationStack(path: $path) {
-            ProjectRouter(step: projectState.step, projectState: projectState, client: client)
-                .navigationDestination(for: ProjectStep.self) { step in
-                    ProjectRouter(step: step, projectState: projectState, client: client)
-                }
-        }
-        .onChange(of: projectState.step) { _, newStep in
-            // Replace path with just the new step — workflow is linear, no backward navigation
-            if path.last != newStep {
-                path = [newStep]
-            }
-        }
-        .overlay {
+        ProjectRouter(step: projectState.step, projectState: projectState, client: client)
+            .animation(.default, value: projectState.step)
+            .overlay {
             if let error = projectState.error {
                 ErrorOverlay(error: error) {
                     Task {

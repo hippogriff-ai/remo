@@ -4,8 +4,13 @@ import RemoNetworking
 
 @main
 struct RemoApp: App {
-    // Swap to RealWorkflowClient in P2
-    private let client: any WorkflowClientProtocol = MockWorkflowClient()
+    private let client: any WorkflowClientProtocol
+
+    init() {
+        let isMaestroTest = UserDefaults.standard.bool(forKey: "maestro-test")
+        // Swap to RealWorkflowClient in P2
+        client = MockWorkflowClient(skipPhotos: isMaestroTest)
+    }
 
     var body: some Scene {
         WindowGroup {

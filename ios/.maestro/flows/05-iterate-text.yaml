@@ -1,0 +1,16 @@
+appId: com.hippogriff.remo
+---
+# IterationScreen: switch to text feedback mode, type feedback, submit
+- assertVisible: "Refine Design"
+# Switch to text feedback mode
+- tapOn: "Text Feedback"
+- tapOn:
+    id: "iteration_text_input"
+- inputText: "Make the lighting warmer and add a cozy rug under the coffee table"
+- tapOn:
+    id: "iteration_submit"
+# Wait for generation to complete (mock takes ~1s)
+- extendedWaitUntil:
+    visible: "Round 2 of 5"
+    timeout: 5000
+- takeScreenshot: 05-iterate-text

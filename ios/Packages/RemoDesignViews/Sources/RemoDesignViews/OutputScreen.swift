@@ -64,6 +64,7 @@ public struct OutputScreen: View {
                     .buttonStyle(.borderedProminent)
                     .disabled(savedToPhotos)
                     .accessibilityLabel(savedToPhotos ? "Design saved to Photos" : "Save to Photos")
+                    .accessibilityIdentifier("output_save")
 
                     if let imageUrl = projectState.currentImage, let url = URL(string: imageUrl) {
                         ShareLink(item: url) {
@@ -72,6 +73,7 @@ public struct OutputScreen: View {
                         }
                         .buttonStyle(.bordered)
                         .accessibilityLabel("Share design image")
+                        .accessibilityIdentifier("output_share")
                     }
 
                     Button {
@@ -83,6 +85,7 @@ public struct OutputScreen: View {
                     .buttonStyle(.bordered)
                     .accessibilityLabel("View Shopping List")
                     .accessibilityHint("Browse matching products for your design")
+                    .accessibilityIdentifier("output_shopping")
                 }
                 .padding(.horizontal)
             }

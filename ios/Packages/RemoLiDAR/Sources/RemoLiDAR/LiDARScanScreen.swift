@@ -51,6 +51,7 @@ public struct LiDARScanScreen: View {
                 .buttonStyle(.borderedProminent)
                 .controlSize(.large)
                 .disabled(isScanning)
+                .accessibilityIdentifier("scan_start")
             } else {
                 Text("LiDAR is not available on this device.")
                     .font(.subheadline)
@@ -63,6 +64,7 @@ public struct LiDARScanScreen: View {
             .font(.subheadline)
             .padding(.bottom)
             .accessibilityHint("Skip room scanning. Furniture fit information won't be available.")
+            .accessibilityIdentifier("scan_skip")
         }
         .padding()
         .navigationTitle("Room Scan")

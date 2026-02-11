@@ -54,6 +54,7 @@ public struct ApprovalScreen: View {
             .padding(.bottom)
             .accessibilityLabel(isApproving ? "Generating shopping list" : "Approve design and get shopping list")
             .accessibilityHint("Finalizes your design and creates a list of matching products")
+            .accessibilityIdentifier("approval_approve")
         }
         .navigationTitle("Review Design")
         #if os(iOS)

@@ -1,0 +1,29 @@
+appId: com.hippogriff.remo
+---
+# Alternative flow: skip intake entirely (for faster iteration testing)
+# Not included in happy-path.yaml — run standalone with:
+#   maestro test ios/.maestro/flows/08-intake-skip.yaml
+- launchApp:
+    clearState: true
+    arguments:
+      maestro-test: "true"
+    permissions:
+      photos: allow
+      camera: allow
+# Create project and tap to enter
+- tapOn:
+    id: "home_new_project"
+- assertVisible: "Scan room dimensions"
+- tapOn:
+    id: "home_project_0"
+# Skip scan
+- assertVisible: "Scan Your Room"
+- tapOn:
+    id: "scan_skip"
+- tapOn: "Skip"
+# Skip intake
+- assertVisible: "Design Chat"
+- tapOn:
+    id: "chat_skip"
+- takeScreenshot: 08-intake-skip
+- assertVisible: "Choose a Design"

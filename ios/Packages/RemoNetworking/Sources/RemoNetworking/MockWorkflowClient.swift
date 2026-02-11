@@ -8,9 +8,11 @@ public actor MockWorkflowClient: WorkflowClientProtocol {
     private var states: [String: WorkflowState] = [:]
     private var intakeMessages: [String: [String]] = [:]
     private let delay: Duration
+    private let skipPhotos: Bool
 
-    public init(delay: Duration = .milliseconds(300)) {
+    public init(delay: Duration = .milliseconds(300), skipPhotos: Bool = false) {
         self.delay = delay
+        self.skipPhotos = skipPhotos
     }
 
     private func simulateDelay() async throws {
@@ -22,7 +24,16 @@ public actor MockWorkflowClient: WorkflowClientProtocol {
     public func createProject(deviceFingerprint: String, hasLidar: Bool) async throws -> String {
         try await simulateDelay()
         let id = UUID().uuidString
-        states[id] = WorkflowState(step: "photos")
+        if skipPhotos {
+            var state = WorkflowState(step: "scan")
+            state.photos = [
+                PhotoData(photoId: "mock-room-1", storageKey: "projects/\(id)/photos/room_0.jpg", photoType: "room"),
+                PhotoData(photoId: "mock-room-2", storageKey: "projects/\(id)/photos/room_1.jpg", photoType: "room"),
+            ]
+            states[id] = state
+        } else {
+            states[id] = WorkflowState(step: "photos")
+        }
         return id
     }
 
