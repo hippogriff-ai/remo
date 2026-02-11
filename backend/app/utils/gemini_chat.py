@@ -87,7 +87,7 @@ def _part_to_dict(part: types.Part) -> dict[str, Any]:
         result["thought_signature"] = part.thought_signature
 
     if not result:
-        logger.warning(
+        logger.error(
             "gemini_part_dropped_during_serialization",
             part_type=type(part).__name__,
         )
@@ -203,7 +203,12 @@ def restore_from_r2(project_id: str) -> list[types.Content]:
                 f"Chat history not found for project {project_id}",
                 non_retryable=True,
             ) from e
-        raise
+        logger.error("r2_chat_history_fetch_failed", project_id=project_id, error_code=error_code)
+        is_client_error = error_code in ("AccessDenied", "InvalidBucketName", "403")
+        raise ApplicationError(
+            f"R2 error fetching chat history: {error_code}",
+            non_retryable=is_client_error,
+        ) from e
 
     try:
         serialized = json.loads(json_bytes)
@@ -269,10 +274,7 @@ def continue_chat(
         elif isinstance(item, types.Part):
             user_parts.append(item)
         else:
-            logger.warning(
-                "gemini_chat_unexpected_part_type",
-                item_type=type(item).__name__,
-            )
+            raise ValueError(f"Unexpected message part type: {type(item).__name__}")
 
     contents = list(history) + [types.Content(role="user", parts=user_parts)]
 
@@ -296,8 +298,8 @@ def extract_image(response: types.GenerateContentResponse) -> Image.Image | None
     for part in content.parts:
         try:
             genai_img = part.as_image()
-        except Exception:
-            logger.warning("gemini_part_as_image_failed", exc_info=True)
+        except (AttributeError, ValueError):
+            # Expected: part is not an image type
             continue
         if genai_img is not None and genai_img.image_bytes is not None:
             try:

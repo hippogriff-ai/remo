@@ -502,14 +502,16 @@ class TestExtractTextEdgeCases:
 class TestRestoreFromR2EdgeCases:
     """Edge cases for restore_from_r2."""
 
-    def test_non_nosuchkey_error_re_raises(self):
+    def test_non_nosuchkey_error_raises_application_error(self):
         from unittest.mock import patch
 
-        from botocore.exceptions import ClientError
+        from temporalio.exceptions import ApplicationError
 
         from app.utils.gemini_chat import restore_from_r2
 
         mock_r2 = MagicMock()
+        from botocore.exceptions import ClientError
+
         mock_r2.get_object.side_effect = ClientError(
             {"Error": {"Code": "AccessDenied", "Message": "forbidden"}},
             "GetObject",
@@ -517,7 +519,7 @@ class TestRestoreFromR2EdgeCases:
 
         with (
             patch("app.utils.r2._get_client", return_value=mock_r2),
-            pytest.raises(ClientError),
+            pytest.raises(ApplicationError, match="AccessDenied"),
         ):
             restore_from_r2("proj-denied")
 

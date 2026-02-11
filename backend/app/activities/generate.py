@@ -188,6 +188,7 @@ def _upload_image(image: Image.Image, project_id: str, filename: str) -> str:
     buf = io.BytesIO()
     image.save(buf, format="PNG")
     key = f"projects/{project_id}/generated/{filename}"
+    logger.info("r2_upload_start", key=key, size_bytes=buf.tell())
     upload_object(key, buf.getvalue(), content_type="image/png")
     return generate_presigned_url(key)
 

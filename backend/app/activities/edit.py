@@ -156,6 +156,7 @@ def _upload_image(image: Image.Image, project_id: str) -> str:
     key = f"projects/{project_id}/revisions/{revision_id}.png"
     buf = io.BytesIO()
     image.save(buf, format="PNG")
+    logger.info("r2_upload_start", key=key, size_bytes=buf.tell())
     upload_object(key, buf.getvalue(), content_type="image/png")
     return generate_presigned_url(key)
 
@@ -176,8 +177,8 @@ async def _bootstrap_chat(
         _download_images(input.inspiration_photo_urls),
     )
 
-    # Create chat and send context (sync SDK call in thread pool)
-    chat = create_chat(client)
+    # Create chat (sync SDK call in thread pool)
+    chat = await asyncio.to_thread(create_chat, client)
 
     # Turn 1: Reference images + selected design + context
     context_parts: list = []
@@ -199,11 +200,16 @@ async def _bootstrap_chat(
         annotated = draw_annotations(base_image, input.annotations)
         edit_template = _load_prompt("edit.txt")
         instructions = _build_edit_instructions(input.annotations)
-        edit_prompt = edit_template.format(edit_instructions=instructions)
+        # Escape curly braces in user-provided text to prevent str.format() KeyError
+        edit_prompt = edit_template.format(
+            edit_instructions=instructions.replace("{", "{{").replace("}", "}}")
+        )
         edit_parts.extend([annotated, edit_prompt])
 
     if input.feedback:
-        feedback_prompt = TEXT_FEEDBACK_TEMPLATE.format(feedback=input.feedback)
+        feedback_prompt = TEXT_FEEDBACK_TEMPLATE.format(
+            feedback=input.feedback.replace("{", "{{").replace("}", "}}")
+        )
         if edit_parts:
             # Both annotations and feedback — append feedback as additional context
             edit_parts.append(f"\nAdditional feedback: {input.feedback}")
@@ -249,11 +255,15 @@ async def _continue_chat(
         annotated = draw_annotations(base_image, input.annotations)
         edit_template = _load_prompt("edit.txt")
         instructions = _build_edit_instructions(input.annotations)
-        edit_prompt = edit_template.format(edit_instructions=instructions)
+        edit_prompt = edit_template.format(
+            edit_instructions=instructions.replace("{", "{{").replace("}", "}}")
+        )
         message_parts.extend([annotated, edit_prompt])
 
     if input.feedback:
-        feedback_prompt = TEXT_FEEDBACK_TEMPLATE.format(feedback=input.feedback)
+        feedback_prompt = TEXT_FEEDBACK_TEMPLATE.format(
+            feedback=input.feedback.replace("{", "{{").replace("}", "}}")
+        )
         if message_parts:
             message_parts.append(f"\nAdditional feedback: {input.feedback}")
         else:
@@ -279,6 +289,11 @@ async def _continue_chat(
             buf = io.BytesIO()
             item.save(buf, format="PNG")
             user_parts.append(gtypes.Part.from_bytes(data=buf.getvalue(), mime_type="image/png"))
+        else:
+            logger.warning(
+                "edit_chat_unexpected_part_type",
+                item_type=type(item).__name__,
+            )
 
     updated_history = list(history)
     updated_history.append(gtypes.Content(role="user", parts=user_parts))
