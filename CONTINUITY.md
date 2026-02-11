@@ -14,11 +14,11 @@ Build the T1 iOS app for Remo (AI room redesign). P1 Independent Build substanti
 
 ## Key Decisions
 - **`ProjectStep` enum** with `rawValue` matching backend step strings (`.photoUpload = "photos"`)
-- **`AnyCodable`** for type-erased JSON dict fields (walls, openings in `RoomDimensions`)
+- **`JSONValue` recursive enum** replaced `AnyCodable` for type-safe JSON (walls, openings in `RoomDimensions`)
 - **`ProjectState`** is `@Observable` in RemoModels — central state, accessible to all packages
 - **`PollingManager`** actor for cancel-safe polling (polls until step changes or task cancelled)
 - **`NavigationStack` driven by `ProjectStep`** — router maps step to correct screen view
-- **80 passing tests** (35 model + 35 networking + 10 annotation), 0 warnings, 8/8 packages build
+- **88 passing tests** (43 model + 35 networking + 10 annotation), 0 warnings, 8/8 packages build
 - **Annotation-based editing** (numbered circles, not lasso) — tap to place, drag to reposition
 - **Polling over SSE** for MVP — iOS polls `GET /projects/{id}` every 2-3s
 - **`ProjectState.preview(step:)`** factory for creating pre-populated states for #Preview blocks
@@ -63,7 +63,11 @@ Build the T1 iOS app for Remo (AI room redesign). P1 Independent Build substanti
 - Done: Removed stale PollingManager.swift redirect from app shell
 - Done: PollingManager tests — 7 tests covering step change, error state, retry, max retries, non-retryable immediate fail, single poll, cancellation
 - Done: PollingManager backoff proportional to poll interval (tests run fast, production uses 2s base)
-- Now: All P1+P2+P3 deliverables done except real API swap. 80 tests, 0 warnings, 8/8 packages build.
+- Done: Type design improvements — JSONValue recursive enum (replaces Any-based AnyCodable), ProjectStep Comparable, PhotoType/RevisionType enums with computed accessors
+- Done: Adopted typed enum accessors in views/mock (photoTypeEnum, revisionTypeEnum) — no more raw string comparisons
+- Done: Request encoding tests — 6 tests validating snake_case JSON keys for all request models sent to backend
+- Done: Typed accessor tests — forward compatibility (unknown values return nil)
+- Now: All P1+P2+P3 deliverables done except real API swap. 88 tests, 0 warnings, 8/8 packages build.
 - Next: P2 integration (swap mock for real API), final polish
 
 ## Open Questions
