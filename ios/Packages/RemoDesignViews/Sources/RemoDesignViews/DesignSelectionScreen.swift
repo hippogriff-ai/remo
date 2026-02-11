@@ -142,6 +142,9 @@ public struct DesignSelectionScreen: View {
             try await client.startOver(projectId: projectId)
             let newState = try await client.getState(projectId: projectId)
             projectState.apply(newState)
+            // Clear local-only intake state not covered by WorkflowState
+            projectState.chatMessages = []
+            projectState.currentIntakeOutput = nil
         } catch {
             errorMessage = error.localizedDescription
         }

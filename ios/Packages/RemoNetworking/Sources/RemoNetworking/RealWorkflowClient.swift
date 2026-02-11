@@ -61,6 +61,16 @@ public final class RealWorkflowClient: WorkflowClientProtocol, @unchecked Sendab
         return try decoder.decode(PhotoUploadResponse.self, from: data)
     }
 
+    public func deletePhoto(projectId: String, photoId: String) async throws {
+        try await wrapErrors {
+            let url = self.baseURL.appendingPathComponent("/api/v1/projects/\(projectId)/photos/\(photoId)")
+            var request = URLRequest(url: url)
+            request.httpMethod = "DELETE"
+            let (data, response) = try await self.session.data(for: request)
+            try self.checkHTTPResponse(response, data: data)
+        }
+    }
+
     // MARK: - Scan
 
     public func uploadScan(projectId: String, scanData: [String: Any]) async throws {

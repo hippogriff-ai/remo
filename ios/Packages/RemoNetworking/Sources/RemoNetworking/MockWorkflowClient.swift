@@ -80,6 +80,13 @@ public actor MockWorkflowClient: WorkflowClientProtocol {
         )
     }
 
+    public func deletePhoto(projectId: String, photoId: String) async throws {
+        try await simulateDelay()
+        guard var state = states[projectId] else { throw notFound() }
+        state.photos.removeAll { $0.photoId == photoId }
+        states[projectId] = state
+    }
+
     // MARK: - Scan
 
     public func uploadScan(projectId: String, scanData: [String: Any]) async throws {

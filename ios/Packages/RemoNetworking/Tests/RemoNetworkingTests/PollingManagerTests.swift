@@ -148,6 +148,7 @@ private actor FlakyClient: WorkflowClientProtocol {
     // Unused stubs — only getState matters for polling tests
     func createProject(deviceFingerprint: String, hasLidar: Bool) async throws -> String { "" }
     func deleteProject(projectId: String) async throws {}
+    func deletePhoto(projectId: String, photoId: String) async throws {}
     func uploadPhoto(projectId: String, imageData: Data, photoType: String) async throws -> PhotoUploadResponse {
         PhotoUploadResponse(photoId: "", validation: ValidatePhotoOutput(passed: true, failures: [], messages: []))
     }

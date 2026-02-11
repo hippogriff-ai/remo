@@ -164,16 +164,20 @@ struct HomeScreen: View {
     }
 
     private func deleteProjects(at offsets: IndexSet) {
-        let idsToDelete = offsets.map { projects[$0].id }
+        // Capture removed projects for rollback on failure
+        let removed = offsets.map { projects[$0] }
         projects.remove(atOffsets: offsets)
         persistProjectIds()
-        for projectId in idsToDelete {
+        for project in removed {
             Task {
                 do {
-                    try await client.deleteProject(projectId: projectId)
+                    try await client.deleteProject(projectId: project.id)
                 } catch is CancellationError {
                     // Ignore cancellation
                 } catch {
+                    // Restore project on failure so it's not lost from UserDefaults
+                    projects.append(project)
+                    persistProjectIds()
                     errorMessage = "Failed to delete project from server: \(error.localizedDescription)"
                 }
             }

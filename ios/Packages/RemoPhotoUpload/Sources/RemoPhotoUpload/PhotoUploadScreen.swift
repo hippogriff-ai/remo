@@ -191,12 +191,29 @@ public struct PhotoUploadScreen: View {
     }
 
     private func deletePhoto(_ photo: PhotoData) {
+        guard let projectId = projectState.projectId else { return }
+        // Optimistic UI removal
         withAnimation(.easeOut(duration: 0.2)) {
             projectState.photos.removeAll { $0.photoId == photo.photoId }
         }
         #if os(iOS)
         UIImpactFeedbackGenerator(style: .light).impactOccurred()
         #endif
+        // Persist to backend; restore on failure
+        let removedPhoto = photo
+        Task {
+            do {
+                try await client.deletePhoto(projectId: projectId, photoId: removedPhoto.photoId)
+            } catch is CancellationError {
+                // Ignore
+            } catch {
+                // Restore photo on failure
+                withAnimation(.easeOut(duration: 0.2)) {
+                    projectState.photos.append(removedPhoto)
+                }
+                validationMessages = ["Failed to delete photo: \(error.localizedDescription)"]
+            }
+        }
     }
 }
 
