@@ -25,7 +25,6 @@ public struct IterationScreen: View {
 
     public var body: some View {
         VStack(spacing: 0) {
-            // Mode picker
             Picker("Mode", selection: $mode) {
                 ForEach(IterationMode.allCases, id: \.self) { mode in
                     Text(mode.rawValue).tag(mode)
@@ -34,12 +33,14 @@ public struct IterationScreen: View {
             .pickerStyle(.segmented)
             .padding()
 
-            // Design image with annotation overlay
-            AnnotationCanvas(regions: $regions, maxRegions: 3)
-                .aspectRatio(4/3, contentMode: .fit)
-                .padding(.horizontal)
+            AnnotationCanvas(
+                regions: $regions,
+                maxRegions: 3,
+                imageURL: projectState.currentImage
+            )
+            .aspectRatio(4/3, contentMode: .fit)
+            .padding(.horizontal)
 
-            // Iteration count
             Text("Round \(projectState.iterationCount + 1) of 5")
                 .font(.caption)
                 .foregroundStyle(.secondary)
@@ -47,7 +48,6 @@ public struct IterationScreen: View {
 
             Spacer()
 
-            // Input area based on mode
             switch mode {
             case .annotation:
                 annotationControls
@@ -55,19 +55,23 @@ public struct IterationScreen: View {
                 textControls
             }
 
-            // Submit button
             Button {
                 Task { await submit() }
             } label: {
-                Text("Generate Revision")
-                    .frame(maxWidth: .infinity)
+                HStack {
+                    if isSubmitting {
+                        ProgressView()
+                            .tint(.white)
+                    }
+                    Text(isSubmitting ? "Generating..." : "Generate Revision")
+                }
+                .frame(maxWidth: .infinity)
             }
             .buttonStyle(.borderedProminent)
             .controlSize(.large)
             .disabled(!canSubmit || isSubmitting)
             .padding()
 
-            // Approve early button
             Button("Approve This Design") {
                 Task { await approve() }
             }
@@ -90,16 +94,18 @@ public struct IterationScreen: View {
     @ViewBuilder
     private var annotationControls: some View {
         VStack(spacing: 8) {
-            Text("Tap the image to place circles (up to 3)")
+            Text("Tap the image to place circles (up to 3). Drag to reposition.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
 
-            ForEach(Array(regions.enumerated()), id: \.offset) { index, region in
+            ForEach(Array(regions.enumerated()), id: \.offset) { index, _ in
                 RegionEditor(region: Binding(
                     get: { regions[index] },
                     set: { regions[index] = $0 }
                 ), color: regionColor(for: index)) {
-                    regions.remove(at: index)
+                    withAnimation(.easeOut(duration: 0.2)) {
+                        regions.remove(at: index)
+                    }
                 }
             }
         }
@@ -156,61 +162,94 @@ public struct IterationScreen: View {
 struct AnnotationCanvas: View {
     @Binding var regions: [AnnotationRegion]
     let maxRegions: Int
+    let imageURL: String?
+
+    @State private var draggedIndex: Int?
+
+    private let colors: [Color] = [.red, .blue, .green]
 
     var body: some View {
         GeometryReader { geometry in
             ZStack {
-                // Background image placeholder
+                // Background image
                 RoundedRectangle(cornerRadius: 12)
                     .fill(Color.secondary.opacity(0.1))
                     .overlay {
-                        Image(systemName: "photo.artframe")
-                            .font(.largeTitle)
-                            .foregroundStyle(.secondary)
+                        if let imageURL, let url = URL(string: imageURL) {
+                            AsyncImage(url: url) { phase in
+                                switch phase {
+                                case .success(let image):
+                                    image.resizable().scaledToFill()
+                                default:
+                                    Image(systemName: "photo.artframe")
+                                        .font(.largeTitle)
+                                        .foregroundStyle(.secondary)
+                                }
+                            }
+                        } else {
+                            Image(systemName: "photo.artframe")
+                                .font(.largeTitle)
+                                .foregroundStyle(.secondary)
+                        }
                     }
+                    .clipShape(RoundedRectangle(cornerRadius: 12))
 
-                // Annotation circles
+                // Annotation circles with drag gesture
                 ForEach(Array(regions.enumerated()), id: \.offset) { index, region in
-                    let center = CGPoint(
-                        x: region.centerX * geometry.size.width,
-                        y: region.centerY * geometry.size.height
-                    )
-                    let radius = region.radius * min(geometry.size.width, geometry.size.height)
+                    let color = colors[index % 3]
+                    let minDim = min(geometry.size.width, geometry.size.height)
+                    let radius = region.radius * minDim
 
                     Circle()
-                        .strokeBorder(regionColor(for: index), lineWidth: 3)
+                        .strokeBorder(color, lineWidth: 3)
+                        .background(Circle().fill(color.opacity(0.15)))
                         .frame(width: radius * 2, height: radius * 2)
-                        .position(center)
                         .overlay {
                             Text("\(index + 1)")
                                 .font(.caption.bold())
                                 .foregroundStyle(.white)
                                 .frame(width: 24, height: 24)
-                                .background(regionColor(for: index))
+                                .background(color)
                                 .clipShape(Circle())
-                                .position(center)
                         }
+                        .position(
+                            x: region.centerX * geometry.size.width,
+                            y: region.centerY * geometry.size.height
+                        )
+                        .gesture(
+                            DragGesture()
+                                .onChanged { value in
+                                    let nx = max(0, min(1, value.location.x / geometry.size.width))
+                                    let ny = max(0, min(1, value.location.y / geometry.size.height))
+                                    regions[index] = AnnotationRegion(
+                                        regionId: region.regionId,
+                                        centerX: nx,
+                                        centerY: ny,
+                                        radius: region.radius,
+                                        instruction: region.instruction
+                                    )
+                                }
+                        )
+                        .transition(.scale.combined(with: .opacity))
                 }
             }
             .contentShape(Rectangle())
             .onTapGesture { location in
                 guard regions.count < maxRegions else { return }
-                let normalizedX = location.x / geometry.size.width
-                let normalizedY = location.y / geometry.size.height
+                let nx = location.x / geometry.size.width
+                let ny = location.y / geometry.size.height
                 let newRegion = AnnotationRegion(
                     regionId: regions.count + 1,
-                    centerX: normalizedX,
-                    centerY: normalizedY,
+                    centerX: nx,
+                    centerY: ny,
                     radius: 0.08,
                     instruction: ""
                 )
-                regions.append(newRegion)
+                withAnimation(.spring(response: 0.3, dampingFraction: 0.7)) {
+                    regions.append(newRegion)
+                }
             }
         }
-    }
-
-    private func regionColor(for index: Int) -> Color {
-        [Color.red, .blue, .green][index % 3]
     }
 }
 
