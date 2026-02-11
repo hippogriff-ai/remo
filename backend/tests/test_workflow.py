@@ -1482,6 +1482,40 @@ class TestStartOver:
             assert state.generated_options == []
             assert state.selected_option is None
 
+    async def test_start_over_ignored_after_approval(self, workflow_env, tq):
+        """Verifies start_over is a no-op once the design has been approved.
+
+        After approval the workflow proceeds to shopping. Allowing start_over
+        at this point would corrupt state (restart loop with approved=True).
+        The signal handler should silently ignore the request.
+        """
+        async with Worker(
+            workflow_env.client,
+            task_queue=tq,
+            workflows=[DesignProjectWorkflow],
+            activities=ALL_ACTIVITIES,
+        ):
+            handle = await _start_workflow(workflow_env, tq)
+            await _advance_to_iteration(handle)
+
+            # Approve the design
+            await handle.signal(DesignProjectWorkflow.approve_design)
+            await asyncio.sleep(1.0)
+
+            state = await handle.query(DesignProjectWorkflow.get_state)
+            assert state.approved is True
+            # Should be at shopping or completed (shopping mock is fast)
+            assert state.step in ("shopping", "completed")
+
+            # Attempt start_over — should be ignored
+            await handle.signal(DesignProjectWorkflow.start_over)
+            await asyncio.sleep(0.5)
+
+            state = await handle.query(DesignProjectWorkflow.get_state)
+            # Still approved, did not restart
+            assert state.approved is True
+            assert state.step in ("shopping", "completed")
+
 
 class TestSelectionValidation:
     """Tests for selection signal validation."""

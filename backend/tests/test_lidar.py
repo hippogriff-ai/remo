@@ -154,6 +154,21 @@ class TestParseRoomDimensionsErrors:
         with pytest.raises(LidarParseError, match="must be positive"):
             parse_room_dimensions({"room": {"width": -4.0, "length": 5.0, "height": 2.5}})
 
+    def test_nan_dimension(self) -> None:
+        """NaN dimension should raise LidarParseError."""
+        with pytest.raises(LidarParseError, match="must be finite"):
+            parse_room_dimensions({"room": {"width": float("nan"), "length": 5.0, "height": 2.5}})
+
+    def test_infinity_dimension(self) -> None:
+        """Infinity dimension should raise LidarParseError."""
+        with pytest.raises(LidarParseError, match="must be finite"):
+            parse_room_dimensions({"room": {"width": 4.0, "length": float("inf"), "height": 2.5}})
+
+    def test_negative_infinity_dimension(self) -> None:
+        """Negative infinity dimension should raise LidarParseError."""
+        with pytest.raises(LidarParseError, match="must be finite"):
+            parse_room_dimensions({"room": {"width": 4.0, "length": 5.0, "height": float("-inf")}})
+
     def test_walls_not_list_treated_as_empty(self) -> None:
         """Non-list walls should be treated as empty (graceful degradation)."""
         data = {

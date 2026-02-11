@@ -20,6 +20,8 @@ Expected input schema (from T1 iOS):
 
 from __future__ import annotations
 
+import math
+
 import structlog
 
 from app.models.contracts import RoomDimensions
@@ -46,6 +48,9 @@ def parse_room_dimensions(raw: dict) -> RoomDimensions:
         height = float(room["height"])
     except (KeyError, TypeError, ValueError) as e:
         raise LidarParseError(f"Missing or invalid room dimension: {e}") from e
+
+    if not (math.isfinite(width) and math.isfinite(length) and math.isfinite(height)):
+        raise LidarParseError(f"Room dimensions must be finite: {width}x{length}x{height}")
 
     if width <= 0 or length <= 0 or height <= 0:
         raise LidarParseError(f"Room dimensions must be positive: {width}x{length}x{height}")

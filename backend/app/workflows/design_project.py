@@ -312,6 +312,12 @@ class DesignProjectWorkflow:
 
     @workflow.signal
     async def start_over(self) -> None:
+        if self.approved:
+            workflow.logger.warning(
+                "start_over ignored: design already approved for project %s",
+                self._project_id,
+            )
+            return
         self._restart_requested = True
         # Clear all cycle state so the while-loop restarts cleanly from
         # any phase (intake, generation error, selection, or iteration)
