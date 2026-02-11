@@ -26,8 +26,16 @@ final class MockClientTests: XCTestCase {
         do {
             _ = try await client.getState(projectId: "nonexistent")
             XCTFail("Should have thrown")
+        } catch let error as APIError {
+            if case .httpError(let code, let response) = error {
+                XCTAssertEqual(code, 404)
+                XCTAssertEqual(response.error, "workflow_not_found")
+                XCTAssertFalse(response.retryable)
+            } else {
+                XCTFail("Expected httpError, got \(error)")
+            }
         } catch {
-            // Expected
+            XCTFail("Expected APIError, got \(error)")
         }
     }
 
@@ -37,8 +45,29 @@ final class MockClientTests: XCTestCase {
         do {
             _ = try await client.getState(projectId: id)
             XCTFail("Should have thrown after delete")
+        } catch let error as APIError {
+            if case .httpError(let code, _) = error {
+                XCTAssertEqual(code, 404)
+            } else {
+                XCTFail("Expected httpError, got \(error)")
+            }
         } catch {
-            // Expected
+            XCTFail("Expected APIError, got \(error)")
+        }
+    }
+
+    func testUploadPhotoNotFoundThrows() async {
+        do {
+            _ = try await client.uploadPhoto(projectId: "nonexistent", imageData: Data(), photoType: "room")
+            XCTFail("Should have thrown")
+        } catch let error as APIError {
+            if case .httpError(let code, _) = error {
+                XCTAssertEqual(code, 404)
+            } else {
+                XCTFail("Expected httpError, got \(error)")
+            }
+        } catch {
+            XCTFail("Expected APIError, got \(error)")
         }
     }
 
@@ -155,6 +184,25 @@ final class MockClientTests: XCTestCase {
         let state = try await client.getState(projectId: id)
         XCTAssertEqual(state.iterationCount, 1)
         XCTAssertEqual(state.revisionHistory[0].type, "feedback")
+    }
+
+    func testFiveIterationsForcesApproval() async throws {
+        let id = try await setupToIteration()
+        let annotation = AnnotationRegion(regionId: 1, centerX: 0.5, centerY: 0.5, radius: 0.1, instruction: "Replace this with a modern lamp please")
+
+        // Iterations 1-4 should keep step as "iteration"
+        for i in 1...4 {
+            try await client.submitAnnotationEdit(projectId: id, annotations: [annotation])
+            let state = try await client.getState(projectId: id)
+            XCTAssertEqual(state.iterationCount, i)
+            XCTAssertEqual(state.step, "iteration", "Iteration \(i) should still be 'iteration'")
+        }
+
+        // Iteration 5 should force transition to "approval"
+        try await client.submitAnnotationEdit(projectId: id, annotations: [annotation])
+        let state = try await client.getState(projectId: id)
+        XCTAssertEqual(state.iterationCount, 5)
+        XCTAssertEqual(state.step, "approval")
     }
 
     // MARK: - Approval

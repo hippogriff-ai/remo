@@ -18,7 +18,7 @@ Build the T1 iOS app for Remo (AI room redesign). P1 Independent Build substanti
 - **`ProjectState`** is `@Observable` in RemoModels — central state, accessible to all packages
 - **`PollingManager`** actor for cancel-safe polling (polls until step changes or task cancelled)
 - **`NavigationStack` driven by `ProjectStep`** — router maps step to correct screen view
-- **54 passing tests** (27 model + 17 mock client + 10 annotation), 0 warnings, 8/8 packages build
+- **73 passing tests** (35 model + 28 networking + 10 annotation), 0 warnings, 8/8 packages build
 - **Annotation-based editing** (numbered circles, not lasso) — tap to place, drag to reposition
 - **Polling over SSE** for MVP — iOS polls `GET /projects/{id}` every 2-3s
 - **`ProjectState.preview(step:)`** factory for creating pre-populated states for #Preview blocks
@@ -50,7 +50,8 @@ Build the T1 iOS app for Remo (AI room redesign). P1 Independent Build substanti
 - Done: Photo delete — X button on photo thumbnails with haptic feedback and animation
 - Done: 10 snap guide unit tests (center snap, region alignment, threshold, exclusion)
 - Done: Inspiration photo upload — separate PhotosPicker for room vs inspiration photos with correct type tagging
-- Now: P2 annotation polish complete. All P1+P2 deliverables done except real API swap.
+- Done: Test coverage review gaps addressed — AnyCodable edge cases, RoomDimensions wall data, forward compatibility, DesignBrief round-trip, ProjectState.apply all fields, APIError.isRetryable (9 tests), 5-iteration cap boundary, error type assertions, not-found assertions
+- Now: P2 annotation polish complete. All P1+P2 deliverables done except real API swap. 73 tests.
 - Next: P2 integration (swap mock for real API), P3 stabilization (resume flow, error edge cases, polish)
 
 ## Open Questions

@@ -329,4 +329,144 @@ final class ModelsTests: XCTestCase {
         let decoded = try JSONDecoder().decode(AnyCodable.self, from: data)
         XCTAssertEqual(original, decoded)
     }
+
+    func testAnyCodableNull() throws {
+        let original = AnyCodable(NSNull())
+        let data = try JSONEncoder().encode(original)
+        let decoded = try JSONDecoder().decode(AnyCodable.self, from: data)
+        XCTAssertEqual(original, decoded)
+    }
+
+    func testAnyCodableBool() throws {
+        let original = AnyCodable(true)
+        let data = try JSONEncoder().encode(original)
+        let decoded = try JSONDecoder().decode(AnyCodable.self, from: data)
+        XCTAssertEqual(original, decoded)
+    }
+
+    func testAnyCodableNestedStructure() throws {
+        // Realistic wall data from LiDAR parser
+        let wallData: [String: Any] = [
+            "start": [0.0, 0.0],
+            "end": [4.2, 0.0],
+            "height": 2.7,
+            "has_window": false
+        ]
+        let original = AnyCodable(wallData)
+        let data = try JSONEncoder().encode(original)
+        let decoded = try JSONDecoder().decode(AnyCodable.self, from: data)
+        XCTAssertEqual(original, decoded)
+    }
+
+    func testAnyCodableArray() throws {
+        let original = AnyCodable([1, 2, 3])
+        let data = try JSONEncoder().encode(original)
+        let decoded = try JSONDecoder().decode(AnyCodable.self, from: data)
+        XCTAssertEqual(original, decoded)
+    }
+
+    // MARK: - RoomDimensions with non-empty walls/openings
+
+    func testRoomDimensionsWithWallData() throws {
+        let json = """
+        {
+            "width_m": 4.2,
+            "length_m": 5.8,
+            "height_m": 2.7,
+            "walls": [
+                {"start": [0.0, 0.0], "end": [4.2, 0.0], "height": 2.7, "has_window": false}
+            ],
+            "openings": [
+                {"type": "door", "width": 0.9, "height": 2.1, "wall_index": 0}
+            ]
+        }
+        """.data(using: .utf8)!
+
+        let dims = try JSONDecoder().decode(RoomDimensions.self, from: json)
+        XCTAssertEqual(dims.widthM, 4.2)
+        XCTAssertEqual(dims.walls.count, 1)
+        XCTAssertEqual(dims.openings.count, 1)
+        // Verify nested wall data is accessible
+        XCTAssertEqual(dims.walls[0]["height"], AnyCodable(2.7))
+        XCTAssertEqual(dims.openings[0]["type"], AnyCodable("door"))
+    }
+
+    // MARK: - Forward compatibility (unknown fields ignored)
+
+    func testWorkflowStateIgnoresUnknownFields() throws {
+        let json = """
+        {
+            "step": "photos",
+            "photos": [],
+            "scan_data": null,
+            "design_brief": null,
+            "generated_options": [],
+            "selected_option": null,
+            "current_image": null,
+            "revision_history": [],
+            "iteration_count": 0,
+            "shopping_list": null,
+            "approved": false,
+            "error": null,
+            "chat_history_key": null,
+            "new_future_field": "some value",
+            "another_field": 42
+        }
+        """.data(using: .utf8)!
+
+        let state = try JSONDecoder().decode(WorkflowState.self, from: json)
+        XCTAssertEqual(state.step, "photos")
+    }
+
+    // MARK: - DesignBrief round-trip
+
+    func testDesignBriefRoundTrip() throws {
+        let original = DesignBrief(
+            roomType: "living room",
+            occupants: "couple",
+            painPoints: ["old couch"],
+            keepItems: ["bookshelf"],
+            styleProfile: StyleProfile(lighting: "warm", colors: ["beige"], textures: ["velvet"], clutterLevel: "minimal", mood: "cozy"),
+            constraints: ["budget under $5k"],
+            inspirationNotes: [InspirationNote(photoIndex: 0, note: "love the rug")]
+        )
+        let data = try JSONEncoder().encode(original)
+        let decoded = try JSONDecoder().decode(DesignBrief.self, from: data)
+        XCTAssertEqual(original, decoded)
+    }
+
+    // MARK: - ProjectState.apply() all fields
+
+    func testApplySetsAllFields() {
+        let state = ProjectState()
+        let photos = [PhotoData(photoId: "r1", storageKey: "k", photoType: "room")]
+        let options = [DesignOption(imageUrl: "https://example.com/1.png", caption: "Option 1")]
+        let revisions = [RevisionRecord(revisionNumber: 1, type: "annotation", baseImageUrl: "base", revisedImageUrl: "revised")]
+        let shopping = ShoppingListOutput(items: [], totalEstimatedCostCents: 0)
+
+        let workflow = WorkflowState(
+            step: "completed",
+            photos: photos,
+            generatedOptions: options,
+            selectedOption: 0,
+            currentImage: "https://example.com/final.png",
+            revisionHistory: revisions,
+            iterationCount: 3,
+            shoppingList: shopping,
+            approved: true,
+            chatHistoryKey: "chat-key-123"
+        )
+        state.apply(workflow)
+
+        XCTAssertEqual(state.step, .completed)
+        XCTAssertEqual(state.photos.count, 1)
+        XCTAssertEqual(state.generatedOptions.count, 1)
+        XCTAssertEqual(state.selectedOption, 0)
+        XCTAssertEqual(state.currentImage, "https://example.com/final.png")
+        XCTAssertEqual(state.revisionHistory.count, 1)
+        XCTAssertEqual(state.iterationCount, 3)
+        XCTAssertNotNil(state.shoppingList)
+        XCTAssertTrue(state.approved)
+        XCTAssertEqual(state.chatHistoryKey, "chat-key-123")
+    }
 }
