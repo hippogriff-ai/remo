@@ -8,6 +8,7 @@ Activities are mock stubs in P0, replaced with real AI in P2.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 from datetime import timedelta
 from typing import Any
 
@@ -126,7 +127,7 @@ class DesignProjectWorkflow:
                     message="Design generation failed — please retry",
                     retryable=True,
                 )
-                await self._wait(lambda: self.error is None)
+                await self._wait(lambda: self.error is None or self._restart_requested)
                 continue
 
             # --- Selection ---
@@ -163,6 +164,11 @@ class DesignProjectWorkflow:
                             start_to_close_timeout=timedelta(minutes=3),
                             retry_policy=_ACTIVITY_RETRY,
                         )
+                    # If start_over was signaled while the activity was
+                    # in-flight, state has been cleared — discard the stale
+                    # result so the next cycle starts clean.
+                    if self._restart_requested:
+                        break
                     revision_num = self.iteration_count + 1
                     self.revision_history.append(
                         RevisionRecord(
@@ -186,7 +192,7 @@ class DesignProjectWorkflow:
                         message="Revision failed — please retry",
                         retryable=True,
                     )
-                    await self._wait(lambda: self.error is None)
+                    await self._wait(lambda: self.error is None or self._restart_requested)
                 except (ValueError, TypeError) as exc:
                     # Input validation (e.g. malformed lasso regions, invalid regen
                     # feedback) — not retryable with same payload, so discard the
@@ -203,7 +209,7 @@ class DesignProjectWorkflow:
                         message="Invalid edit request — please resubmit",
                         retryable=True,
                     )
-                    await self._wait(lambda: self.error is None)
+                    await self._wait(lambda: self.error is None or self._restart_requested)
 
             if self._restart_requested:
                 continue  # back to intake
@@ -241,7 +247,8 @@ class DesignProjectWorkflow:
 
         # --- Phase: Completed + 24h purge timer ---
         self.step = "completed"
-        await workflow.sleep(timedelta(hours=24))
+        with contextlib.suppress(TimeoutError):
+            await workflow.wait_condition(lambda: self._cancelled, timeout=timedelta(hours=24))
         await self._try_purge()
 
     async def _wait(self, condition: Any, timeout: timedelta = _ABANDONMENT_TIMEOUT) -> None:
@@ -315,15 +322,19 @@ class DesignProjectWorkflow:
 
     @workflow.signal
     async def start_over(self) -> None:
-        if self.approved:
+        if self.step in ("shopping", "completed", "abandoned", "cancelled"):
             workflow.logger.warning(
-                "start_over ignored: design already approved for project %s",
+                "start_over ignored: already at step '%s' for project %s",
+                self.step,
                 self._project_id,
             )
             return
         self._restart_requested = True
         # Clear all cycle state so the while-loop restarts cleanly from
-        # any phase (intake, generation error, selection, or iteration)
+        # any phase (intake, generation error, selection, or iteration).
+        # Note: photos, scan_data, and scan_skipped are preserved across
+        # restarts since re-scanning is expensive and photos are reusable.
+        self.approved = False
         self.generated_options = []
         self.selected_option = None
         self.current_image = None

@@ -376,6 +376,25 @@ _CAPTURING_REGEN_ACTIVITIES = [
 ]
 
 
+# --- Slow stubs: simulate in-flight activities for signal-during-activity tests ---
+
+
+@activity.defn(name="generate_inpaint")
+async def _slow_inpaint(_input: GenerateInpaintInput) -> GenerateInpaintOutput:
+    """Slow inpaint that gives time for signals to arrive during execution."""
+    await asyncio.sleep(2)
+    return GenerateInpaintOutput(revised_image_url="https://r2.example.com/slow/inpaint.png")
+
+
+_SLOW_INPAINT_ACTIVITIES = [
+    generate_designs,
+    _slow_inpaint,
+    generate_regen,
+    generate_shopping_list,
+    purge_project_data,
+]
+
+
 # --- Failing purge stub: simulates R2 outage during purge ---
 
 
@@ -1551,6 +1570,44 @@ class TestStartOver:
             assert state.approved is False
             assert state.iteration_count == 0
 
+    async def test_start_over_during_inflight_activity_discards_result(self, workflow_env, tq):
+        """Verifies stale activity results are discarded after start_over.
+
+        When start_over fires while an iteration activity is in-flight, the
+        signal clears cycle state. When the activity returns, its result must
+        NOT be applied (revision_history, current_image, iteration_count should
+        stay clean for the next cycle).
+        """
+        async with Worker(
+            workflow_env.client,
+            task_queue=tq,
+            workflows=[DesignProjectWorkflow],
+            activities=_SLOW_INPAINT_ACTIVITIES,
+        ):
+            handle = await _start_workflow(workflow_env, tq)
+            await _advance_to_iteration(handle)
+
+            state = await handle.query(DesignProjectWorkflow.get_state)
+            assert state.step == "iteration"
+
+            # Submit a lasso edit — the slow stub takes 2s
+            await handle.signal(DesignProjectWorkflow.submit_lasso_edit, _lasso_regions())
+            # Give the activity time to start but not finish
+            await asyncio.sleep(0.3)
+
+            # Fire start_over while activity is in-flight
+            await handle.signal(DesignProjectWorkflow.start_over)
+
+            # Wait for activity to complete and restart to process
+            await asyncio.sleep(3.0)
+
+            state = await handle.query(DesignProjectWorkflow.get_state)
+            assert state.step == "intake"
+            # Stale result must NOT have been applied
+            assert state.iteration_count == 0
+            assert state.revision_history == []
+            assert state.current_image is None
+
 
 class TestSelectionValidation:
     """Tests for selection signal validation."""
@@ -2102,6 +2159,40 @@ class TestCancellation:
 
             state = await handle.query(DesignProjectWorkflow.get_state)
             assert state.step == "abandoned"
+
+    async def test_cancel_from_completed_triggers_prompt_purge(self, workflow_env, tq):
+        """Verifies cancel_project during completed phase wakes the retention timer.
+
+        After completion, the workflow sleeps 24h before purging. If cancel is
+        signaled during this window, it should purge and finish promptly rather
+        than waiting out the full retention period.
+        """
+        async with Worker(
+            workflow_env.client,
+            task_queue=tq,
+            workflows=[DesignProjectWorkflow],
+            activities=ALL_ACTIVITIES,
+        ):
+            handle = await _start_workflow(workflow_env, tq)
+            await _advance_to_iteration(handle)
+
+            # Approve → shopping → completed
+            await handle.signal(DesignProjectWorkflow.approve_design)
+            await asyncio.sleep(1.0)
+
+            state = await handle.query(DesignProjectWorkflow.get_state)
+            assert state.step == "completed"
+
+            # Cancel during the 24h retention window
+            await handle.signal(DesignProjectWorkflow.cancel_project)
+
+            # Workflow should finish promptly (not wait 24h)
+            result = await handle.result()
+            assert result is None
+
+            state = await handle.query(DesignProjectWorkflow.get_state)
+            # Completed-phase cancel triggers purge and finishes normally
+            assert state.step == "completed"
 
 
 class TestAbandonmentTimeout:
