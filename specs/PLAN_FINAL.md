@@ -353,7 +353,7 @@ class DesignProjectWorkflow:
 
 | Deliverable | Phase | Success Metric |
 |------------|-------|----------------|
-| Temporal Cloud namespace operational | P0 | `tctl namespace describe remo-tempo` succeeds; all teams can connect |
+| Temporal Cloud namespace operational | P0 | `tctl namespace describe quickstart-remo-tempo` succeeds; all teams can connect |
 | `docker-compose.yml` for local dev (API + Worker + PG) | P0 | `docker compose up` gives a working local stack in <5 min |
 | All Pydantic contract models (`backend/models/contracts.py`) | P0 (GATE) | All `*Input/*Output` models importable; validation tests pass |
 | Database schema (Alembic migration) | P0 | `alembic upgrade head` creates all tables; CASCADE verified |
