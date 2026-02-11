@@ -29,6 +29,7 @@ public actor MockWorkflowClient: WorkflowClientProtocol {
             state.photos = [
                 PhotoData(photoId: "mock-room-1", storageKey: "projects/\(id)/photos/room_0.jpg", photoType: "room"),
                 PhotoData(photoId: "mock-room-2", storageKey: "projects/\(id)/photos/room_1.jpg", photoType: "room"),
+                PhotoData(photoId: "mock-inspo-1", storageKey: "projects/\(id)/photos/inspo_0.jpg", photoType: "inspiration"),
             ]
             states[id] = state
         } else {
@@ -125,6 +126,7 @@ public actor MockWorkflowClient: WorkflowClientProtocol {
 
     public func sendIntakeMessage(projectId: String, message: String) async throws -> IntakeChatOutput {
         try await simulateDelay()
+        guard states[projectId] != nil else { throw notFound() }
         var messages = intakeMessages[projectId] ?? []
         messages.append(message)
         intakeMessages[projectId] = messages

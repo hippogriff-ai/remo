@@ -10,7 +10,6 @@ public struct IntakeChatScreen: View {
 
     @State private var inputText = ""
     @State private var isSending = false
-    @State private var hasStarted = false
     @State private var errorMessage: String?
 
     public init(projectState: ProjectState, client: any WorkflowClientProtocol) {
@@ -94,16 +93,18 @@ public struct IntakeChatScreen: View {
         .navigationBarTitleDisplayMode(.inline)
         #endif
         .toolbar {
-            ToolbarItem(placement: .primaryAction) {
-                Button("Skip") {
-                    Task { await skipIntake() }
+            if projectState.inspirationPhotoCount > 0 {
+                ToolbarItem(placement: .primaryAction) {
+                    Button("Skip") {
+                        Task { await skipIntake() }
+                    }
+                    .font(.subheadline)
+                    .accessibilityIdentifier("chat_skip")
                 }
-                .font(.subheadline)
-                .accessibilityIdentifier("chat_skip")
             }
         }
         .task {
-            if !hasStarted { await startConversation() }
+            if projectState.chatMessages.isEmpty { await startConversation() }
         }
         .alert("Error", isPresented: .init(get: { errorMessage != nil }, set: { if !$0 { errorMessage = nil } })) {
             Button("OK") { errorMessage = nil }
@@ -114,7 +115,7 @@ public struct IntakeChatScreen: View {
 
     private var shouldShowTextInput: Bool {
         let output = projectState.currentIntakeOutput
-        return output?.isOpenEnded == true || (output?.options == nil && hasStarted && output?.isSummary != true)
+        return output?.isOpenEnded == true || (output?.options == nil && !projectState.chatMessages.isEmpty && output?.isSummary != true)
     }
 
     private func startConversation() async {
@@ -127,7 +128,6 @@ public struct IntakeChatScreen: View {
             let output = try await client.startIntake(projectId: projectId, mode: "full")
             projectState.chatMessages.append(ChatMessage(role: "assistant", content: output.agentMessage))
             projectState.currentIntakeOutput = output
-            hasStarted = true
         } catch {
             errorMessage = error.localizedDescription
         }

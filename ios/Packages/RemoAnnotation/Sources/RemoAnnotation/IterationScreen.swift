@@ -86,6 +86,7 @@ public struct IterationScreen: View {
                 Task { await approve() }
             }
             .font(.subheadline)
+            .disabled(isSubmitting)
             .padding(.bottom)
             .accessibilityHint("Approve the current design and continue to shopping list")
             .accessibilityIdentifier("iteration_approve")
