@@ -86,9 +86,8 @@ Remo is an AI-powered room redesign app: users photograph their room, describe t
                         │                          │
                         │  Activities:              │
                         │   ├── run_intake_chat    │ → Claude Opus 4.6
-                        │   ├── generate_designs   │ → Gemini 3 Pro Image
-                        │   ├── generate_inpaint   │ → Gemini 3 Pro Image
-                        │   ├── generate_regen     │ → Gemini 3 Pro Image
+                        │   ├── generate_designs   │ → Gemini (standalone)
+                        │   ├── edit_design        │ → Gemini (multi-turn chat)
                         │   ├── generate_shopping  │ → Claude + Exa
                         │   └── purge_project      │ → R2 + DB cleanup
                         └──┬──────┬──────┬─────────┘
@@ -190,18 +189,14 @@ class DesignProjectWorkflow:
 
             action_type, payload = self._action_queue.pop(0)
             try:
-                if action_type == "lasso":
-                    result = await workflow.execute_activity(
-                        generate_inpaint, args=[self._inpaint_context(payload)],
-                        start_to_close_timeout=timedelta(minutes=3),
-                        retry_policy=RetryPolicy(maximum_attempts=2)
-                    )
-                elif action_type == "regen":
-                    result = await workflow.execute_activity(
-                        generate_regen, args=[self._regen_context(payload)],
-                        start_to_close_timeout=timedelta(minutes=3),
-                        retry_policy=RetryPolicy(maximum_attempts=2)
-                    )
+                # Both annotation edits and text feedback use the same
+                # edit_design activity (multi-turn Gemini chat)
+                result = await workflow.execute_activity(
+                    edit_design, args=[self._edit_context(action_type, payload)],
+                    start_to_close_timeout=timedelta(minutes=3),
+                    retry_policy=RetryPolicy(maximum_attempts=2)
+                )
+                self.chat_history_key = result.chat_history_key
                 self.current_image = result.revised_image_url
                 self.iteration_count += 1
                 self.revision_history.append(result)
@@ -275,12 +270,12 @@ class DesignProjectWorkflow:
         self._restart_requested = True
 
     @workflow.signal
-    async def submit_lasso_edit(self, edit: LassoEdit):
-        self._action_queue.append(("lasso", edit))  # FIX: queue pattern
+    async def submit_annotation_edit(self, edit: AnnotationEdit):
+        self._action_queue.append(("annotation", edit))  # FIX: queue pattern
 
     @workflow.signal
-    async def submit_regenerate(self, feedback: str):
-        self._action_queue.append(("regen", feedback))  # FIX: queue pattern
+    async def submit_text_feedback(self, feedback: str):
+        self._action_queue.append(("feedback", feedback))  # FIX: queue pattern
 
     @workflow.signal
     async def approve_design(self):
@@ -319,7 +314,7 @@ class DesignProjectWorkflow:
 3. Added 48h abandonment timeout at every wait point via `_wait_with_abandonment`
 4. Added `start_over` signal (required by product spec Section 4.6)
 5. Added `cancel_project` signal
-6. Separated `generate_inpaint` and `generate_regen` activities (different input contracts)
+6. Unified `edit_design` activity handles both annotation edits and text feedback (multi-turn Gemini chat)
 7. Used queue pattern for edit actions (prevents race condition)
 8. Added error state tracking and `retry_failed_step` signal
 9. Added `WorkflowError` to query response
@@ -342,8 +337,8 @@ class DesignProjectWorkflow:
       ┌──────────────┐  ┌──────────────────┐  ┌────────────────┐
       │ T1: iOS App  │  │ T2: Image Gen    │  │ T3: AI Agents  │
       │ All SwiftUI/ │  │ Pipeline         │  │ (Intake +      │
-      │ UIKit work   │  │ Gemini gen/      │  │  Shopping)     │
-      └──────────────┘  │ inpaint/regen    │  └────────────────┘
+      │ UIKit work   │  │ Gemini gen/edit   │  │  Shopping)     │
+      └──────────────┘  │ (multi-turn chat)│  └────────────────┘
                         └──────────────────┘
 ```
 
@@ -379,24 +374,24 @@ class DesignProjectWorkflow:
 | Output Screen (save to photos, share) | P1 | Image saves to camera roll; share sheet opens |
 | Home Screen (pending projects, resume) | P1 | Mock projects list renders; tap resumes at correct step |
 | Navigation + Router (full flow) | P1 | Push to any step via WorkflowState; back navigation works |
-| Lasso Tool MVP (1 region, freehand, auto-close, editor) | P1 | Draw region → editor opens → save → "Generate Revision" enabled |
+| Annotation Tool (tap to place circles, instruction editor) | P1 | Place region → edit instruction → "Generate Revision" enabled |
 | Shopping List UI (grouped cards, buy links, fit badges) | P1 | 8 mock products render in 4 groups; total cost displayed |
 | LiDAR Scan UI (RoomPlan wrapper, skip flow) | P1 | Device check works; skip flow shows trade-off notification |
 | Swap mock API for real API | P2 | Full flow works against real backend |
-| Lasso multi-region (overlap detection, edit list, reorder) | P2 | Up to 3 regions; overlap blocked; renumbering works |
+| Annotation tool polish (undo, snap guides, haptics) | P2 | Undo works; size snap guides visible; haptic on placement |
 
 #### T2: Image Generation Pipeline
 
 | Deliverable | Phase | Success Metric |
 |------------|-------|----------------|
-| Gemini quality spike (MUST be first task) | P0 | Both models tested on 3 room photos; mask precision, photorealism, architecture preservation scored per model |
+| Gemini quality spike (MUST be first task) | P0 | Both models tested: initial generation + annotation-based editing + chat history round-trip |
 | Model selection decision document | P0 | Side-by-side results; winning model chosen with rationale; escalation plan if neither passes |
-| `generate_designs` activity | P1 | Takes room photos + brief → returns 2 design image URLs in R2 |
-| Mask generation utility (polygon → binary mask) | P1 | Renders 1-3 polygon regions into a correctly scaled binary mask |
-| Prompt template library | P1 | `prompts/` directory with versioned templates for each mode |
-| `generate_inpaint` activity | P1 | Takes base image + mask + instructions → returns revised image URL; SSIM > 0.98 outside mask |
-| `generate_regen` activity | P1 | Takes context + feedback → returns new design URL; visibly different from input |
-| Quality test suite | P2 | 5+ test cases per activity with scored results; 70%+ meet quality bar |
+| Annotation drawing utility | P1 | Draws 1-3 numbered circle badges with distinct colors on PIL Image |
+| Gemini chat session manager | P1 | Creates, serializes to R2, deserializes chat sessions with thought signatures |
+| Prompt template library | P1 | `prompts/` directory with generation + edit + room preservation templates |
+| `generate_designs` activity | P1 | Takes room photos + brief → returns 2 design image URLs in R2 (standalone, no chat) |
+| `edit_design` activity | P1 | Multi-turn Gemini chat: annotation-based edits + text feedback → revised image URL |
+| Quality test suite | P2 | 5+ test cases per activity; annotation edits target marked areas; 70%+ meet quality bar |
 
 #### T3: AI Agents — Intake + Shopping
 
@@ -427,7 +422,7 @@ Project 1──0..1 LidarScan
 Project 1──0..1 DesignBrief
 Project 1──N GeneratedImage
 Project 1──N Revision
-Revision 1──N LassoRegion
+Revision 1──N AnnotationRegion
 Project 1──0..1 ShoppingList
 ShoppingList 1──N ProductMatch
 ```
@@ -443,8 +438,8 @@ The database stores **data artifacts only**. Workflow state (step, iteration_cou
 | **LidarScan** | `id`, `project_id` (FK CASCADE, UNIQUE), `storage_key`, `room_dimensions` (JSONB) |
 | **DesignBrief** | `id`, `project_id` (FK CASCADE, UNIQUE), `intake_mode`, `brief_data` (JSONB), `conversation_history` (JSONB) |
 | **GeneratedImage** | `id`, `project_id` (FK CASCADE), `type` (initial/revision/overlay), `storage_key`, `selected`, `is_final`, `generation_model` |
-| **Revision** | `id`, `project_id` (FK CASCADE), `revision_number` (1-5), `type` (lasso/regen), `base_image_id` (FK), `result_image_id` (FK), `edit_payload` (JSONB) |
-| **LassoRegion** | `id`, `revision_id` (FK CASCADE), `region_number` (1-3), `path_points` (JSONB, normalized 0-1), `action`, `instruction`, `avoid_tokens`, `style_nudges` |
+| **Revision** | `id`, `project_id` (FK CASCADE), `revision_number` (1-5), `type` (annotation/feedback), `base_image_id` (FK), `result_image_id` (FK), `edit_payload` (JSONB) |
+| **AnnotationRegion** | `id`, `revision_id` (FK CASCADE), `region_number` (1-3), `center_x` (FLOAT, 0-1), `center_y` (FLOAT, 0-1), `radius` (FLOAT, 0-1), `instruction` |
 | **ShoppingList** | `id`, `project_id` (FK CASCADE, UNIQUE), `generated_image_id` (FK), `total_estimated_cost_cents` (INT) |
 | **ProductMatch** | `id`, `shopping_list_id` (FK CASCADE), `category_group`, `product_name`, `retailer`, `price_cents` (INT), `product_url`, `image_url`, `confidence_score`, `why_matched`, `fit_status`, `fit_detail` |
 
@@ -477,6 +472,7 @@ Bucket: remo-assets (dev: remo-assets-dev)
   generated/option_0.png, option_1.png
   generated/revision_1.png, revision_1_overlay.png ...
   generated/final.png
+  gemini_chat_history.json               # serialized Gemini chat session
 ```
 
 **R2 lifecycle rule: 120h (5 days)** — safety net behind Temporal-driven purge. Set to 120h (not 72h) to prevent premature deletion of early-uploaded photos in long-running projects.
@@ -504,8 +500,8 @@ Bucket: remo-assets (dev: remo-assets-dev)
 | `POST` | `/api/v1/projects/{id}/intake/skip` | Signal skip_intake | 200 |
 | `POST` | `/api/v1/projects/{id}/select` | Signal select_option | 200 |
 | `POST` | `/api/v1/projects/{id}/start-over` | Signal start_over | 200 |
-| `POST` | `/api/v1/projects/{id}/iterate/lasso` | Signal submit_lasso_edit | 200 |
-| `POST` | `/api/v1/projects/{id}/iterate/regenerate` | Signal submit_regenerate | 200 |
+| `POST` | `/api/v1/projects/{id}/iterate/annotate` | Signal submit_annotation_edit | 200 |
+| `POST` | `/api/v1/projects/{id}/iterate/feedback` | Signal submit_text_feedback | 200 |
 | `POST` | `/api/v1/projects/{id}/approve` | Signal approve_design | 200 |
 | `POST` | `/api/v1/projects/{id}/retry` | Signal retry_failed_step | 200 |
 | `GET` | `/health` | Health check | `{ postgres, temporal, r2 }` |
@@ -559,28 +555,41 @@ Blur threshold should be calibrated with 20+ real room photos at normalized reso
 
 ### P0 Gemini Quality Spike (MANDATORY — T2's first task)
 
-**Why**: Both Gemini models are preview-stage. We've never tested either for room redesign with precise region masking. If T2 picks a model blind and builds 3 activities on it during P1, then discovers at P2 integration that masks bleed or room architecture distorts, that's an entire phase wasted. The spike is a 2-3 hour comparative test that picks the best model before any real code is written.
+**Why**: Both Gemini models are preview-stage. We've never tested either for room redesign with annotation-based targeted editing. If T2 picks a model blind and builds activities on it during P1, then discovers at P2 integration that annotations are ignored or room architecture distorts, that's an entire phase wasted. The spike is a 2-3 hour comparative test that picks the best model before any real code is written.
 
 **What to test** (run identical tests on BOTH models):
 
 1. Upload 3 real room photos to **both** Gemini 3 Pro Image and Gemini 2.5 Flash Image
 2. Generate redesigns with a sample brief on each
-3. Test inpainting with precise polygon masks on each
-4. Score each model on: (a) mask boundary adherence, (b) photorealism, (c) room architecture preservation, (d) style consistency
-5. Document results with side-by-side screenshots
+3. Test annotation-based editing: draw 2-3 numbered circles on generated image, send with targeted instructions
+4. Test chat history round-trip: serialize chat history (including thought signatures), deserialize, send follow-up edit
+5. Score each model on: (a) annotation targeting accuracy, (b) photorealism, (c) room architecture preservation, (d) style consistency
+6. Document results with side-by-side screenshots
+
+**Passing criteria for annotation targeting**:
+
+| Criterion | Pass | Fail |
+|-----------|------|------|
+| **Correct area edited** | Gemini modifies the area inside/near the drawn circle | Edits wrong area or ignores circle entirely |
+| **Non-annotated areas preserved** | Areas outside circles are visually unchanged (SSIM > 0.95 vs original for non-circled regions) | Unrelated areas change significantly |
+| **Output is clean** | Returned image has NO circles/annotations baked in | Circles appear in the output image |
+| **Instruction followed** | The edit matches the text instruction (human eval) | Edit is unrelated to instruction |
+| **Chat round-trip works** | Serialize history → deserialize → follow-up edit succeeds | 400 error on follow-up, or context lost |
 
 **Decision gate**:
 
-- **One or both models pass** (mask boundary bleeding ≤ ~5% of non-masked area in 4+ of 5 test cases) → Pick the higher-scoring model. Build all activities on it. Proceed to P1.
-- **Neither model passes** → Escalate. Evaluate alternatives (dedicated inpainting models, hybrid approach, or adjusted quality bar). Do NOT proceed to P1 until resolved.
+- **Pass** (4+ of 5 test cases meet ALL criteria above, chat round-trip works) → Pick the higher-scoring model. Proceed to P1.
+- **Fail** → Escalate. Evaluate alternatives or adjusted quality bar. Do NOT proceed to P1 until resolved.
 
-### Image Generation: All Modes
+### Image Generation & Editing: All Modes
 
-| Mode | Input | Output | Latency | Cost |
-|------|-------|--------|---------|------|
-| **Initial (2 options)** | Room photos + brief + inspiration | 2 redesign images (1K/2K) | ~15-30s parallel | ~$0.268 |
-| **Lasso Inpaint** | Current image + binary mask + instructions | Revised image (masked regions changed) | ~15-30s | ~$0.134 |
-| **Full Regenerate** | Room photos + brief + feedback + history | New full design image | ~15-30s | ~$0.134 |
+| Mode | Input | Output | Gemini Session | Latency | Cost |
+|------|-------|--------|----------------|---------|------|
+| **Initial (2 options)** | Room photos + brief + inspiration | 2 redesign images (1K/2K) | Standalone (no chat) | ~15-30s parallel | ~$0.268 |
+| **Annotation Edit** | Annotated image + instructions | Revised image (marked areas changed) | Multi-turn chat | ~15-30s | ~$0.134 |
+| **Text Regen** | Text feedback (same chat) | Revised image reflecting feedback | Multi-turn chat | ~15-30s | ~$0.134 |
+
+**Key change from v1.0**: Mask-based inpainting is replaced by **annotation-based editing**. Users mark areas with numbered circles (drawn programmatically by Pillow), and Gemini edits targeted areas while preserving everything else. This is Google's intended interaction pattern (Gemini Markup tool). Both annotation edits and text feedback happen in the **same multi-turn Gemini chat session**, serialized to R2 between Temporal activity calls.
 
 ### Prompt Template Strategy
 
@@ -589,31 +598,32 @@ Create a `prompts/` directory with versioned templates:
 ```
 backend/prompts/
   generation.txt          # Initial 2-option generation
-  inpaint.txt             # Lasso inpainting
-  regeneration.txt        # Full regenerate
+  edit.txt                # Annotation-based editing (replaces inpaint.txt + regeneration.txt)
   room_preservation.txt   # Shared clause (camera angle, walls, architecture)
   intake_system.txt       # Intake agent system prompt
   item_extraction.txt     # Shopping list item extraction
   product_scoring.txt     # Shopping list product scoring
 ```
 
-**Room structure preservation clause** (included in ALL generation calls):
+**Room structure preservation clause** (included in ALL generation/edit calls):
 ```
 Preserve the exact camera angle, room geometry, walls, ceiling, windows,
 doors, and floor plane from the reference photo. Do not modify the room
 architecture or viewing perspective.
 ```
 
-### Mask Generation
+### Annotation Drawing (Replaces Mask Generation)
 
-Polygon coordinates arrive as normalized 0-1 values from the iOS app. The mask generation utility:
-1. Receives `path_points: list[tuple[float, float]]` per region
-2. Scales to actual image dimensions
-3. Renders filled polygons onto a blank image using Pillow/OpenCV
-4. Applies small Gaussian feather (2-3px) at mask boundaries for better blending
-5. Composites multiple regions into a single mask
+Instead of binary masks from polygon coordinates, T2 draws **visual annotations** directly on the image:
+1. Receives `AnnotationRegion` objects with normalized 0-1 center coordinates and radius
+2. Scales to actual image pixel dimensions
+3. Draws colored circle outlines (4px) + numbered badges (filled circle with white number)
+4. Colors: region 1 = red, region 2 = blue, region 3 = green
+5. The annotated image is sent to Gemini with text instructions referencing each numbered region
 
-This utility must be built in P0/P1, not deferred to P2.
+This is simpler than mask generation and validated by Google's own Gemini Markup feature and the Set-of-Mark (SoM) academic research.
+
+**Critical requirement**: Gemini must return a **clean** image — no circles/annotations baked into the output. The annotations exist only on the input copy sent to Gemini. If Gemini echoes the circles back, the prompt must explicitly instruct "do not include any annotations, circles, or markers in your output image." This is validated in the P0 spike.
 
 ### Intake Chat Agent
 
@@ -656,7 +666,7 @@ Every prompt change must be evaluated against golden test conversations using th
 | Source | What it gives us | Priority |
 |--------|-----------------|----------|
 | **DesignBrief** (from intake) | User's *intent* — style, colors, textures, specific requests, keep_items | Highest — user's own words |
-| **Iteration history** (lasso/regen) | Amendments — what changed from original vision | Overrides brief for changed items |
+| **Iteration history** (annotation/feedback) | Amendments — what changed from original vision | Overrides brief for changed items |
 | **Final approved image** | Ground truth — what's actually rendered, including AI additions | Fills gaps for items not in brief/iterations |
 
 ```
@@ -666,7 +676,7 @@ DesignBrief + Iteration History + Approved Image + Original Room Photos
     → Receives ALL three sources + original room photos
     → For each item, classifies source:
       (a) BRIEF-ANCHORED — explicitly in DesignBrief → use user's language for search
-      (b) ITERATION-ANCHORED — changed during lasso/regen → use iteration instruction
+      (b) ITERATION-ANCHORED — changed during annotation/feedback → use iteration instruction
       (c) IMAGE-ONLY — AI addition not in brief or iterations → vision-derived description
       (d) EXISTING — visible in original room photo AND keep_items → SKIP
     → 6-10 items with: category, style, material, color, proportions, source_tag
@@ -675,7 +685,7 @@ DesignBrief + Iteration History + Approved Image + Original Room Photos
     → BRIEF-ANCHORED: "{user's own words from brief} + {style_profile}"
        e.g., "mid-century walnut coffee table" (specific, high confidence)
     → ITERATION-ANCHORED: "{iteration instruction keywords}"
-       e.g., "marble coffee table modern" (from lasso "replace with marble")
+       e.g., "marble coffee table modern" (from annotation "replace with marble")
     → IMAGE-ONLY: "{AI-described category} {material} {color}"
        e.g., "brass arc floor lamp" (less specific, lower baseline confidence)
     → 2-3 query variants per item; dimension-aware if LiDAR available
@@ -733,8 +743,7 @@ DesignBrief + Iteration History + Approved Image + Original Room Photos
 | Photo validation (4 images × Claude Haiku 4.5) | $0.006 |
 | Intake chat (Claude Opus 4.6, full mode, ~8 turns) | $0.15 |
 | Initial generation (2 × Gemini 3 Pro Image) | $0.268 |
-| Lasso iterations (3 × Gemini 3 Pro Image) | $0.402 |
-| Full regenerate (1 × Gemini 3 Pro Image) | $0.134 |
+| Annotation/feedback iterations (3 × Gemini 3 Pro Image, multi-turn chat) | $0.402 |
 | Shopping list extraction (Claude Opus 4.6, image input) | $0.03 |
 | Exa search (~8 queries) | $0.04 |
 | Shopping list scoring (~8 Claude calls) | $0.10 |
@@ -794,7 +803,7 @@ Remo/
     RemoNetworking/     # API client, mock client (T1-lead owns)
     RemoPhotoUpload/    # Photo upload UI + validation display
     RemoChatUI/         # Chat interface, quick-reply chips
-    RemoLasso/          # Lasso drawing, geometry, region editor
+    RemoAnnotation/     # Annotation region picker, region editor
     RemoDesignViews/    # Comparison, iteration, approval, output
     RemoShoppingList/   # Product cards, grouped lists
     RemoLiDAR/          # RoomPlan wrapper, scan screens
@@ -828,27 +837,24 @@ struct IterationScreen: View {
 }
 ```
 
-### Lasso Tool: MVP First, Multi-Region Second
+### Annotation Tool: Circle-Based Region Marking
 
-**P1: 1-Region MVP**
-- Freehand drawing with auto-close
-- Self-intersection detection
-- Minimum area validation (2% of image area)
-- Fixed-color outline (skip adaptive contrast)
-- Simple Region Editor (action + instruction only)
-- Basic zoom/pan mode toggle (single-finger = draw, pinch = zoom)
-- "Generate Revision" button
+**Key decision**: Replaces freehand lasso with numbered circle annotations. Users tap to place up to 3 annotated circles on the design image, each with a text instruction. Gemini edits the targeted areas while preserving everything else. This is simpler to build (no polygon geometry, no self-intersection detection) and aligns with Google's intended interaction pattern (Gemini Markup tool / Set-of-Mark prompting).
 
-**P2: Multi-Region**
-- Up to 3 regions per revision
-- Overlap detection
-- Edit List (bottom sheet / side panel)
-- Reorder regions (drag)
-- Full Region Editor (action, instruction, avoid, style nudges)
-- Adaptive contrast outlines
-- Rasterize finalized regions (performance optimization)
+**P1: Annotation MVP**
+- Tap to place circle region on design image
+- Drag to adjust position, pinch to resize radius
+- Up to 3 numbered regions (colored: red, blue, green)
+- Each region has a text instruction (min 10 chars)
+- Region editor: tap region badge to edit instruction
+- "Generate Revision" button sends annotations to `edit_design` activity
+- Also supports pure text feedback (no annotations needed)
 
-**Rectangle fallback**: If freehand proves too buggy mid-P1, switch to rectangle selection (saves significant time).
+**P2: Polish**
+- Animation on region placement
+- Undo last region
+- Region size snap guides
+- Haptic feedback
 
 ---
 
@@ -890,13 +896,12 @@ class RoomDimensions(BaseModel):
     walls: list[dict] = []     # JSONB-friendly
     openings: list[dict] = []  # doors, windows
 
-class LassoRegion(BaseModel):
+class AnnotationRegion(BaseModel):
     region_id: int                       # 1-3
-    path_points: list[tuple[float, float]]  # normalized 0-1
-    action: str                          # Replace, Remove, Change, Resize, Reposition
+    center_x: float                      # normalized 0-1
+    center_y: float                      # normalized 0-1
+    radius: float                        # normalized 0-1
     instruction: str                     # min 10 chars
-    avoid_tokens: list[str] = []
-    style_nudges: list[str] = []
 
 class DesignOption(BaseModel):
     image_url: str
@@ -935,9 +940,10 @@ class WorkflowError(BaseModel):
 
 class RevisionRecord(BaseModel):
     revision_number: int
-    type: str                            # "lasso" or "regen"
+    type: str                            # "annotation" or "feedback"
     base_image_url: str
     revised_image_url: str
+    instructions: list[str] = []         # annotation instructions or text feedback
 
 # === Activity Input/Output ===
 class GenerateDesignsInput(BaseModel):
@@ -950,22 +956,19 @@ class GenerateDesignsInput(BaseModel):
 class GenerateDesignsOutput(BaseModel):
     options: list[DesignOption]          # exactly 2
 
-class GenerateInpaintInput(BaseModel):
+class EditDesignInput(BaseModel):
+    project_id: str
     base_image_url: str
-    regions: list[LassoRegion]           # 1-3 regions
-
-class GenerateInpaintOutput(BaseModel):
-    revised_image_url: str
-
-class GenerateRegenInput(BaseModel):
-    room_photo_urls: list[str]
+    room_photo_urls: list[str] = []
+    inspiration_photo_urls: list[str] = []
     design_brief: DesignBrief | None = None
-    current_image_url: str
-    feedback: str
-    revision_history: list[RevisionRecord] = []
+    annotations: list[AnnotationRegion] = []  # empty for text-only feedback
+    feedback: str | None = None               # text feedback (optional)
+    chat_history_key: str | None = None       # None = first edit (bootstraps chat)
 
-class GenerateRegenOutput(BaseModel):
+class EditDesignOutput(BaseModel):
     revised_image_url: str
+    chat_history_key: str                     # R2 key for serialized Gemini chat
 
 class GenerateShoppingListInput(BaseModel):
     design_image_url: str
@@ -1012,6 +1015,7 @@ class WorkflowState(BaseModel):
     current_image: str | None = None
     revision_history: list[RevisionRecord] = []
     iteration_count: int = 0
+    chat_history_key: str | None = None      # R2 key for Gemini chat session
     shopping_list: GenerateShoppingListOutput | None = None
     approved: bool = False
     error: WorkflowError | None = None
@@ -1042,15 +1046,15 @@ remo/
         design_project.py  # T0 owns — Temporal workflow
       activities/
         generate.py      # T2 owns — generate_designs
-        inpaint.py       # T2 owns — generate_inpaint
-        regen.py         # T2 owns — generate_regen
+        edit.py          # T2 owns — edit_design (multi-turn Gemini chat)
         intake.py        # T3 owns — run_intake_chat
         shopping.py      # T3 owns — generate_shopping_list
         validation.py    # T0 owns — validate_photo
         purge.py         # T0 owns — purge_project_data
       utils/
         r2.py            # T0 owns — R2 client wrapper
-        image.py         # T0/T2 — mask rendering, image processing
+        image.py         # T2 owns — annotation drawing utility
+        gemini_chat.py   # T2 owns — Gemini chat session manager
       prompts/           # T2/T3 own — versioned prompt templates
     migrations/          # T0 owns — Alembic only
     tests/
@@ -1100,8 +1104,7 @@ git worktree add /Hanalei/remo-ai team/ai/intake-agent
    ──── All teams can work independently after this point (P1) ────
 6. Activity PRs (any order, during P1):
    - team/gen/generate-designs   → main
-   - team/gen/inpaint           → main
-   - team/gen/regen             → main
+   - team/gen/edit-design       → main
    - team/ai/intake-quick       → main
    - team/ai/shopping-pipeline  → main
    - team/platform/validation   → main
@@ -1161,9 +1164,9 @@ P1: Independent Build (all teams parallel, no cross-team deps)
 │
 │  T0: Photo validation activity, LiDAR parser, bug fixes
 │  T1: All UI screens against mock API (photo, chat, design,
-│      lasso MVP, shopping list, LiDAR, home, output, navigation)
-│  T2: generate_designs, mask utility, generate_inpaint,
-│      generate_regen, prompt templates
+│      annotation tool, shopping list, LiDAR, home, output, navigation)
+│  T2: generate_designs, annotation utility, gemini chat manager,
+│      edit_design, prompt templates
 │  T3: Quick Intake activity, shopping list pipeline
 │      (extraction → Exa → scoring), golden test suite
 │
@@ -1177,9 +1180,9 @@ P2: Integration (incremental — one activity at a time)
 │          T1 points iOS at real API
 │          ✅ TEST: Upload photos → get 2 real generated designs
 │
-│  Step 2: T0 wires intake_chat + generate_inpaint + generate_regen
-│          T1 tests real intake + lasso → inpaint flow
-│          T1 builds multi-region lasso
+│  Step 2: T0 wires intake_chat + edit_design
+│          T1 tests real intake + annotation → edit flow
+│          T1 polishes annotation tool
 │          ✅ TEST: Full flow through iteration with real AI
 │
 │  Step 3: T0 wires shopping list pipeline + Temporal timers
@@ -1258,7 +1261,7 @@ Each integration step adds one batch. If a real activity breaks the workflow, im
 | Photo upload works | Camera + gallery return photos; 2 required enforced |
 | Chat renders correctly | Mock 3-question conversation displays properly |
 | Design comparison works | 2 images swipeable; selection highlighting |
-| Lasso MVP functional | Draw → editor → save → "Generate Revision" enabled |
+| Annotation tool functional | Place circle → edit instruction → "Generate Revision" enabled |
 | Shopping list renders | 8 mock products in 4 groups; total cost correct |
 | Navigation restores | Build NavigationPath from any WorkflowState; correct screen shown |
 | No memory leaks | Navigate full flow and back; Instruments shows no leaks |
@@ -1271,8 +1274,11 @@ Each integration step adds one batch. If a real activity breaks the workflow, im
 | generate_designs produces 2 images | Activity returns 2 DesignOption with valid R2 URLs |
 | Images are photorealistic | Human eval: 7/10+ score for 70%+ of generations |
 | Room architecture preserved | Edge map correlation > 0.7 with original photo |
-| Inpainting respects mask | SSIM > 0.98 for non-masked regions |
-| Regeneration incorporates feedback | Human eval: feedback addressed in 80%+ of cases |
+| Annotation edits target marked areas | Human eval: correct area edited in 4+ of 5 test cases |
+| Non-annotated areas preserved | SSIM > 0.95 for regions outside annotation circles vs original |
+| Output image is clean | No circles, badges, or annotation artifacts in Gemini's output image |
+| Text feedback incorporated | Human eval: feedback addressed in 80%+ of cases |
+| Chat history round-trips | Serialize → deserialize → follow-up edit succeeds (no 400 error) |
 | All activities complete in time | < 3 minutes per activity |
 | Prompt templates exist | `prompts/` directory with all generation modes |
 
@@ -1308,7 +1314,7 @@ Each integration step adds one batch. If a real activity breaks the workflow, im
 | iOS ViewModels | Logic tests for state management | XCTest |
 | iOS Views | Preview-based visual verification | #Preview |
 | iOS Navigation | Programmatic push to all steps | XCTest |
-| iOS Lasso | Geometry math (intersection, overlap, area) | XCTest |
+| iOS Annotation | Region placement, coordinate normalization | XCTest |
 | Integration | Full flow through real Temporal + real activities | pytest (P2+) |
 
 ### Error Handling Patterns
@@ -1360,9 +1366,9 @@ Rules:
 
 | # | Risk | Severity | Mitigation |
 |---|------|----------|-----------|
-| 1 | Neither Gemini model passes mask precision threshold | High | P0 spike tests both models head-to-head; if neither passes, escalate to evaluate alternatives before P1 |
+| 1 | Neither Gemini model passes annotation targeting threshold | High | P0 spike tests both models head-to-head with annotation-based editing; if neither passes, escalate before P1 |
 | 2 | Gemini preview model instability (rate limits, deprecation) | High | Both models use same API key/SDK; can swap model ID instantly if one becomes unstable |
-| 3 | Lasso tool slips past P1 end | High | Mid-P1 go/no-go; rectangle fallback saves significant time |
+| 3 | Chat history serialization breaks on model update | Medium | Serialize thought signatures; test round-trip in P0 spike; fallback: start new chat |
 | 4 | Contract change needed after freeze | Medium | Additive = fast merge; Breaking = formal process; T0 owns all changes |
 | 5 | Integration reveals incompatibilities | Medium | Incremental integration (P2); stub fallback; contract tests |
 | 6 | Exa returns irrelevant products | Medium | Multi-query strategy; Google Shopping fallback from P0 |
@@ -1388,7 +1394,7 @@ Fixed infra: Railway ($10-20 for 2 services + $5-10 for PG), Temporal Cloud ($10
 
 | # | Question | Decision Needed By |
 |---|----------|-------------------|
-| 1 | Gemini 3 Pro mask quality — pass or pivot to Gemini 2.5 Flash? | P0 end |
+| 1 | Gemini 3 Pro annotation targeting quality — pass or pivot to Gemini 2.5 Flash? | P0 end |
 | 2 | RoomPlan data: extract JSON on-device or send USDZ? | P0 end |
 | 3 | Exa search quality: test 20+ furniture queries | Mid-P1 |
 | 4 | Claude Opus 4.6 intake cost in practice vs estimate | Mid-P1 |

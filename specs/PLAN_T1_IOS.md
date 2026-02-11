@@ -58,8 +58,7 @@ Remo is an AI-powered room redesign app: users photograph their room, describe t
                     │  Activities:              │
                     │   ├── run_intake_chat    │ → Claude Opus 4.6
                     │   ├── generate_designs   │ → Gemini 3 Pro Image
-                    │   ├── generate_inpaint   │ → Gemini 3 Pro Image
-                    │   ├── generate_regen     │ → Gemini 3 Pro Image
+                    │   ├── edit_design        │ → Gemini 3 Pro Image (multi-turn chat)
                     │   ├── generate_shopping  │ → Claude + Exa
                     │   └── purge_project      │ → R2 + DB cleanup
                     └──┬──────┬──────┬─────────┘
@@ -102,7 +101,7 @@ T1 builds the **entire iOS user experience**. You consume T0's contracts and moc
 |-------|-------|---------|
 | **P0: Foundation** | Contracts, scaffold, infra, Gemini spike | Xcode project + SPM packages + navigation skeleton + mock client |
 | **P1: Independent Build** | All teams build in parallel against contracts | Build ALL UI screens against mock API |
-| **P2: Integration** | Wire real activities, connect iOS to real API | Swap mock for real API, build multi-region lasso |
+| **P2: Integration** | Wire real activities, connect iOS to real API | Swap mock for real API, polish annotation tool |
 | **P3: Stabilization** | Bugs, edge cases, resume testing, polish | Polish, loading states, animations, error edge cases |
 
 ---
@@ -130,7 +129,7 @@ ios/
     RemoNetworking/     # API client, mock client
     RemoPhotoUpload/    # Photo upload UI + validation display
     RemoChatUI/         # Chat interface, quick-reply chips
-    RemoLasso/          # Lasso drawing, geometry, region editor
+    RemoAnnotation/     # Annotation region picker, region editor
     RemoDesignViews/    # Comparison, iteration, approval, output
     RemoShoppingList/   # Product cards, grouped lists
     RemoLiDAR/          # RoomPlan wrapper, scan screens
@@ -164,7 +163,7 @@ T1 **does** own the Swift mirrors of the Pydantic contracts (in `Packages/RemoMo
 | Output Screen (save to photos, share) | Image saves to camera roll; share sheet opens |
 | Home Screen (pending projects, resume) | Mock projects list renders; tap resumes at correct step |
 | Navigation + Router (full flow) | Push to any step via WorkflowState; back navigation works |
-| Lasso Tool MVP (1 region, freehand, auto-close, editor) | Draw region -> editor opens -> save -> "Generate Revision" enabled |
+| Annotation Tool (tap to place circles, instruction editor) | Place region -> edit instruction -> "Generate Revision" enabled |
 | Shopping List UI (grouped cards, buy links, fit badges) | 8 mock products render in 4 groups; total cost displayed |
 | LiDAR Scan UI (RoomPlan wrapper, skip flow) | Device check works; skip flow shows trade-off notification |
 
@@ -173,7 +172,7 @@ T1 **does** own the Swift mirrors of the Pydantic contracts (in `Packages/RemoMo
 | Deliverable | Success Metric |
 |------------|----------------|
 | Swap mock API for real API | Full flow works against real backend |
-| Lasso multi-region (overlap detection, edit list, reorder) | Up to 3 regions; overlap blocked; renumbering works |
+| Annotation tool polish (undo, snap guides, haptics) | Undo works; size snap guides visible; haptic on placement |
 
 ### P3: Stabilization
 
@@ -260,7 +259,7 @@ Remo/
     RemoNetworking/     # API client, mock client (T1-lead owns)
     RemoPhotoUpload/    # Photo upload UI + validation display
     RemoChatUI/         # Chat interface, quick-reply chips
-    RemoLasso/          # Lasso drawing, geometry, region editor
+    RemoAnnotation/     # Annotation region picker, region editor
     RemoDesignViews/    # Comparison, iteration, approval, output
     RemoShoppingList/   # Product cards, grouped lists
     RemoLiDAR/          # RoomPlan wrapper, scan screens
@@ -268,7 +267,7 @@ Remo/
 
 Each package has its own `Package.swift` -- no `.pbxproj` conflicts between packages. This is the single most impactful decision for parallel iOS development.
 
-If two developers work on T1, one can own photo/chat/LiDAR packages while the other owns design/lasso/shopping packages. The Xcode project file rarely changes.
+If two developers work on T1, one can own photo/chat/LiDAR packages while the other owns design/annotation/shopping packages. The Xcode project file rarely changes.
 
 ### Mock API Layer
 
@@ -339,14 +338,14 @@ Implement polling as a reusable utility (e.g., `AsyncPollingSequence` or a simpl
 - "Start Over" button -> resets to intake
 - Loading state while generation runs
 
-#### Lasso Tool MVP (1 Region)
-- Freehand drawing with auto-close (connect start/end)
-- Self-intersection detection
-- Minimum area validation (2% of image area)
-- Fixed-color outline (skip adaptive contrast in P1)
-- Simple Region Editor: action dropdown + instruction text field
-- Basic zoom/pan mode toggle (single-finger = draw, pinch = zoom)
-- "Generate Revision" button (enabled only when region + instruction saved)
+#### Annotation Tool (Circle-Based Region Marking)
+- Tap to place circle region on design image
+- Drag to adjust position, pinch to resize radius
+- Up to 3 numbered regions (colored: red #FF0000, blue #0000FF, green #00FF00)
+- Each region has a text instruction (min 10 chars)
+- Region editor: tap region badge to edit instruction
+- "Generate Revision" button (enabled when at least 1 region + instruction saved)
+- Also supports pure text feedback (no annotations needed)
 
 #### Shopping List UI
 - Products grouped by category (e.g., "Sofas", "Lighting", "Rugs", "Decor")
@@ -383,31 +382,26 @@ Implement polling as a reusable utility (e.g., `AsyncPollingSequence` or a simpl
 - Back navigation works (but some steps are one-way, e.g., can't go back from generation)
 - Deep resume: build `NavigationPath` from any `WorkflowState`
 
-### Lasso Tool Details
+### Annotation Tool Details
 
-#### P1: 1-Region MVP
+**Key decision**: Replaces freehand lasso with numbered circle annotations. Simpler to build (no polygon geometry, no self-intersection detection), aligns with Gemini's intended interaction pattern.
 
-- Freehand drawing with auto-close
-- Self-intersection detection
-- Minimum area validation (2% of image area)
-- Fixed-color outline (skip adaptive contrast)
-- Simple Region Editor (action + instruction only)
-- Basic zoom/pan mode toggle (single-finger = draw, pinch = zoom)
-- "Generate Revision" button
+#### P1: Annotation MVP
 
-#### P2: Multi-Region
+- Tap to place circle region on design image (normalized 0-1 coordinates)
+- Drag to adjust position, pinch to resize radius
+- Up to 3 numbered regions with distinct colors (red, blue, green)
+- Region editor: tap badge to edit instruction text
+- "Generate Revision" button sends `AnnotationRegion` list to backend
+- Also supports pure text feedback mode (no visual annotations)
+- Region data model: `AnnotationRegion(region_id, center_x, center_y, radius, instruction)`
 
-- Up to 3 regions per revision
-- Overlap detection (prevent overlapping regions)
-- Edit List (bottom sheet / side panel) showing all regions
-- Reorder regions (drag)
-- Full Region Editor (action, instruction, avoid tokens, style nudges)
-- Adaptive contrast outlines (outline color adapts to underlying image)
-- Rasterize finalized regions (performance optimization)
+#### P2: Polish
 
-#### Rectangle Fallback
-
-If freehand drawing proves too buggy mid-P1, switch to rectangle selection. This saves significant time and still provides the core lasso functionality. The decision should be made mid-P1 based on progress.
+- Undo last region
+- Region size snap guides
+- Haptic feedback on placement
+- Animation on region placement
 
 ---
 
@@ -446,13 +440,12 @@ class RoomDimensions(BaseModel):
     walls: list[dict] = []     # JSONB-friendly
     openings: list[dict] = []  # doors, windows
 
-class LassoRegion(BaseModel):
+class AnnotationRegion(BaseModel):
     region_id: int                       # 1-3
-    path_points: list[tuple[float, float]]  # normalized 0-1
-    action: str                          # Replace, Remove, Change, Resize, Reposition
+    center_x: float                      # normalized 0-1
+    center_y: float                      # normalized 0-1
+    radius: float                        # normalized 0-1
     instruction: str                     # min 10 chars
-    avoid_tokens: list[str] = []
-    style_nudges: list[str] = []
 
 class DesignOption(BaseModel):
     image_url: str
@@ -491,9 +484,10 @@ class WorkflowError(BaseModel):
 
 class RevisionRecord(BaseModel):
     revision_number: int
-    type: str                            # "lasso" or "regen"
+    type: str                            # "annotation" or "feedback"
     base_image_url: str
     revised_image_url: str
+    instructions: list[str] = []         # annotation instructions or text feedback
 ```
 
 ### Activity Input/Output Models
@@ -509,22 +503,19 @@ class GenerateDesignsInput(BaseModel):
 class GenerateDesignsOutput(BaseModel):
     options: list[DesignOption]          # exactly 2
 
-class GenerateInpaintInput(BaseModel):
+class EditDesignInput(BaseModel):
+    project_id: str
     base_image_url: str
-    regions: list[LassoRegion]           # 1-3 regions
-
-class GenerateInpaintOutput(BaseModel):
-    revised_image_url: str
-
-class GenerateRegenInput(BaseModel):
-    room_photo_urls: list[str]
+    room_photo_urls: list[str] = []
+    inspiration_photo_urls: list[str] = []
     design_brief: DesignBrief | None = None
-    current_image_url: str
-    feedback: str
-    revision_history: list[RevisionRecord] = []
+    annotations: list[AnnotationRegion] = []  # empty for text-only feedback
+    feedback: str | None = None               # text feedback (optional)
+    chat_history_key: str | None = None       # None = first edit (bootstraps chat)
 
-class GenerateRegenOutput(BaseModel):
+class EditDesignOutput(BaseModel):
     revised_image_url: str
+    chat_history_key: str                     # R2 key for serialized Gemini chat
 
 class GenerateShoppingListInput(BaseModel):
     design_image_url: str
@@ -577,6 +568,7 @@ class WorkflowState(BaseModel):
     current_image: str | None = None
     revision_history: list[RevisionRecord] = []
     iteration_count: int = 0
+    chat_history_key: str | None = None      # R2 key for Gemini chat session
     shopping_list: GenerateShoppingListOutput | None = None
     approved: bool = False
     error: WorkflowError | None = None
@@ -604,8 +596,8 @@ class WorkflowState(BaseModel):
 | `POST` | `/api/v1/projects/{id}/intake/skip` | Signal skip_intake | 200 |
 | `POST` | `/api/v1/projects/{id}/select` | Signal select_option | 200 |
 | `POST` | `/api/v1/projects/{id}/start-over` | Signal start_over | 200 |
-| `POST` | `/api/v1/projects/{id}/iterate/lasso` | Signal submit_lasso_edit | 200 |
-| `POST` | `/api/v1/projects/{id}/iterate/regenerate` | Signal submit_regenerate | 200 |
+| `POST` | `/api/v1/projects/{id}/iterate/annotate` | Signal submit_annotation_edit | 200 |
+| `POST` | `/api/v1/projects/{id}/iterate/feedback` | Signal submit_text_feedback | 200 |
 | `POST` | `/api/v1/projects/{id}/approve` | Signal approve_design | 200 |
 | `POST` | `/api/v1/projects/{id}/retry` | Signal retry_failed_step | 200 |
 | `GET` | `/health` | Health check | `{ postgres, temporal, r2 }` |
@@ -666,12 +658,12 @@ team/ios/scaffold         # P0: Xcode project + SPM packages
 team/ios/photo-upload     # P1: Photo upload UI
 team/ios/chat-ui          # P1: Chat interface
 team/ios/design-views     # P1: Design comparison + output
-team/ios/lasso-mvp        # P1: Lasso tool MVP
+team/ios/annotation       # P1: Annotation tool
 team/ios/shopping-ui      # P1: Shopping list UI
 team/ios/lidar-scan       # P1: LiDAR scan UI
 team/ios/navigation       # P1: Navigation + router
 team/ios/integration      # P2: Swap mock for real API
-team/ios/lasso-multi      # P2: Multi-region lasso
+team/ios/annotation-polish # P2: Annotation tool polish
 ```
 
 ### PR Merge Order
@@ -681,7 +673,7 @@ T1's PRs merge in this order:
 1. `team/ios/scaffold` -> main (P0) -- Xcode project + SPM packages + navigation skeleton
 2. UI feature PRs (P1, any order) -- each screen is an independent package
 3. `team/ios/integration` -> main (P2) -- swap mock for real API
-4. `team/ios/lasso-multi` -> main (P2) -- multi-region lasso
+4. `team/ios/annotation-polish` -> main (P2) -- annotation tool polish
 
 ### Reviewing T0 Contract PRs
 
@@ -701,7 +693,7 @@ One person from T1 should approve these PRs before merge.
 | Photo upload works | Camera + gallery return photos; 2 required enforced |
 | Chat renders correctly | Mock 3-question conversation displays properly |
 | Design comparison works | 2 images swipeable; selection highlighting |
-| Lasso MVP functional | Draw -> editor -> save -> "Generate Revision" enabled |
+| Annotation tool functional | Place circle -> edit instruction -> "Generate Revision" enabled |
 | Shopping list renders | 8 mock products in 4 groups; total cost correct |
 | Navigation restores | Build NavigationPath from any WorkflowState; correct screen shown |
 | No memory leaks | Navigate full flow and back; Instruments shows no leaks |
@@ -718,7 +710,7 @@ One person from T1 should approve these PRs before merge.
 | iOS ViewModels | Logic tests for state management | XCTest |
 | iOS Views | Preview-based visual verification | `#Preview` |
 | iOS Navigation | Programmatic push to all steps | XCTest |
-| iOS Lasso | Geometry math (intersection, overlap, area) | XCTest |
+| iOS Annotation | Region placement, coordinate normalization | XCTest |
 
 ### Preview-Driven Development
 
@@ -755,7 +747,7 @@ Navigate the full flow (home -> photo -> scan -> intake -> generation -> selecti
 
 | # | Risk | Severity | Mitigation |
 |---|------|----------|-----------|
-| 1 | Lasso tool slips past P1 end | High | Mid-P1 go/no-go; rectangle fallback saves significant time |
+| 1 | Annotation tool interaction feels awkward on small screens | Medium | Test on iPhone SE early; adjust minimum region size if needed |
 | 2 | Xcode project file merge conflicts | Medium | SPM local packages; single iOS project owner |
 | 3 | RoomPlan struggles with unusual rooms | Low | LiDAR is optional; "without scan" path is fully specified |
 
@@ -764,16 +756,7 @@ Navigate the full flow (home -> photo -> scan -> intake -> generation -> selecti
 | # | Question | Decision Needed By |
 |---|----------|-------------------|
 | 1 | RoomPlan data: extract JSON on-device or send USDZ? | P0 end |
-| 2 | Lasso freehand vs rectangle fallback? | Mid-P1 (if freehand proves buggy) |
-
-### Lasso Go/No-Go (Mid-P1)
-
-At the midpoint of P1, evaluate:
-- Is freehand drawing stable enough for demo?
-- Are self-intersection and area validation working?
-- Is the gesture system (draw vs zoom) confusing?
-
-If any of these are problematic, switch to rectangle selection immediately. The rectangle version is much simpler and still provides the core editing functionality.
+| 2 | Annotation circle sizing UX — pinch vs. drag handle? | Early P1 (test both in prototype) |
 
 ---
 

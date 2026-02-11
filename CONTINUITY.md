@@ -19,29 +19,36 @@ Create a refined, team-reviewed implementation plan for the Remo iOS app MVP. Ou
 - **SPM local packages** for parallel iOS development
 - **Contracts frozen at P0 exit gate** as hard deadline
 - **Squash merge** to main; git worktrees per team
-- **Lasso MVP (1 region)** first, multi-region in Phase 2
+- **Annotation-based editing replaces lasso/mask inpainting** — users mark areas with numbered circles, Gemini edits targeted areas. Simpler iOS UX, eliminates mask generation pipeline. Google's intended interaction pattern (Gemini Markup tool).
+- **Multi-turn Gemini chat for iteration** — generation is standalone (2 parallel calls), but all edits (annotation + text feedback) happen in a persistent Gemini chat session. Chat history (including thought signatures) serialized to R2 between Temporal activity calls.
+- **Two T2 activities, not three** — `generate_designs` (standalone) + `edit_design` (multi-turn). Replaces generate_designs + generate_inpaint + generate_regen.
+- **`gemini-3-pro-image-preview` likely required** — supports up to 14 input images (we need 5+ refs). Flash model limited to 3. P0 spike confirms.
 - **Rubric-based scoring** for shopping list confidence
 - **R2 lifecycle 120h** (not 72h) to prevent premature deletion
 - **Photo validation synchronous** in API handler (not Temporal activity)
 - **Railway PostgreSQL** (not Neon) — deploy on Railway
 - **Phase-based timeline**: P0 Foundation → P1 Independent Build → P2 Integration → P3 Stabilization
 - **Only 2 AI providers**: Anthropic + Google (eliminated OpenAI dependency)
+- **Design intelligence framework for T3** — intake agent is a design translator (not information collector). Three-layer reasoning stack (Ching spatial → de Wolfe human-centered → Draper emotional), translation engine for vague→specific, DIAGNOSE pipeline for diagnostic probing. See `specs/DESIGN_INTELLIGENCE.md`.
 
 ## State
-- Done: Product spec, draft plan (v1.0), 5 specialist analyses, final plan (v2.0), all refinements, per-team sub-plans
-- Now: Complete — all planning artifacts written
-- Next: Implementation (when requested)
+- Done: Product spec, all plans, T0 P0 #2-#8 + #10 (all P0 complete), P1 #11-#12, purge, worker, validation, migration, error handling hardened, validation.py silent failure fixes
+- Done: **T0 code migration complete** — lasso/inpaint/regen → annotation-based edit system. All 13+ files updated (contracts, mock_stubs, worker, workflow, API routes, db, migration, 6 test files). PR self-review complete — added ValueError guards for unknown action types in workflow, mock API sets chat_history_key on revision. 320 tests pass, 0 warnings, ruff clean, format clean, mypy clean.
+- Now: Ready to commit.
+- Next: P2 #13 (wire real activities into workflow).
 
 ## Open Questions
-- Gemini mask quality pass/fail? (P0 end)
+- Gemini annotation targeting quality pass/fail? (P0 end)
 - RoomPlan serialization format (P0 end)
 
 ## Working Set
 - specs/PRODUCT_SPEC.md (input spec)
-- specs/PLAN_0210.md (draft plan v1.0)
 - specs/PLAN_FINAL.md (master plan v2.0)
-- specs/PLAN_T0_PLATFORM.md (T0 sub-plan, 897 lines)
-- specs/PLAN_T1_IOS.md (T1 sub-plan, 780 lines)
-- specs/PLAN_T2_IMAGE_GEN.md (T2 sub-plan, 586 lines)
-- specs/PLAN_T3_AI_AGENTS.md (T3 sub-plan, 747 lines)
+- specs/PLAN_T0_PLATFORM.md (T0 sub-plan)
+- specs/PLAN_T1_IOS.md (T1 sub-plan)
+- specs/PLAN_T2_IMAGE_GEN.md (T2 sub-plan, rewritten for annotation-based editing)
+- specs/PLAN_T3_AI_AGENTS.md (T3 sub-plan, updated with design intelligence framework)
+- specs/DESIGN_INTELLIGENCE.md (design reasoning reference for T3 intake + shopping agents)
+- specs/PROMPT_T1_IOS.md (T1 ralph loop prompt, gitignored)
+- specs/PROMPT_T2_IMAGE_GEN.md (T2 ralph loop prompt, gitignored)
 - specs/.planning/ (intermediate analysis files)

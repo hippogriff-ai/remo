@@ -36,8 +36,7 @@ Remo is an AI-powered room redesign app: users photograph their room, describe t
                     │  Activities:              │
                     │   ├── run_intake_chat ◄──── T3 OWNS
                     │   ├── generate_designs    │
-                    │   ├── generate_inpaint    │
-                    │   ├── generate_regen      │
+                    │   ├── edit_design (chat)  │
                     │   ├── generate_shopping ◄── T3 OWNS
                     │   └── purge_project       │
                     └──┬──────┬──────┬─────────┘
@@ -50,8 +49,10 @@ Remo is an AI-powered room redesign app: users photograph their room, describe t
 
 T3 owns the **AI brain** of Remo:
 
-1. **Intake conversation** — the Claude-powered chat that understands what the user wants and produces a structured DesignBrief
+1. **Intake conversation** — the Claude-powered chat that understands what the user wants, reasons like a professional designer, and produces a structured DesignBrief with prompt-ready specificity
 2. **Shopping pipeline** — turns an approved design image into a purchasable product list with real buy links
+
+**Critical framing**: The intake agent is NOT an information collector. It is a **design translator** — it hears "I want it cozy" and produces "warm palette (amber, terracotta), layered textiles (knit throws, velvet), low warm lighting 2200-2700K, intimate-scale furniture, refuge-dominant layout." That translation is what makes Gemini generate the right image. See `specs/DESIGN_INTELLIGENCE.md` for the full design reasoning framework.
 
 Both use Claude via the **raw Anthropic Python SDK** with tool use. **NO agent harness, NO LangChain, NO framework.** This is just API calls with `client.messages.create()` and the `tools` parameter.
 
@@ -96,6 +97,9 @@ Both use Claude via the **raw Anthropic Python SDK** with tool use. **NO agent h
 | `backend/prompts/item_extraction.txt` | Shopping list item extraction prompt |
 | `backend/prompts/product_scoring.txt` | Shopping list rubric-based scoring prompt |
 
+You **read but do not modify**:
+- `specs/DESIGN_INTELLIGENCE.md` — Design reasoning framework (translation tables, diagnostic techniques, elevation rules). **Distill relevant sections into your system prompts.**
+
 You do NOT own and must NOT modify:
 - `backend/models/contracts.py` (T0 owns)
 - `backend/workflows/design_project.py` (T0 owns)
@@ -117,34 +121,36 @@ T3 has no P0 exit-gate deliverables. Use P0 for exploration:
 
 | # | Deliverable | Success Metric |
 |---|------------|----------------|
-| 1 | Claude system prompt for Quick Intake | ~3-turn adaptive flow produces valid DesignBrief JSON 100% of the time |
-| 2 | Structured output via tool use (DesignBrief) | Every response calls `update_design_brief` + `respond_to_user` tools |
-| 3 | `run_intake_chat` activity (Quick mode) | Temporal activity completes in <60s per turn; output matches IntakeChatOutput contract |
-| 4 | Intake eval harness (DesignBrief Quality Rubric) | Automated rubric scoring: ≥ 85/100 across 8 golden test conversations |
-| 5 | Shopping list: anchored item extraction | Extracts 6+ items using brief + iteration history + image; correct source tagging ≥ 90% |
-| 6 | Shopping list: Exa search integration | Parallelized search returns product pages for 80%+ of items |
-| 7 | Shopping list: rubric-based scoring | Scores products on 5 criteria; produces calibrated 0-1 scores |
-| 8 | Shopping pipeline eval suite | Automated eval for extraction, search, and scoring criteria |
-| 9 | `generate_shopping_list` activity | Takes image + brief + iterations → returns ProductMatch list; 5+ items with working URLs |
-| 10 | Golden test suite for intake | 8 scripted conversations; brief quality ≥ 70/100; adaptive behavior verified |
+| 1 | Design intelligence integration into system prompt | Translation table, DIAGNOSE pipeline, room-specific guidance from `DESIGN_INTELLIGENCE.md` encoded in prompt; agent elevates "cozy" → professional design parameters |
+| 2 | Claude system prompt for Quick Intake | ~3-turn adaptive flow with diagnostic probing produces valid, ELEVATED DesignBrief JSON 100% of the time |
+| 3 | Structured output via tool use (DesignBrief) | Every response calls `update_design_brief` + `respond_to_user` tools |
+| 4 | `run_intake_chat` activity (Quick mode) | Temporal activity completes in <60s per turn; output matches IntakeChatOutput contract |
+| 5 | Intake eval harness (DesignBrief Quality Rubric) | Automated rubric scoring: ≥ 85/100 across 8 golden test conversations |
+| 6 | Shopping list: design-aware item extraction | Extracts 6+ items using brief + iteration history + image; professional material vocabulary; correct source tagging ≥ 90% |
+| 7 | Shopping list: Exa search integration | Parallelized search returns product pages for 80%+ of items |
+| 8 | Shopping list: rubric-based scoring | Scores products on 5 criteria + design-principle alignment; produces calibrated 0-1 scores |
+| 9 | Shopping pipeline eval suite | Automated eval for extraction, search, and scoring criteria |
+| 10 | `generate_shopping_list` activity | Takes image + brief + iterations → returns ProductMatch list; 5+ items with working URLs |
+| 11 | Golden test suite for intake | 8 scripted conversations; brief quality ≥ 70/100; adaptive behavior + brief elevation verified |
 
 **Recommended P1 build order**:
-1. Quick Intake first (simplest — ~3 turns, most constrained scope)
-2. Intake eval harness (so you can iterate on prompt with feedback)
-3. Shopping pipeline (extraction → Exa → scoring → filtering)
-4. Shopping eval suite + golden tests
+1. Design intelligence integration (distill `DESIGN_INTELLIGENCE.md` into system prompt — the foundation everything else depends on)
+2. Quick Intake prompt + activity (simplest — ~3 turns, but WITH elevation)
+3. Intake eval harness (so you can iterate on prompt quality with automated rubric feedback)
+4. Shopping pipeline (design-aware extraction → Exa → scoring → filtering)
+5. Shopping eval suite + golden tests
 
 ### P2: Integration
 
 | # | Deliverable | Success Metric |
 |---|------------|----------------|
-| 11 | Full Intake mode (~10 turns, adaptive) | Domain notepad tracking works; agent adapts question order based on responses; brief quality ≥ 80/100 |
+| 12 | Full Intake mode (~10 turns, adaptive) | Domain notepad tracking works; agent adapts question order based on responses; DIAGNOSE pipeline active; brief quality ≥ 80/100 |
 
 ### P3: Stabilization
 
 | # | Deliverable | Success Metric |
 |---|------------|----------------|
-| 12 | Open Conversation mode | Free-form conversation with domain notepad; caps at ~15 turns; gracefully wraps up |
+| 13 | Open Conversation mode | Free-form conversation with domain notepad; caps at ~15 turns; diagnostic probing; gracefully wraps up |
 
 ---
 
@@ -202,15 +208,25 @@ response = client.messages.create(
 
 ### Intake Chat Agent
 
-#### System Prompt Structure (3 Sections)
+#### System Prompt Structure (6 Sections)
 
-The system prompt (`backend/prompts/intake_system.txt`) has 3 sections:
+The system prompt (`backend/prompts/intake_system.txt`) has 6 sections. Sections 2–4 are distilled from `specs/DESIGN_INTELLIGENCE.md`.
 
-1. **Identity**: "You are a friendly interior design consultant helping a homeowner redesign their room..."
+1. **Identity & Design Philosophy**: "You are a professional interior design consultant — not an information collector. You reason like a designer: first analyzing the space (is it organized correctly?), then filtering through the human lens (is it right for these people?), then elevating with emotional impact (does it create joy?). You hear vague desires and translate them into specific, actionable design language."
 
-2. **Behavioral rules**: Adaptive questioning, domain tracking, skip covered domains, follow-up on unexpected topics
+2. **Translation Engine**: A lookup table mapping vague client language to specific design parameters. Include the full translation table from `DESIGN_INTELLIGENCE.md` Section 2 — at minimum the 10 core translations (cozy, modern, more space, calm, luxurious, bright & airy, rustic, minimalist, bohemian, scandinavian). Instruct the model: "When a user says a vague preference, internally map it to the corresponding design parameters. Fill the DesignBrief with the TRANSLATED parameters, not the user's raw words. In your summary, show the translation so the user can correct it."
 
-3. **Output format**: Must call `update_design_brief` and `respond_to_user` tools on every turn
+3. **Diagnostic Reasoning (DIAGNOSE Pipeline)**: Instruct the model to follow the 8-step reasoning process from `DESIGN_INTELLIGENCE.md` Section 3. Key behavioral instructions:
+   - Detect contradictions ("I love minimalism" + can't throw things away → real need is organized storage that LOOKS minimal)
+   - Use the "three-why" technique: probe beneath surface answers to find root causes
+   - Reframe surface requests into underlying design problems ("I need new furniture" → "the living room doesn't support how the family uses it")
+   - Check internal consistency before finalizing (does color palette work with lighting plan?)
+
+4. **Room-Specific Guidance**: Load the relevant room section from `DESIGN_INTELLIGENCE.md` Section 8 based on `room_type` (detected from first user response or photo analysis). Example: if room_type=bedroom, include sleep hygiene rules (2200K only, blackout capability, bed facing door, cool temperature).
+
+5. **Behavioral Rules**: Adaptive questioning, domain tracking, skip covered domains, follow-up on unexpected topics, quick-reply chip generation. Use diagnostic questions from `DESIGN_INTELLIGENCE.md` Section 4 instead of generic questions when probing deeper.
+
+6. **Output Format**: Must call `update_design_brief` and `respond_to_user` tools on every turn. Brief fields must contain ELEVATED design language (see elevation rules in `DESIGN_INTELLIGENCE.md` Section 5). Lighting always specifies 3 layers + Kelvin. Colors always include 60/30/10 proportions. Textures use professional material descriptors.
 
 #### Mode Differentiation
 
@@ -218,9 +234,9 @@ The system prompt (`backend/prompts/intake_system.txt`) has 3 sections:
 
 | Mode | System Prompt Instruction | Target Turns |
 |------|--------------------------|-------------|
-| **Quick** | "You have a notepad of 10 design domains. Select the 3 most impactful for {room_type}. Pre-plan 3 questions, but adapt — if the user's answer covers multiple domains, skip ahead. Target ~3 turns, then summarize." | ~3 |
-| **Full** | "You have a notepad of 10 design domains. Pre-plan 10 questions covering all domains in priority order. After each user response, re-evaluate: reorder remaining questions, merge or swap later ones based on what you've learned. Skip domains already covered. The notepad keeps you on track; your intelligence picks the best next question." | ~10 |
-| **Open** | "Begin with an open prompt. Follow the user's lead. Track domains on your notepad internally. When conversation energy slows or the user seems done, steer toward uncovered domains. Cap at ~15 turns — gracefully wrap up and summarize." | ~15 |
+| **Quick** | "You have a notepad of 10 design domains. Select the 3 most impactful for {room_type} (consult the room-specific guidance). Pre-plan 3 questions using diagnostic alternatives from the question bank. Adapt — if the user's answer covers multiple domains, skip ahead. Apply the translation engine to every response. Target ~3 turns, then synthesize an elevated brief." | ~3 |
+| **Full** | "You have a notepad of 10 design domains. Pre-plan 10 questions in priority order using the diagnostic question bank. After each response, run the DIAGNOSE pipeline: detect contradictions, interpret vague terms via translation engine, analyze root causes with the three-why technique. Reorder remaining questions based on what you've learned. Skip domains already covered. The notepad keeps you on track; your design intelligence picks the best next question and probes deeper when answers are surface-level." | ~10 |
+| **Open** | "Begin with an open prompt: 'Tell us about this room — what's on your mind, what you love, what you'd change, anything.' Follow the user's lead. Apply the DIAGNOSE pipeline continuously. Track domains on your notepad internally. When conversation energy slows, probe uncovered domains using diagnostic questions. Cap at ~15 turns — synthesize an elevated brief and summarize." | ~15 |
 
 #### Turn Counter
 
@@ -364,20 +380,21 @@ async def run_intake_chat(input: IntakeChatInput) -> IntakeChatOutput:
 
 #### Intake Eval: DesignBrief Quality Rubric (out of 100)
 
-The intake agent shouldn't just capture what the user says — it should **elevate** user input into professional design language. "I want it cozy" should become specific guidance on color warmth, lighting layers, and textile choices.
+The intake agent shouldn't just capture what the user says — it should **elevate** user input into professional design language. "I want it cozy" should become specific guidance on color warmth, lighting layers, and textile choices. The Translation Engine from `DESIGN_INTELLIGENCE.md` drives this elevation.
 
 Every prompt change must be evaluated against golden test conversations using this rubric. A second Claude call scores the output brief + conversation transcript.
 
 | Criterion | Weight | Full marks | Zero |
 |-----------|--------|-----------|------|
-| **Style Coherence** | 15 | Named style with 2-3 defining characteristics. No contradictions. | Conflicting styles, or vague ("nice, modern") |
-| **Color Strategy** | 15 | Named palette with primary/accent distinction and complementary logic. e.g., "warm neutrals (sand, cream) with navy accents at 70/20/10" | Just color names with no relationship |
-| **Lighting Design** | 10 | Addresses layers (ambient, task, accent), natural light optimization, color temperature. e.g., "warm ambient 2700K, task at desk, accent on gallery wall" | Missing entirely, or just "warm lighting" |
-| **Space & Proportion** | 10 | Furniture scale vs room, traffic flow, focal point placement. References LiDAR dimensions if available. | No spatial awareness |
-| **Material & Texture Specificity** | 15 | Precise descriptors: "weathered oak," "brushed brass," "boucle upholstery" | Generic ("wood," "metal," "nice fabric") |
-| **Actionability** | 20 | Every field translates directly into Gemini generation prompt language. A prompt engineer needs zero guesswork. | Abstract feelings with no visual anchor |
-| **Completeness** | 10 | Covers: room purpose, style, colors, lighting, textures, key furniture, constraints, keep_items. | Only 1-2 domains populated |
-| **User Fidelity** | 5 | Every preference traces to a user statement. Agent-inferred preferences are marked. | Hallucinated preferences user never expressed |
+| **Style Coherence** | 10 | Named style with 2-3 defining characteristics. No contradictions. Brief reads as a unified design narrative, not a disconnected checklist. | Conflicting styles, or vague ("nice, modern") |
+| **Color Strategy** | 15 | Named palette with 60/30/10 proportions and application context. e.g., "warm ivory walls (60%), natural oak + cream textiles (30%), navy accent pillows + art (10%)" — consistent undertones throughout | Just color names with no relationship or proportions |
+| **Lighting Design** | 15 | All three layers specified (ambient, task, accent) with Kelvin temperatures and placement. e.g., "warm ambient 2700K, brass table lamps at reading positions (task), accent uplighting on textured wall" | Missing layers, or just "warm lighting" |
+| **Material & Texture Specificity** | 15 | Precise professional descriptors: "weathered oak," "brushed brass," "boucle upholstery," "raw linen curtains." Minimum 3 distinct texture types. | Generic ("wood," "metal," "nice fabric") |
+| **Design Intelligence** | 10 | Agent applied the three-layer stack: spatial awareness (furniture scale, circulation), human-centered filter (suitable for these people's lifestyle), emotional layer (mood-enhancing elements). Brief includes at least one biophilic element and addresses prospect-refuge for primary seating. | No evidence of design reasoning — just echoed user preferences |
+| **Diagnostic Depth** | 5 | Agent probed beneath surface requests. Pain points reveal root causes (not just "I want new furniture" but "seating doesn't support how we use the room"). Agent detected and resolved at least one contradiction or vague answer. | Accepted all surface answers without follow-up |
+| **Actionability** | 15 | Every field translates directly into Gemini generation prompt language. A prompt engineer needs zero guesswork. Textures, colors, and lighting are specific enough to render. | Abstract feelings with no visual anchor |
+| **Completeness** | 10 | Covers: room purpose, style, colors (with proportions), lighting (with layers), textures (3+ types), key furniture, constraints, keep_items. Room-specific design rules applied. | Only 1-2 domains populated |
+| **User Fidelity** | 5 | Every preference traces to a user statement. Agent-inferred preferences are clearly marked ("I interpreted your preference for natural light as..."). Translations shown in summary for user correction. | Hallucinated preferences user never expressed |
 
 **Thresholds**: ≥85 `PASS:EXCELLENT` | 70-84 `PASS` | 50-69 `FAIL:WEAK` | <50 `FAIL:POOR`
 
@@ -399,7 +416,7 @@ for test_conversation in golden_test_suite:
 | Source | What it gives us | Priority |
 |--------|-----------------|----------|
 | **DesignBrief** (from intake) | User's *intent* — style, colors, textures, specific requests, keep_items | Highest — user's own words |
-| **Iteration history** (lasso/regen) | Amendments — what changed from original vision | Overrides brief for changed items |
+| **Iteration history** (annotation/feedback) | Amendments — what changed from original vision | Overrides brief for changed items |
 | **Final approved image** | Ground truth — what's actually rendered, including AI additions | Fills gaps for items not in brief/iterations |
 
 ```
@@ -409,7 +426,7 @@ DesignBrief + Iteration History + Approved Image + Original Room Photos
     → Receives ALL three sources + original room photos
     → For each item, classifies source:
       (a) BRIEF-ANCHORED — explicitly in DesignBrief → use user's language
-      (b) ITERATION-ANCHORED — changed during lasso/regen → use iteration instruction
+      (b) ITERATION-ANCHORED — changed during annotation/feedback → use iteration instruction
       (c) IMAGE-ONLY — AI addition not in brief or iterations → vision-derived description
       (d) EXISTING — in original room photo AND keep_items → SKIP
     → 6-10 items with: category, style, material, color, proportions, source_tag
@@ -469,6 +486,9 @@ The prompt (`backend/prompts/item_extraction.txt`) instructs Claude to:
 - For brief-anchored items, preserve the user's original language (don't paraphrase)
 - For iteration-anchored items, use the instruction text (e.g., "replace with marble coffee table")
 - For image-only items, describe what's visible (category, style, material, color)
+- **Use professional material vocabulary** from `DESIGN_INTELLIGENCE.md` Section 6: not "brown table" but "walnut dining table with turned legs"; not "gold lamp" but "brushed brass arc floor lamp with linen shade"
+- **Follow the standard extraction taxonomy** (10 categories in priority order): primary seating, tables, storage, rugs, lighting fixtures, window treatments, soft furnishings, wall art, plants/planters, hardware/accents
+- **Apply proportion constraints** if LiDAR is available (coffee table ≈ 2/3 sofa length; 14-18" clearance; rug extends 6"+ beyond sofa)
 
 #### Step 2: Exa Search (Parallelized, Source-Aware)
 
@@ -617,11 +637,11 @@ class DesignBrief(BaseModel):
     inspiration_notes: list[InspirationNote] = []
 
 class StyleProfile(BaseModel):
-    lighting: str | None = None       # warm / cool / bright natural
-    colors: list[str] = []
-    textures: list[str] = []
+    lighting: str | None = None       # ELEVATED: "warm ambient 2700K, task at reading chair, accent on gallery wall"
+    colors: list[str] = []            # ELEVATED: ["warm ivory walls (60%)", "natural oak (30%)", "navy accents (10%)"]
+    textures: list[str] = []          # ELEVATED: ["boucle upholstery", "weathered oak", "brushed brass", "raw linen"]
     clutter_level: str | None = None  # minimal / curated / layered
-    mood: str | None = None
+    mood: str | None = None           # ELEVATED: "intimate refuge — deep-seated furniture, layered warm textiles, soft pools of light"
 
 class InspirationNote(BaseModel):
     photo_index: int
@@ -719,7 +739,10 @@ Group 6 (P1, any order):
 |--------|-------------|
 | Quick Intake: valid brief | 100% valid DesignBrief JSON across 5 test conversations |
 | Brief quality score | ≥ 70/100 on DesignBrief Quality Rubric across golden test suite |
-| Brief elevates user input | Style coherence ≥ 12/15 and material specificity ≥ 12/15 on rubric |
+| Brief elevates user input | Lighting design ≥ 12/15, material specificity ≥ 12/15, color strategy ≥ 12/15 on rubric |
+| Design intelligence active | Design intelligence ≥ 7/10 on rubric (three-layer stack evidence, biophilic element, prospect-refuge) |
+| Translation engine works | Vague input ("cozy", "modern") → elevated design parameters in brief (not echoed back raw) |
+| Diagnostic probing works | Surface answers get follow-up; contradictions get resolved; diagnostic depth ≥ 3/5 on rubric |
 | Adaptive skipping works | Multi-domain answer → agent correctly skips covered domains |
 | Shopping: 5+ matched products | Test image + brief + iterations → 5+ items with confidence >= 0.5 |
 | Brief-anchored items use user language | Search queries for brief-anchored items contain brief keywords |
@@ -741,18 +764,21 @@ Build a suite of **8 scripted conversations** that verify:
 - Unexpected topics get intelligent follow-up (agent doesn't ignore them to stick to a script)
 - Summary message is generated when domain coverage is sufficient
 - DesignBrief JSON validates against the Pydantic model
+- **Translation engine fires**: vague inputs ("cozy", "modern", "calm") produce elevated parameters, not echoed words
+- **Three-layer stack active**: brief includes biophilic element, lighting layers, and spatial awareness
+- **Diagnostic probing works**: surface answers trigger intelligent follow-up
 
 **Tests use real API calls** (not mocked Claude). This is necessary because the behavior being tested IS the Claude response quality.
 
 ```python
-# Example golden test structure
+# Example golden test: translation engine must fire
 @pytest.mark.integration
-async def test_quick_intake_adaptive():
-    """Quick intake should produce a valid brief in ~3 turns, adapting to user responses."""
+async def test_quick_intake_elevation():
+    """Agent should translate 'cozy' into specific design parameters, not echo it back."""
     scripted_answers = [
-        "It's a living room, about 15x20 feet. I love modern minimalist with warm wood tones",
-        "I want to keep the existing bookshelf but replace everything else",
-        "Warm lighting, nothing too bright — cozy but functional for reading"
+        "It's a living room for our family. We have 2 dogs.",
+        "I just want it to feel cozy",
+        "Warm lighting please, nothing too bright"
     ]
     history = []
     for answer in scripted_answers:
@@ -766,8 +792,44 @@ async def test_quick_intake_adaptive():
         history.append(ChatMessage(role="assistant", content=result.agent_message))
 
     assert result.is_summary is True
-    assert result.partial_brief is not None
-    assert result.partial_brief.room_type != ""
+    brief = result.partial_brief
+    assert brief is not None
+    assert brief.room_type != ""
+    # Translation engine: "cozy" should become specific parameters
+    sp = brief.style_profile
+    assert sp is not None
+    # Lighting should mention layers or Kelvin, not just "warm"
+    assert any(kw in sp.lighting.lower() for kw in ["2700", "ambient", "task", "accent", "layer"])
+    # Textures should be specific materials, not generic
+    assert not any(t.lower() in ("soft", "nice", "good") for t in sp.textures)
+    # Constraints should mention pets (detected from "2 dogs")
+    assert any("dog" in c.lower() or "pet" in c.lower() for c in brief.constraints)
+
+# Example golden test: diagnostic probing
+@pytest.mark.integration
+async def test_quick_intake_probes_vague_answer():
+    """Agent should follow up on vague answers, not accept them at face value."""
+    history = []
+    # First turn: room type
+    result = await run_intake_chat(IntakeChatInput(
+        mode="quick",
+        project_context={"room_photos": [TEST_PHOTO_URL]},
+        conversation_history=history,
+        user_message="It's a bedroom",
+    ))
+    history.append(ChatMessage(role="user", content="It's a bedroom"))
+    history.append(ChatMessage(role="assistant", content=result.agent_message))
+
+    # Second turn: deliberately vague
+    result = await run_intake_chat(IntakeChatInput(
+        mode="quick",
+        project_context={"room_photos": [TEST_PHOTO_URL]},
+        conversation_history=history,
+        user_message="I just want it to look nice",
+    ))
+    # Agent should NOT accept "nice" — should probe with options or follow-up
+    assert result.options is not None and len(result.options) >= 2, \
+        "Agent should offer quick-reply options to refine 'nice'"
 ```
 
 ### Error Handling
@@ -810,10 +872,13 @@ Activities are **stateless**: they receive all inputs, produce all outputs. No d
 
 | Risk | Severity | Mitigation |
 |------|----------|-----------|
-| Exa returns irrelevant products | Medium | Multi-query strategy (2-3 variants per item); Google Shopping fallback link for unmatched items |
-| Claude Opus 4.6 intake costs higher than estimated ($0.15/session) | Low | Monitor per-session costs; downgrade to Sonnet 4.5 if needed |
+| Exa returns irrelevant products | Medium | Multi-query strategy (2-3 variants per item); professional material vocabulary improves query specificity; Google Shopping fallback link for unmatched items |
+| Claude Opus 4.6 intake costs higher than estimated ($0.15/session) | Low | Monitor per-session costs; translation table and DIAGNOSE pipeline add prompt length but improve output quality. Downgrade to Sonnet 4.5 if needed |
 | Claude fails to call both tools consistently | Medium | Explicit instruction in system prompt; validate tool calls in activity; retry once if missing |
 | Exa search quality varies by product category | Medium | Test 20+ furniture queries in P0/early P1; adjust query templates based on results |
+| System prompt too long with design intelligence | Medium | The translation table + room guidance + DIAGNOSE pipeline add ~2K tokens. If latency is an issue, load room-specific guidance dynamically (only bedroom rules for bedrooms) instead of the full table. Monitor first-token latency. |
+| Agent over-corrects user preferences (too opinionated) | Medium | User fidelity criterion (5/100) in rubric catches this. The agent translates but does NOT override — "I interpreted your preference as X, does that sound right?" Inferred preferences must be marked in the brief. |
+| Brief elevation reduces user trust ("I said cozy, not all this") | Low | The summary step shows the translation explicitly and invites correction. Quick-reply chip: "1. That captures it / 2. I meant something different". Agent should frame translations as "Here's how I'd bring that to life..." not "This is what you really mean." |
 
 ### Open Questions
 
@@ -828,11 +893,13 @@ Activities are **stateless**: they receive all inputs, produce all outputs. No d
 ## Quick Reference
 
 - **Master plan**: `specs/PLAN_FINAL.md`
+- **Design intelligence reference**: `specs/DESIGN_INTELLIGENCE.md` — **READ THIS FIRST.** It contains the translation tables, diagnostic techniques, and elevation rules that define your agent's design IQ.
 - **Your files**: `backend/activities/intake.py`, `backend/activities/shopping.py`, `backend/prompts/intake_system.txt`, `backend/prompts/item_extraction.txt`, `backend/prompts/product_scoring.txt`
 - **Your worktree**: `/Hanalei/remo-ai`
 - **Your branches**: `team/ai/*`
 - **Model**: Claude Opus 4.6 (`claude-opus-4-6`) via raw `anthropic` Python SDK
 - **No frameworks**: No LangChain, no agent harness, just `client.messages.create()` with `tools`
+- **Key principle**: The intake agent is a design TRANSLATOR, not an information COLLECTOR. It hears vague desires and produces prompt-ready design parameters.
 
 ---
 
