@@ -1,0 +1,147 @@
+import SwiftUI
+import RemoModels
+
+/// Swipeable design comparison: 2 options, side-by-side toggle, selection highlighting.
+public struct DesignSelectionScreen: View {
+    @Bindable var projectState: ProjectState
+    let client: any WorkflowClientProtocol
+
+    @State private var selectedIndex: Int?
+    @State private var showSideBySide = false
+    @State private var isSelecting = false
+
+    public init(projectState: ProjectState, client: any WorkflowClientProtocol) {
+        self.projectState = projectState
+        self.client = client
+    }
+
+    public var body: some View {
+        VStack(spacing: 16) {
+            // Toggle view mode
+            Picker("View", selection: $showSideBySide) {
+                Text("Swipe").tag(false)
+                Text("Compare").tag(true)
+            }
+            .pickerStyle(.segmented)
+            .padding(.horizontal)
+
+            if showSideBySide {
+                sideBySideView
+            } else {
+                swipeView
+            }
+
+            // Selection button
+            Button {
+                Task { await selectDesign() }
+            } label: {
+                Text(selectedIndex != nil ? "Choose This Design" : "Tap a design to select")
+                    .frame(maxWidth: .infinity)
+            }
+            .buttonStyle(.borderedProminent)
+            .disabled(selectedIndex == nil || isSelecting)
+            .padding(.horizontal)
+
+            // Start over
+            Button("Start Over", role: .destructive) {
+                Task { await startOver() }
+            }
+            .font(.subheadline)
+            .padding(.bottom)
+        }
+        .navigationTitle("Choose a Design")
+        .navigationBarTitleDisplayMode(.inline)
+    }
+
+    @ViewBuilder
+    private var swipeView: some View {
+        TabView(selection: $selectedIndex) {
+            ForEach(Array(projectState.generatedOptions.enumerated()), id: \.offset) { index, option in
+                DesignCard(option: option, isSelected: selectedIndex == index) {
+                    selectedIndex = index
+                }
+                .tag(Optional(index))
+            }
+        }
+        .tabViewStyle(.page(indexDisplayMode: .always))
+    }
+
+    @ViewBuilder
+    private var sideBySideView: some View {
+        HStack(spacing: 8) {
+            ForEach(Array(projectState.generatedOptions.enumerated()), id: \.offset) { index, option in
+                DesignCard(option: option, isSelected: selectedIndex == index) {
+                    selectedIndex = index
+                }
+            }
+        }
+        .padding(.horizontal)
+    }
+
+    private func selectDesign() async {
+        guard let index = selectedIndex, let projectId = projectState.projectId else { return }
+        isSelecting = true
+        defer { isSelecting = false }
+        do {
+            try await client.selectOption(projectId: projectId, index: index)
+            let newState = try await client.getState(projectId: projectId)
+            projectState.apply(newState)
+        } catch {
+            // TODO: error handling
+        }
+    }
+
+    private func startOver() async {
+        guard let projectId = projectState.projectId else { return }
+        do {
+            try await client.startOver(projectId: projectId)
+            let newState = try await client.getState(projectId: projectId)
+            projectState.apply(newState)
+        } catch {
+            // TODO: error handling
+        }
+    }
+}
+
+// MARK: - Design Card
+
+struct DesignCard: View {
+    let option: DesignOption
+    let isSelected: Bool
+    let onTap: () -> Void
+
+    var body: some View {
+        VStack(spacing: 8) {
+            // Placeholder image (real images loaded via AsyncImage in P2)
+            RoundedRectangle(cornerRadius: 12)
+                .fill(Color.secondary.opacity(0.1))
+                .aspectRatio(4/3, contentMode: .fit)
+                .overlay {
+                    VStack {
+                        Image(systemName: "photo.artframe")
+                            .font(.largeTitle)
+                            .foregroundStyle(.secondary)
+                        Text(option.caption)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                .overlay(
+                    RoundedRectangle(cornerRadius: 12)
+                        .strokeBorder(isSelected ? Color.accentColor : .clear, lineWidth: 3)
+                )
+                .overlay(alignment: .topTrailing) {
+                    if isSelected {
+                        Image(systemName: "checkmark.circle.fill")
+                            .font(.title2)
+                            .foregroundStyle(.white, .blue)
+                            .padding(8)
+                    }
+                }
+
+            Text(option.caption)
+                .font(.subheadline.bold())
+        }
+        .onTapGesture { onTap() }
+    }
+}

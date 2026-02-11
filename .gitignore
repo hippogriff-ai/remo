@@ -28,6 +28,9 @@ DerivedData/
 xcuserdata/
 *.xcworkspace/xcuserdata/
 *.playground/
+.build/
+.swiftpm/
+*.xcodeproj/
 
 # IDEs
 .idea/
