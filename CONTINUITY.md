@@ -34,11 +34,17 @@ Create a refined, team-reviewed implementation plan for the Remo iOS app MVP. Ou
 ## State
 - Done: Product spec, all plans, T0 P0 #2-#8 + #10 (all P0 complete), P1 #11-#12, purge, worker, validation, migration, error handling hardened, validation.py silent failure fixes
 - Done: **T0 code migration complete** — lasso/inpaint/regen → annotation-based edit system. All 13+ files updated (contracts, mock_stubs, worker, workflow, API routes, db, migration, 6 test files). PR self-review complete — added ValueError guards for unknown action types in workflow, mock API sets chat_history_key on revision. 320 tests pass, 0 warnings, ruff clean, format clean, mypy clean.
-- Now: Ready to commit.
-- Next: P2 #13 (wire real activities into workflow).
+- Done: **T2 P0 #1 Gemini quality spike** — both models pass all 4 scenarios. Winner: `gemini-3-pro-image-preview` (14 input images, higher photorealism). Flash as fallback.
+- Done: **T2 P0 #2 Model selection decision** — see `spike/results/MODEL_DECISION.md`.
+- Done: **T2 P1 #3-#7 all complete** — annotation utility, chat manager, prompt templates, generate_designs activity, edit_design activity.
+- Done: **T2 P2 #8 integration tests** — 6 real API tests pass (initial gen, detailed brief, quality check, annotation edit, clean output, chat round-trip).
+- Done: **T2 code review fixes (2 rounds)** — 11 issues found and fixed: project_id extraction (was random UUID), user turn in chat continuation, deserialization validation, both annotations+feedback support, HTTP error handling (retryable vs non-retryable), content-type validation, shared serialization helper, R2 error handling, JSON corruption handling.
+- Done: **T2 test coverage 100%** — 138 T2-specific tests (132 unit + 6 integration), 100% coverage across ALL T2 files. 460 total tests pass, ruff clean, format clean, mypy clean.
+- Now: T2 complete, ready for PR.
+- Next: T0 P2 #13 (wire real activities into workflow).
 
 ## Open Questions
-- Gemini annotation targeting quality pass/fail? (P0 end)
+- Gemini annotation targeting quality: **PASS with caveat** — both models leave annotation artifacts in output. Stronger prompting needed in edit.txt template.
 - RoomPlan serialization format (P0 end)
 
 ## Working Set

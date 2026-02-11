@@ -1,0 +1,92 @@
+[
+  {
+    "model": "gemini-3-pro-image-preview",
+    "scenario": "initial_generation",
+    "passed": true,
+    "details": "Image generated. Size: (1024, 1024). Text: ",
+    "duration_s": 17.549098014831543,
+    "output_image_path": "/Users/claudevcheval/Hanalei/remo-gen/spike/results/gemini_3_pro_image_preview_initial_gen.png",
+    "scores": {
+      "has_image": true,
+      "size": "(1024, 1024)"
+    }
+  },
+  {
+    "model": "gemini-3-pro-image-preview",
+    "scenario": "annotation_editing",
+    "passed": true,
+    "details": "Edit generated. Sigs: 1. Text: ",
+    "duration_s": 21.227835178375244,
+    "output_image_path": "/Users/claudevcheval/Hanalei/remo-gen/spike/results/gemini_3_pro_image_preview_annotation_edit.png",
+    "scores": {
+      "has_image": true,
+      "thought_signatures": 1
+    }
+  },
+  {
+    "model": "gemini-3-pro-image-preview",
+    "scenario": "chat_roundtrip",
+    "passed": true,
+    "details": "Round-trip succeeded. History: 6.02MB. Turn 2 image generated.",
+    "duration_s": 30.814502000808716,
+    "output_image_path": "/Users/claudevcheval/Hanalei/remo-gen/spike/results/gemini_3_pro_image_preview_roundtrip_turn2.png",
+    "scores": {
+      "history_size_mb": 6.02,
+      "thought_signatures_turn1": 1
+    }
+  },
+  {
+    "model": "gemini-3-pro-image-preview",
+    "scenario": "text_only_edit",
+    "passed": true,
+    "details": "Text-only edit succeeded. Size: (1024, 1024)",
+    "duration_s": 28.562423944473267,
+    "output_image_path": "/Users/claudevcheval/Hanalei/remo-gen/spike/results/gemini_3_pro_image_preview_textonly_turn2.png",
+    "scores": {}
+  },
+  {
+    "model": "gemini-2.5-flash-image",
+    "scenario": "initial_generation",
+    "passed": true,
+    "details": "Image generated. Size: (1024, 1024). Text: ",
+    "duration_s": 9.043041944503784,
+    "output_image_path": "/Users/claudevcheval/Hanalei/remo-gen/spike/results/gemini_2.5_flash_image_initial_gen.png",
+    "scores": {
+      "has_image": true,
+      "size": "(1024, 1024)"
+    }
+  },
+  {
+    "model": "gemini-2.5-flash-image",
+    "scenario": "annotation_editing",
+    "passed": true,
+    "details": "Edit generated. Sigs: 1. Text: ",
+    "duration_s": 6.799440860748291,
+    "output_image_path": "/Users/claudevcheval/Hanalei/remo-gen/spike/results/gemini_2.5_flash_image_annotation_edit.png",
+    "scores": {
+      "has_image": true,
+      "thought_signatures": 1
+    }
+  },
+  {
+    "model": "gemini-2.5-flash-image",
+    "scenario": "chat_roundtrip",
+    "passed": true,
+    "details": "Round-trip succeeded. History: 1.62MB. Turn 2 image generated.",
+    "duration_s": 15.643109798431396,
+    "output_image_path": "/Users/claudevcheval/Hanalei/remo-gen/spike/results/gemini_2.5_flash_image_roundtrip_turn2.png",
+    "scores": {
+      "history_size_mb": 1.62,
+      "thought_signatures_turn1": 1
+    }
+  },
+  {
+    "model": "gemini-2.5-flash-image",
+    "scenario": "text_only_edit",
+    "passed": true,
+    "details": "Text-only edit succeeded. Size: (1024, 1024)",
+    "duration_s": 17.403722047805786,
+    "output_image_path": "/Users/claudevcheval/Hanalei/remo-gen/spike/results/gemini_2.5_flash_image_textonly_turn2.png",
+    "scores": {}
+  }
+]
