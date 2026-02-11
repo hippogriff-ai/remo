@@ -238,7 +238,7 @@ async def _bootstrap_chat(
 
 async def _continue_chat(
     input: EditDesignInput,
-    base_image: Image.Image,
+    base_image: Image.Image | None,
 ) -> tuple[Image.Image | None, list]:
     """Continue an existing chat from R2 history.
 
@@ -253,6 +253,7 @@ async def _continue_chat(
     # Build message parts (supports annotations, feedback, or both)
     message_parts: list = []
     if input.annotations:
+        assert base_image is not None  # guaranteed: caller downloads when annotations present
         annotated = draw_annotations(base_image, input.annotations)
         edit_template = _load_prompt("edit.txt")
         instructions = _build_edit_instructions(input.annotations)
@@ -347,11 +348,9 @@ async def edit_design(input: EditDesignInput) -> EditDesignOutput:
         )
 
     try:
-        # Download the current design image
-        base_image = await _download_image(input.base_image_url)
-
         if input.chat_history_key is None:
-            # First call: bootstrap new session
+            # First call: bootstrap — always needs the base image
+            base_image = await _download_image(input.base_image_url)
             chat, result_image = await _bootstrap_chat(input, base_image)
 
             if result_image is None:
@@ -366,7 +365,11 @@ async def edit_design(input: EditDesignInput) -> EditDesignOutput:
 
         else:
             # Subsequent call: continue from R2 history
-            result_image, updated_history = await _continue_chat(input, base_image)
+            # Only download base image if annotations require it
+            cont_base: Image.Image | None = (
+                await _download_image(input.base_image_url) if input.annotations else None
+            )
+            result_image, updated_history = await _continue_chat(input, cont_base)
 
             if result_image is None:
                 raise ApplicationError(

@@ -58,7 +58,7 @@ def draw_annotations(
         color = REGION_COLORS.get(region.region_id, "#FF0000")
 
         _draw_circle_outline(draw, cx, cy, r, color)
-        _draw_badge(draw, cx, cy, r, region.region_id, color, font)
+        _draw_badge(draw, cx, cy, r, region.region_id, color, font, w, h)
 
     annotated = Image.alpha_composite(annotated, overlay)
     return annotated.convert("RGB")
@@ -88,10 +88,16 @@ def _draw_badge(
     region_id: int,
     color: str,
     font: ImageFont.FreeTypeFont | ImageFont.ImageFont,
+    image_w: int = 0,
+    image_h: int = 0,
 ) -> None:
-    """Draw a numbered badge at the top-right of the circle."""
+    """Draw a numbered badge at the top-right of the circle, clamped to image bounds."""
     badge_x = cx + r - BADGE_RADIUS
     badge_y = cy - r - BADGE_RADIUS
+
+    # Clamp to keep badge fully within image canvas
+    badge_x = max(BADGE_RADIUS, min(badge_x, image_w - BADGE_RADIUS))
+    badge_y = max(BADGE_RADIUS, min(badge_y, image_h - BADGE_RADIUS))
 
     # Filled circle background
     draw.ellipse(
