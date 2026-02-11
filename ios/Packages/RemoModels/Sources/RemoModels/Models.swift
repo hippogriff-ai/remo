@@ -1,5 +1,19 @@
 import Foundation
 
+// MARK: - Typed Enums for Backend Literals
+
+/// Photo type — mirrors backend `Literal["room", "inspiration"]`.
+public enum PhotoType: String, Codable, Hashable, Sendable {
+    case room
+    case inspiration
+}
+
+/// Revision type — mirrors backend annotation vs feedback distinction.
+public enum RevisionType: String, Codable, Hashable, Sendable {
+    case annotation
+    case feedback
+}
+
 // MARK: - Shared Types (mirrors backend/app/models/contracts.py)
 
 public struct StyleProfile: Codable, Hashable, Sendable {
@@ -267,6 +281,9 @@ public struct RevisionRecord: Codable, Hashable, Sendable {
     public var revisedImageUrl: String
     public var instructions: [String]
 
+    /// Type-safe revision type accessor.
+    public var revisionTypeEnum: RevisionType? { RevisionType(rawValue: type) }
+
     public init(
         revisionNumber: Int,
         type: String,
@@ -299,6 +316,9 @@ public struct PhotoData: Codable, Hashable, Identifiable, Sendable {
     public var note: String?
 
     public var id: String { photoId }
+
+    /// Type-safe photo type accessor (mirrors `WorkflowState.projectStep` pattern).
+    public var photoTypeEnum: PhotoType? { PhotoType(rawValue: photoType) }
 
     public init(photoId: String, storageKey: String, photoType: String, note: String? = nil) {
         self.photoId = photoId

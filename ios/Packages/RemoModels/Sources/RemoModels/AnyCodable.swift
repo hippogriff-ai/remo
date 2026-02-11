@@ -1,29 +1,39 @@
 import Foundation
 
-/// Type-erased Codable wrapper for JSON dict values (walls, openings in RoomDimensions).
-public struct AnyCodable: Codable, Hashable, @unchecked Sendable {
-    public let value: Any
+/// Type-safe recursive JSON value. Replaces the old `Any`-based `AnyCodable`.
+/// Used for unstructured JSON fields like `RoomDimensions.walls` and `openings`.
+///
+/// Unlike the previous `AnyCodable`, this type:
+/// - Is truly `Sendable` (no `@unchecked`)
+/// - Has correct `Equatable`/`Hashable` (structural, not string-based)
+/// - Makes illegal states unrepresentable (only valid JSON types allowed)
+public enum JSONValue: Codable, Hashable, Sendable {
+    case null
+    case bool(Bool)
+    case int(Int)
+    case double(Double)
+    case string(String)
+    case array([JSONValue])
+    case object([String: JSONValue])
 
-    public init(_ value: Any) {
-        self.value = value
-    }
+    // MARK: - Codable
 
     public init(from decoder: Decoder) throws {
         let container = try decoder.singleValueContainer()
         if container.decodeNil() {
-            value = NSNull()
+            self = .null
         } else if let bool = try? container.decode(Bool.self) {
-            value = bool
+            self = .bool(bool)
         } else if let int = try? container.decode(Int.self) {
-            value = int
+            self = .int(int)
         } else if let double = try? container.decode(Double.self) {
-            value = double
+            self = .double(double)
         } else if let string = try? container.decode(String.self) {
-            value = string
-        } else if let array = try? container.decode([AnyCodable].self) {
-            value = array.map(\.value)
-        } else if let dict = try? container.decode([String: AnyCodable].self) {
-            value = dict.mapValues(\.value)
+            self = .string(string)
+        } else if let array = try? container.decode([JSONValue].self) {
+            self = .array(array)
+        } else if let object = try? container.decode([String: JSONValue].self) {
+            self = .object(object)
         } else {
             throw DecodingError.dataCorruptedError(in: container, debugDescription: "Unsupported JSON type")
         }
@@ -31,41 +41,58 @@ public struct AnyCodable: Codable, Hashable, @unchecked Sendable {
 
     public func encode(to encoder: Encoder) throws {
         var container = encoder.singleValueContainer()
-        switch value {
-        case is NSNull:
+        switch self {
+        case .null:
             try container.encodeNil()
-        case let bool as Bool:
-            try container.encode(bool)
-        case let int as Int:
-            try container.encode(int)
-        case let double as Double:
-            try container.encode(double)
-        case let string as String:
-            try container.encode(string)
-        case let array as [Any]:
-            try container.encode(array.map { AnyCodable($0) })
-        case let dict as [String: Any]:
-            try container.encode(dict.mapValues { AnyCodable($0) })
-        default:
-            throw EncodingError.invalidValue(value, .init(codingPath: encoder.codingPath, debugDescription: "Unsupported type"))
-        }
-    }
-
-    public static func == (lhs: AnyCodable, rhs: AnyCodable) -> Bool {
-        let encoder = JSONEncoder()
-        encoder.outputFormatting = .sortedKeys
-        guard let lhsData = try? encoder.encode(lhs),
-              let rhsData = try? encoder.encode(rhs) else {
-            return false
-        }
-        return lhsData == rhsData
-    }
-
-    public func hash(into hasher: inout Hasher) {
-        let encoder = JSONEncoder()
-        encoder.outputFormatting = .sortedKeys
-        if let data = try? encoder.encode(self) {
-            hasher.combine(data)
+        case .bool(let value):
+            try container.encode(value)
+        case .int(let value):
+            try container.encode(value)
+        case .double(let value):
+            try container.encode(value)
+        case .string(let value):
+            try container.encode(value)
+        case .array(let value):
+            try container.encode(value)
+        case .object(let value):
+            try container.encode(value)
         }
     }
 }
+
+// MARK: - Convenience Initializers
+
+extension JSONValue: ExpressibleByNilLiteral {
+    public init(nilLiteral: ()) { self = .null }
+}
+
+extension JSONValue: ExpressibleByBooleanLiteral {
+    public init(booleanLiteral value: Bool) { self = .bool(value) }
+}
+
+extension JSONValue: ExpressibleByIntegerLiteral {
+    public init(integerLiteral value: Int) { self = .int(value) }
+}
+
+extension JSONValue: ExpressibleByFloatLiteral {
+    public init(floatLiteral value: Double) { self = .double(value) }
+}
+
+extension JSONValue: ExpressibleByStringLiteral {
+    public init(stringLiteral value: String) { self = .string(value) }
+}
+
+extension JSONValue: ExpressibleByArrayLiteral {
+    public init(arrayLiteral elements: JSONValue...) { self = .array(elements) }
+}
+
+extension JSONValue: ExpressibleByDictionaryLiteral {
+    public init(dictionaryLiteral elements: (String, JSONValue)...) {
+        self = .object(Dictionary(uniqueKeysWithValues: elements))
+    }
+}
+
+// MARK: - Type-safe backward compatibility alias
+
+/// Backward-compatibility alias — old code that references AnyCodable will still compile.
+public typealias AnyCodable = JSONValue

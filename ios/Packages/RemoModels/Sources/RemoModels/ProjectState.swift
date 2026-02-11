@@ -104,11 +104,11 @@ public final class ProjectState {
 
     /// Room photo count for enforcing the 2-photo minimum.
     public var roomPhotoCount: Int {
-        photos.filter { $0.photoType == "room" }.count
+        photos.filter { $0.photoTypeEnum == .room }.count
     }
 
     /// Inspiration photo count (max 3).
     public var inspirationPhotoCount: Int {
-        photos.filter { $0.photoType == "inspiration" }.count
+        photos.filter { $0.photoTypeEnum == .inspiration }.count
     }
 }

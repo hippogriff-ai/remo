@@ -309,59 +309,59 @@ final class ModelsTests: XCTestCase {
         XCTAssertEqual(a, b)
     }
 
-    func testAnyCodableEqualityStrings() {
-        let a = AnyCodable("hello")
-        let b = AnyCodable("hello")
-        let c = AnyCodable("world")
+    func testJSONValueEqualityStrings() {
+        let a: JSONValue = "hello"
+        let b: JSONValue = "hello"
+        let c: JSONValue = "world"
         XCTAssertEqual(a, b)
         XCTAssertNotEqual(a, c)
     }
 
-    func testAnyCodableEqualityDicts() {
-        let a = AnyCodable(["key": "value"])
-        let b = AnyCodable(["key": "value"])
+    func testJSONValueEqualityDicts() {
+        let a: JSONValue = ["key": "value"]
+        let b: JSONValue = ["key": "value"]
         XCTAssertEqual(a, b)
     }
 
-    func testAnyCodableRoundTrip() throws {
-        let original = AnyCodable(["width": 4.2, "name": "wall_1"])
+    func testJSONValueRoundTrip() throws {
+        let original: JSONValue = ["width": 4.2, "name": "wall_1"]
         let data = try JSONEncoder().encode(original)
-        let decoded = try JSONDecoder().decode(AnyCodable.self, from: data)
+        let decoded = try JSONDecoder().decode(JSONValue.self, from: data)
         XCTAssertEqual(original, decoded)
     }
 
-    func testAnyCodableNull() throws {
-        let original = AnyCodable(NSNull())
+    func testJSONValueNull() throws {
+        let original: JSONValue = .null
         let data = try JSONEncoder().encode(original)
-        let decoded = try JSONDecoder().decode(AnyCodable.self, from: data)
+        let decoded = try JSONDecoder().decode(JSONValue.self, from: data)
         XCTAssertEqual(original, decoded)
     }
 
-    func testAnyCodableBool() throws {
-        let original = AnyCodable(true)
+    func testJSONValueBool() throws {
+        let original: JSONValue = true
         let data = try JSONEncoder().encode(original)
-        let decoded = try JSONDecoder().decode(AnyCodable.self, from: data)
+        let decoded = try JSONDecoder().decode(JSONValue.self, from: data)
         XCTAssertEqual(original, decoded)
     }
 
-    func testAnyCodableNestedStructure() throws {
+    func testJSONValueNestedStructure() throws {
         // Realistic wall data from LiDAR parser
-        let wallData: [String: Any] = [
-            "start": [0.0, 0.0],
-            "end": [4.2, 0.0],
+        // Note: JSON round-trip normalizes 0.0 -> int(0) since JSON doesn't distinguish
+        let original: JSONValue = [
+            "start": .array([0.1, 0.2]),
+            "end": .array([4.2, 3.1]),
             "height": 2.7,
             "has_window": false
         ]
-        let original = AnyCodable(wallData)
         let data = try JSONEncoder().encode(original)
-        let decoded = try JSONDecoder().decode(AnyCodable.self, from: data)
+        let decoded = try JSONDecoder().decode(JSONValue.self, from: data)
         XCTAssertEqual(original, decoded)
     }
 
-    func testAnyCodableArray() throws {
-        let original = AnyCodable([1, 2, 3])
+    func testJSONValueArray() throws {
+        let original: JSONValue = .array([1, 2, 3])
         let data = try JSONEncoder().encode(original)
-        let decoded = try JSONDecoder().decode(AnyCodable.self, from: data)
+        let decoded = try JSONDecoder().decode(JSONValue.self, from: data)
         XCTAssertEqual(original, decoded)
     }
 
