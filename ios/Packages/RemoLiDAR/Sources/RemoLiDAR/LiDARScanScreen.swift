@@ -62,6 +62,7 @@ public struct LiDARScanScreen: View {
             }
             .font(.subheadline)
             .padding(.bottom)
+            .accessibilityHint("Skip room scanning. Furniture fit information won't be available.")
         }
         .padding()
         .navigationTitle("Room Scan")

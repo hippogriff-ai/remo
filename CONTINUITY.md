@@ -67,8 +67,20 @@ Build the T1 iOS app for Remo (AI room redesign). P1 Independent Build substanti
 - Done: Adopted typed enum accessors in views/mock (photoTypeEnum, revisionTypeEnum) — no more raw string comparisons
 - Done: Request encoding tests — 6 tests validating snake_case JSON keys for all request models sent to backend
 - Done: Typed accessor tests — forward compatibility (unknown values return nil)
-- Now: All P1+P2+P3 deliverables done except real API swap. 88 tests, 0 warnings, 8/8 packages build.
-- Next: P2 integration (swap mock for real API), final polish
+- Done: MockWorkflowClient converted from `@unchecked Sendable` class to `actor` — compile-time data race protection for mutable state
+- Done: Accessibility labels on key interactive elements (HomeScreen new project, PhotoUpload delete, IterationScreen submit/approve, OutputScreen save/share/shopping, ShoppingList product cards with buy links, LiDAR skip hint, Chat send + quick reply chips)
+- Done: RealWorkflowClient `wrapErrors` helper — DRYed up 4× duplicated error-catching catch chains into single reusable method
+- Done: UX polish — loading spinners on DesignSelectionScreen/ApprovalScreen action buttons, confirmation dialog for destructive "Start Over" action
+- Done: Product image loading — AsyncImage in ShoppingList ProductCard (falls back to bag icon when no URL or load fails)
+- Done: DRYed up duplicated `formatPrice` — extracted file-level function with static NumberFormatter (was duplicated in ShoppingContent + ProductCard)
+- Done: Accessibility hints on DesignSelectionScreen "Choose This Design" + "Start Over", ApprovalScreen approve button
+- Done: FlakyClient test helper converted from `@unchecked Sendable` class to actor — eliminates data race risk on mutable callCount
+- Done: Force casts (`as!`) replaced with `try XCTUnwrap` in BackendCompatibilityTests and ModelsTests — better failure messages
+- Done: HomeScreen `loadAndRefreshProjects` uses `withTaskGroup` for concurrent project state fetching (was sequential waterfall)
+- Done: HomeScreen `deleteProjects` surfaces server-side delete errors via alert (was silent `try?` swallowing)
+- Done: Test coverage expansion — 11 new tests: ProjectStep ordering (4), preview factory for all 9 steps (6 new), GenerationStatus Codable round-trip (1)
+- Now: All P1+P2+P3 deliverables done except real API swap. **99 tests**, 0 warnings, 8/8 packages build.
+- Next: P2 integration (swap mock for real API)
 
 ## Open Questions
 - RoomPlan data format: JSON on-device vs USDZ? (P0 end question, deferred)

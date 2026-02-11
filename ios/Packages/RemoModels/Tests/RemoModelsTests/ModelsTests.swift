@@ -182,7 +182,7 @@ final class ModelsTests: XCTestCase {
     func testCreateProjectRequestEncoding() throws {
         let request = CreateProjectRequest(deviceFingerprint: "abc-123", hasLidar: true)
         let data = try JSONEncoder().encode(request)
-        let dict = try JSONSerialization.jsonObject(with: data) as! [String: Any]
+        let dict = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
         XCTAssertEqual(dict["device_fingerprint"] as? String, "abc-123")
         XCTAssertEqual(dict["has_lidar"] as? Bool, true)
     }
@@ -192,8 +192,8 @@ final class ModelsTests: XCTestCase {
             AnnotationRegion(regionId: 1, centerX: 0.5, centerY: 0.3, radius: 0.1, instruction: "Replace the lamp with something modern"),
         ])
         let data = try JSONEncoder().encode(request)
-        let dict = try JSONSerialization.jsonObject(with: data) as! [String: Any]
-        let annotations = dict["annotations"] as! [[String: Any]]
+        let dict = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        let annotations = try XCTUnwrap(dict["annotations"] as? [[String: Any]])
         XCTAssertEqual(annotations.count, 1)
         XCTAssertEqual(annotations[0]["region_id"] as? Int, 1)
     }
@@ -286,6 +286,82 @@ final class ModelsTests: XCTestCase {
     func testPreviewFactorySelection() {
         let state = ProjectState.preview(step: .selection)
         XCTAssertEqual(state.generatedOptions.count, 2)
+    }
+
+    // MARK: - ProjectStep ordering (Comparable)
+
+    func testProjectStepOrderingFollowsWorkflow() {
+        let steps: [ProjectStep] = [.photoUpload, .scan, .intake, .generation, .selection, .iteration, .approval, .shopping, .completed]
+        // Each step should be less than the next
+        for i in 0..<steps.count - 1 {
+            XCTAssertTrue(steps[i] < steps[i + 1], "\(steps[i]) should be < \(steps[i + 1])")
+        }
+    }
+
+    func testProjectStepEqualityNotLessThan() {
+        XCTAssertFalse(ProjectStep.intake < .intake)
+        XCTAssertFalse(ProjectStep.completed < .completed)
+    }
+
+    func testProjectStepLateStepsNotLessThanEarly() {
+        XCTAssertFalse(ProjectStep.completed < .photoUpload)
+        XCTAssertFalse(ProjectStep.iteration < .scan)
+    }
+
+    func testProjectStepSortingProducesWorkflowOrder() {
+        let shuffled: [ProjectStep] = [.completed, .photoUpload, .iteration, .scan, .approval]
+        let sorted = shuffled.sorted()
+        XCTAssertEqual(sorted, [.photoUpload, .scan, .iteration, .approval, .completed])
+    }
+
+    // MARK: - ProjectState.preview() for all steps
+
+    func testPreviewFactoryScan() {
+        let state = ProjectState.preview(step: .scan)
+        XCTAssertEqual(state.step, .scan)
+        XCTAssertEqual(state.photos.count, 2)
+        XCTAssertEqual(state.photos[0].photoTypeEnum, .room)
+    }
+
+    func testPreviewFactoryIntake() {
+        let state = ProjectState.preview(step: .intake)
+        XCTAssertEqual(state.step, .intake)
+        XCTAssertEqual(state.photos.count, 2)
+    }
+
+    func testPreviewFactoryGeneration() {
+        let state = ProjectState.preview(step: .generation)
+        XCTAssertEqual(state.step, .generation)
+    }
+
+    func testPreviewFactoryIteration() {
+        let state = ProjectState.preview(step: .iteration)
+        XCTAssertEqual(state.step, .iteration)
+        XCTAssertNotNil(state.currentImage)
+        XCTAssertEqual(state.iterationCount, 1)
+    }
+
+    func testPreviewFactoryApproval() {
+        let state = ProjectState.preview(step: .approval)
+        XCTAssertEqual(state.step, .approval)
+        XCTAssertNotNil(state.currentImage)
+        XCTAssertEqual(state.iterationCount, 2)
+    }
+
+    func testPreviewFactoryShopping() {
+        let state = ProjectState.preview(step: .shopping)
+        XCTAssertEqual(state.step, .shopping)
+    }
+
+    // MARK: - GenerationStatus
+
+    func testGenerationStatusCodableRoundTrip() throws {
+        let statuses: [GenerationStatus] = [.idle, .generating, .completed, .failed("API error")]
+        for status in statuses {
+            let data = try JSONEncoder().encode(status)
+            let decoded = try JSONDecoder().decode(GenerationStatus.self, from: data)
+            XCTAssertEqual(status, decoded, "Round-trip failed for \(status)")
+        }
     }
 
     // MARK: - ProjectState computed properties

@@ -231,7 +231,7 @@ final class BackendCompatibilityTests: XCTestCase {
     func testEncodeCreateProjectRequest() throws {
         let request = CreateProjectRequest(deviceFingerprint: "iphone-15-abc", hasLidar: true)
         let data = try JSONEncoder().encode(request)
-        let dict = try JSONSerialization.jsonObject(with: data) as! [String: Any]
+        let dict = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
         XCTAssertEqual(dict["device_fingerprint"] as? String, "iphone-15-abc")
         XCTAssertEqual(dict["has_lidar"] as? Bool, true)
         // Verify snake_case keys (not camelCase)
@@ -243,7 +243,7 @@ final class BackendCompatibilityTests: XCTestCase {
     func testEncodeIntakeStartRequest() throws {
         let request = IntakeStartRequest(mode: "quick")
         let data = try JSONEncoder().encode(request)
-        let dict = try JSONSerialization.jsonObject(with: data) as! [String: Any]
+        let dict = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
         XCTAssertEqual(dict["mode"] as? String, "quick")
     }
 
@@ -256,14 +256,14 @@ final class BackendCompatibilityTests: XCTestCase {
         )
         let request = IntakeConfirmRequest(brief: brief)
         let data = try JSONEncoder().encode(request)
-        let dict = try JSONSerialization.jsonObject(with: data) as! [String: Any]
+        let dict = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
 
         // Top-level has "brief" key
-        let briefDict = dict["brief"] as! [String: Any]
+        let briefDict = try XCTUnwrap(dict["brief"] as? [String: Any])
         XCTAssertEqual(briefDict["room_type"] as? String, "living room")
         XCTAssertEqual(briefDict["pain_points"] as? [String], ["bad lighting"])
         // Nested style_profile
-        let style = briefDict["style_profile"] as! [String: Any]
+        let style = try XCTUnwrap(briefDict["style_profile"] as? [String: Any])
         XCTAssertEqual(style["lighting"] as? String, "warm")
     }
 
@@ -272,8 +272,8 @@ final class BackendCompatibilityTests: XCTestCase {
         let region = AnnotationRegion(regionId: 1, centerX: 0.5, centerY: 0.3, radius: 0.1, instruction: "Replace this lamp")
         let request = AnnotationEditRequest(annotations: [region])
         let data = try JSONEncoder().encode(request)
-        let dict = try JSONSerialization.jsonObject(with: data) as! [String: Any]
-        let annotations = dict["annotations"] as! [[String: Any]]
+        let dict = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        let annotations = try XCTUnwrap(dict["annotations"] as? [[String: Any]])
         XCTAssertEqual(annotations.count, 1)
         XCTAssertEqual(annotations[0]["region_id"] as? Int, 1)
         XCTAssertEqual(annotations[0]["center_x"] as? Double, 0.5)
@@ -287,7 +287,7 @@ final class BackendCompatibilityTests: XCTestCase {
     func testEncodeSelectOptionRequest() throws {
         let request = SelectOptionRequest(index: 1)
         let data = try JSONEncoder().encode(request)
-        let dict = try JSONSerialization.jsonObject(with: data) as! [String: Any]
+        let dict = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
         XCTAssertEqual(dict["index"] as? Int, 1)
     }
 
@@ -295,7 +295,7 @@ final class BackendCompatibilityTests: XCTestCase {
     func testEncodeTextFeedbackRequest() throws {
         let request = TextFeedbackRequest(feedback: "Make the couch darker")
         let data = try JSONEncoder().encode(request)
-        let dict = try JSONSerialization.jsonObject(with: data) as! [String: Any]
+        let dict = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
         XCTAssertEqual(dict["feedback"] as? String, "Make the couch darker")
     }
 

@@ -228,8 +228,11 @@ struct PhotoThumbnail: View {
                             .foregroundStyle(.white, .red)
                     }
                     .offset(x: 6, y: -6)
+                    .accessibilityLabel("Delete \(photo.photoType) photo")
                 }
             }
+            .accessibilityElement(children: .combine)
+            .accessibilityLabel("\(photo.photoType.capitalized) photo")
     }
 }
 

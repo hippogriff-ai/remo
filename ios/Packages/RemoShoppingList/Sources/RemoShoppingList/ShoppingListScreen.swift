@@ -2,6 +2,19 @@ import SwiftUI
 import RemoModels
 import RemoNetworking
 
+// MARK: - Price Formatting
+
+private let priceFormatter: NumberFormatter = {
+    let f = NumberFormatter()
+    f.numberStyle = .currency
+    f.currencyCode = "USD"
+    return f
+}()
+
+private func formatPrice(_ cents: Int) -> String {
+    priceFormatter.string(from: NSNumber(value: Double(cents) / 100.0)) ?? "$\(cents / 100)"
+}
+
 /// Shopping list: products grouped by category, confidence badges, fit status, buy links.
 public struct ShoppingListScreen: View {
     @Bindable var projectState: ProjectState
@@ -73,13 +86,6 @@ struct ShoppingContent: View {
             }
         }
     }
-
-    private func formatPrice(_ cents: Int) -> String {
-        let formatter = NumberFormatter()
-        formatter.numberStyle = .currency
-        formatter.currencyCode = "USD"
-        return formatter.string(from: NSNumber(value: Double(cents) / 100.0)) ?? "$\(cents / 100)"
-    }
 }
 
 // MARK: - Product Card
@@ -90,14 +96,25 @@ struct ProductCard: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(alignment: .top) {
-                // Image placeholder
-                RoundedRectangle(cornerRadius: 8)
-                    .fill(Color.secondary.opacity(0.1))
-                    .frame(width: 64, height: 64)
-                    .overlay {
-                        Image(systemName: "bag")
-                            .foregroundStyle(.secondary)
+                // Product image (falls back to bag icon when no URL or load fails)
+                if let imageUrl = item.imageUrl, let url = URL(string: imageUrl) {
+                    AsyncImage(url: url) { phase in
+                        switch phase {
+                        case .success(let image):
+                            image.resizable().aspectRatio(contentMode: .fill)
+                        default:
+                            Color.secondary.opacity(0.1)
+                                .overlay { Image(systemName: "bag").foregroundStyle(.secondary) }
+                        }
                     }
+                    .frame(width: 64, height: 64)
+                    .clipShape(RoundedRectangle(cornerRadius: 8))
+                } else {
+                    RoundedRectangle(cornerRadius: 8)
+                        .fill(Color.secondary.opacity(0.1))
+                        .frame(width: 64, height: 64)
+                        .overlay { Image(systemName: "bag").foregroundStyle(.secondary) }
+                }
 
                 VStack(alignment: .leading, spacing: 4) {
                     Text(item.productName)
@@ -134,16 +151,12 @@ struct ProductCard: View {
                     Label("Buy", systemImage: "arrow.up.right.square")
                         .font(.subheadline)
                 }
+                .accessibilityLabel("Buy \(item.productName) from \(item.retailer)")
             }
         }
         .padding(.vertical, 4)
-    }
-
-    private func formatPrice(_ cents: Int) -> String {
-        let formatter = NumberFormatter()
-        formatter.numberStyle = .currency
-        formatter.currencyCode = "USD"
-        return formatter.string(from: NSNumber(value: Double(cents) / 100.0)) ?? "$\(cents / 100)"
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("\(item.productName), \(formatPrice(item.priceCents)), from \(item.retailer)")
     }
 }
 

@@ -11,6 +11,7 @@ public struct DesignSelectionScreen: View {
     @State private var showSideBySide = false
     @State private var isSelecting = false
     @State private var errorMessage: String?
+    @State private var showStartOverConfirmation = false
 
     public init(projectState: ProjectState, client: any WorkflowClientProtocol) {
         self.projectState = projectState
@@ -37,19 +38,27 @@ public struct DesignSelectionScreen: View {
             Button {
                 Task { await selectDesign() }
             } label: {
-                Text(selectedIndex != nil ? "Choose This Design" : "Tap a design to select")
-                    .frame(maxWidth: .infinity)
+                HStack(spacing: 8) {
+                    if isSelecting {
+                        ProgressView()
+                            .controlSize(.small)
+                    }
+                    Text(isSelecting ? "Selecting..." : selectedIndex != nil ? "Choose This Design" : "Tap a design to select")
+                }
+                .frame(maxWidth: .infinity)
             }
             .buttonStyle(.borderedProminent)
             .disabled(selectedIndex == nil || isSelecting)
             .padding(.horizontal)
+            .accessibilityLabel(isSelecting ? "Selecting design" : "Choose this design")
 
             // Start over
             Button("Start Over", role: .destructive) {
-                Task { await startOver() }
+                showStartOverConfirmation = true
             }
             .font(.subheadline)
             .padding(.bottom)
+            .accessibilityHint("Discards generated designs and returns to design chat")
         }
         .navigationTitle("Choose a Design")
         #if os(iOS)
@@ -59,6 +68,14 @@ public struct DesignSelectionScreen: View {
             Button("OK") { errorMessage = nil }
         } message: {
             Text(errorMessage ?? "")
+        }
+        .confirmationDialog("Start Over?", isPresented: $showStartOverConfirmation, titleVisibility: .visible) {
+            Button("Start Over", role: .destructive) {
+                Task { await startOver() }
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("This will discard your generated designs and return to the design chat.")
         }
     }
 

@@ -130,89 +130,70 @@ public final class RealWorkflowClient: WorkflowClientProtocol, @unchecked Sendab
 
     // MARK: - HTTP helpers
 
-    private func get<T: Decodable>(_ path: String) async throws -> T {
-        let url = baseURL.appendingPathComponent(path)
+    /// Wraps raw Swift errors into typed `APIError` cases.
+    /// APIError and CancellationError pass through; URLError, DecodingError, and
+    /// unknown errors are wrapped so callers always see `APIError`.
+    private func wrapErrors<T>(_ operation: () async throws -> T) async throws -> T {
         do {
-            let (data, response) = try await session.data(from: url)
-            try checkHTTPResponse(response, data: data)
-            return try decoder.decode(T.self, from: data)
+            return try await operation()
         } catch let error as APIError {
             throw error
-        } catch let error as CancellationError {
-            throw error
+        } catch is CancellationError {
+            throw CancellationError()
         } catch let error as URLError {
             throw APIError.networkError(error)
         } catch let error as DecodingError {
             throw APIError.decodingError(error)
         } catch {
             throw APIError.unknown(error)
+        }
+    }
+
+    private func get<T: Decodable>(_ path: String) async throws -> T {
+        try await wrapErrors {
+            let url = self.baseURL.appendingPathComponent(path)
+            let (data, response) = try await self.session.data(from: url)
+            try self.checkHTTPResponse(response, data: data)
+            return try self.decoder.decode(T.self, from: data)
         }
     }
 
     private func post<T: Decodable>(_ path: String) async throws -> T {
-        let url = baseURL.appendingPathComponent(path)
-        var request = URLRequest(url: url)
-        request.httpMethod = "POST"
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        do {
-            let (data, response) = try await session.data(for: request)
-            try checkHTTPResponse(response, data: data)
-            return try decoder.decode(T.self, from: data)
-        } catch let error as APIError {
-            throw error
-        } catch let error as CancellationError {
-            throw error
-        } catch let error as URLError {
-            throw APIError.networkError(error)
-        } catch let error as DecodingError {
-            throw APIError.decodingError(error)
-        } catch {
-            throw APIError.unknown(error)
+        try await wrapErrors {
+            let url = self.baseURL.appendingPathComponent(path)
+            var request = URLRequest(url: url)
+            request.httpMethod = "POST"
+            request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            let (data, response) = try await self.session.data(for: request)
+            try self.checkHTTPResponse(response, data: data)
+            return try self.decoder.decode(T.self, from: data)
         }
     }
 
     private func post<B: Encodable, T: Decodable>(_ path: String, body: B) async throws -> T {
-        let url = baseURL.appendingPathComponent(path)
-        var request = URLRequest(url: url)
-        request.httpMethod = "POST"
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.httpBody = try encoder.encode(body)
-        do {
-            let (data, response) = try await session.data(for: request)
-            try checkHTTPResponse(response, data: data)
-            return try decoder.decode(T.self, from: data)
-        } catch let error as APIError {
-            throw error
-        } catch let error as CancellationError {
-            throw error
-        } catch let error as URLError {
-            throw APIError.networkError(error)
-        } catch let error as DecodingError {
-            throw APIError.decodingError(error)
-        } catch {
-            throw APIError.unknown(error)
+        try await wrapErrors {
+            let url = self.baseURL.appendingPathComponent(path)
+            var request = URLRequest(url: url)
+            request.httpMethod = "POST"
+            request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            request.httpBody = try self.encoder.encode(body)
+            let (data, response) = try await self.session.data(for: request)
+            try self.checkHTTPResponse(response, data: data)
+            return try self.decoder.decode(T.self, from: data)
         }
     }
 
     private func delete(_ path: String) async throws {
-        let url = baseURL.appendingPathComponent(path)
-        var request = URLRequest(url: url)
-        request.httpMethod = "DELETE"
-        do {
-            let (data, response) = try await session.data(for: request)
+        try await wrapErrors {
+            let url = self.baseURL.appendingPathComponent(path)
+            var request = URLRequest(url: url)
+            request.httpMethod = "DELETE"
+            let (data, response) = try await self.session.data(for: request)
             // 204 No Content is success for DELETE
             if let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 204 {
                 return
             }
-            try checkHTTPResponse(response, data: data)
-        } catch let error as APIError {
-            throw error
-        } catch let error as CancellationError {
-            throw error
-        } catch let error as URLError {
-            throw APIError.networkError(error)
-        } catch {
-            throw APIError.unknown(error)
+            try self.checkHTTPResponse(response, data: data)
         }
     }
 

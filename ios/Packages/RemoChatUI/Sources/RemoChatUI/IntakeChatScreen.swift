@@ -82,6 +82,7 @@ public struct IntakeChatScreen: View {
                             .font(.title2)
                     }
                     .disabled(inputText.trimmingCharacters(in: .whitespaces).isEmpty || isSending)
+                    .accessibilityLabel("Send message")
                 }
                 .padding()
             }
@@ -232,6 +233,7 @@ struct QuickReplyChips: View {
                     .clipShape(RoundedRectangle(cornerRadius: 12))
                 }
                 .buttonStyle(.plain)
+                .accessibilityLabel("Option \(option.number): \(option.label)")
             }
         }
     }

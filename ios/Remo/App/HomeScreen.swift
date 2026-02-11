@@ -67,6 +67,7 @@ struct HomeScreen: View {
                             .font(.title2)
                     }
                     .disabled(isCreating)
+                    .accessibilityLabel("New Project")
                 }
             }
             .task {
@@ -87,29 +88,50 @@ struct HomeScreen: View {
         }
         isLoading = false
 
-        // Refresh state from backend, removing purged projects
-        var validIndices: [Int] = []
-        for i in projects.indices {
-            do {
-                let state = try await client.getState(projectId: projects[i].id)
-                projects[i].state.apply(state)
-                validIndices.append(i)
-            } catch is CancellationError {
-                return
-            } catch let error as APIError {
-                if case .httpError(let code, _) = error, code == 404 {
-                    // Project was purged on the server — will be removed
-                } else {
-                    // Network error — keep the project, show stale state
-                    validIndices.append(i)
+        // Refresh state from backend concurrently, removing purged projects
+        let projectsCopy = projects
+        let results: [(index: Int, state: WorkflowState?)] = await withTaskGroup(
+            of: (Int, WorkflowState?).self,
+            returning: [(Int, WorkflowState?)].self
+        ) { group in
+            for i in projectsCopy.indices {
+                group.addTask {
+                    do {
+                        let state = try await self.client.getState(projectId: projectsCopy[i].id)
+                        return (i, state)
+                    } catch let error as APIError {
+                        if case .httpError(let code, _) = error, code == 404 {
+                            return (i, nil) // Purged on server
+                        }
+                        return (i, WorkflowState(step: "")) // Keep project, show stale
+                    } catch is CancellationError {
+                        return (i, WorkflowState(step: "")) // Keep on cancel
+                    } catch {
+                        return (i, WorkflowState(step: "")) // Keep on unknown error
+                    }
                 }
-            } catch {
-                validIndices.append(i)
             }
+            var collected: [(Int, WorkflowState?)] = []
+            for await result in group {
+                collected.append(result)
+            }
+            return collected
         }
-        // Remove purged projects
-        let purgedIds = Set(projects.indices).subtracting(validIndices)
-        if !purgedIds.isEmpty {
+
+        // Apply results and remove purged projects
+        var validIndices: [Int] = []
+        for (index, state) in results {
+            if let state, !state.step.isEmpty {
+                projects[index].state.apply(state)
+                validIndices.append(index)
+            } else if state != nil {
+                // Empty step = kept due to error, don't apply but keep
+                validIndices.append(index)
+            }
+            // nil = 404 purged, not added to validIndices
+        }
+        validIndices.sort()
+        if validIndices.count < projects.count {
             projects = validIndices.map { projects[$0] }
             persistProjectIds()
         }
@@ -140,14 +162,20 @@ struct HomeScreen: View {
     }
 
     private func deleteProjects(at offsets: IndexSet) {
-        for index in offsets {
-            let projectId = projects[index].id
-            Task {
-                try? await client.deleteProject(projectId: projectId)
-            }
-        }
+        let idsToDelete = offsets.map { projects[$0].id }
         projects.remove(atOffsets: offsets)
         persistProjectIds()
+        for projectId in idsToDelete {
+            Task {
+                do {
+                    try await client.deleteProject(projectId: projectId)
+                } catch is CancellationError {
+                    // Ignore cancellation
+                } catch {
+                    errorMessage = "Failed to delete project from server: \(error.localizedDescription)"
+                }
+            }
+        }
     }
 
     private func persistProjectIds() {

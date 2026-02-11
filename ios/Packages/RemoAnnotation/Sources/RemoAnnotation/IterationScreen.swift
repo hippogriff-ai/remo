@@ -78,12 +78,15 @@ public struct IterationScreen: View {
             .controlSize(.large)
             .disabled(!canSubmit || isSubmitting)
             .padding()
+            .accessibilityLabel(isSubmitting ? "Generating revision" : "Generate Revision")
+            .accessibilityHint("Sends your edits to generate a revised design")
 
             Button("Approve This Design") {
                 Task { await approve() }
             }
             .font(.subheadline)
             .padding(.bottom)
+            .accessibilityHint("Approve the current design and continue to shopping list")
         }
         .navigationTitle("Refine Design")
         #if os(iOS)

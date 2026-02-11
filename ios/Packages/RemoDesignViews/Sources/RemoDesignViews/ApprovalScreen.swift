@@ -38,14 +38,22 @@ public struct ApprovalScreen: View {
             Button {
                 Task { await approve() }
             } label: {
-                Text("Approve & Get Shopping List")
-                    .frame(maxWidth: .infinity)
+                HStack(spacing: 8) {
+                    if isApproving {
+                        ProgressView()
+                            .controlSize(.small)
+                    }
+                    Text(isApproving ? "Generating Shopping List..." : "Approve & Get Shopping List")
+                }
+                .frame(maxWidth: .infinity)
             }
             .buttonStyle(.borderedProminent)
             .controlSize(.large)
             .disabled(isApproving)
             .padding(.horizontal)
             .padding(.bottom)
+            .accessibilityLabel(isApproving ? "Generating shopping list" : "Approve design and get shopping list")
+            .accessibilityHint("Finalizes your design and creates a list of matching products")
         }
         .navigationTitle("Review Design")
         #if os(iOS)

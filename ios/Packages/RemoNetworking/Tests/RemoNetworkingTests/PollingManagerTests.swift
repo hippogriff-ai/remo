@@ -23,7 +23,7 @@ final class PollingManagerTests: XCTestCase {
 
     func testPollReturnsOnErrorState() async throws {
         let client = FlakyClient(failCount: 0, stepAfterFail: "generation")
-        client.errorState = WorkflowError(message: "Generation failed", retryable: true)
+        await client.setErrorState(WorkflowError(message: "Generation failed", retryable: true))
 
         let poller = PollingManager(client: client, interval: .milliseconds(50))
         let state = try await poller.pollUntilStepChanges(projectId: "test-123", currentStep: "generation")
@@ -40,7 +40,8 @@ final class PollingManagerTests: XCTestCase {
 
         let state = try await poller.pollUntilStepChanges(projectId: "test-123", currentStep: "generation")
         XCTAssertEqual(state.step, "selection")
-        XCTAssertEqual(client.callCount, 3) // 2 failures + 1 success
+        let count = await client.callCount
+        XCTAssertEqual(count, 3) // 2 failures + 1 success
     }
 
     func testPollThrowsAfterMaxRetries() async throws {
@@ -56,15 +57,16 @@ final class PollingManagerTests: XCTestCase {
         } catch {
             XCTFail("Expected APIError, got \(error)")
         }
-        XCTAssertEqual(client.callCount, 4) // maxRetries + 1
+        let count = await client.callCount
+        XCTAssertEqual(count, 4) // maxRetries + 1
     }
 
     func testPollImmediatelyThrowsNonRetryableError() async throws {
         let client = FlakyClient(failCount: 10, stepAfterFail: "selection")
-        client.errorToThrow = APIError.httpError(
+        await client.setErrorToThrow(APIError.httpError(
             statusCode: 404,
             response: ErrorResponse(error: "not_found", message: "Not found", retryable: false)
-        )
+        ))
         let poller = PollingManager(client: client, interval: .milliseconds(50), maxRetries: 3)
 
         do {
@@ -75,7 +77,8 @@ final class PollingManagerTests: XCTestCase {
         } catch {
             XCTFail("Expected APIError, got \(error)")
         }
-        XCTAssertEqual(client.callCount, 1) // fails immediately, no retries
+        let count = await client.callCount
+        XCTAssertEqual(count, 1) // fails immediately, no retries
     }
 
     func testSinglePollReturnsState() async throws {
@@ -116,7 +119,8 @@ final class PollingManagerTests: XCTestCase {
 // MARK: - Flaky Client for Testing Retries
 
 /// A minimal client that fails a configured number of times before succeeding.
-private final class FlakyClient: WorkflowClientProtocol, @unchecked Sendable {
+/// Actor provides compile-time data race protection for mutable callCount.
+private actor FlakyClient: WorkflowClientProtocol {
     var callCount = 0
     let failCount: Int
     let stepAfterFail: String
@@ -127,6 +131,9 @@ private final class FlakyClient: WorkflowClientProtocol, @unchecked Sendable {
         self.failCount = failCount
         self.stepAfterFail = stepAfterFail
     }
+
+    func setErrorToThrow(_ error: APIError) { errorToThrow = error }
+    func setErrorState(_ error: WorkflowError) { errorState = error }
 
     func getState(projectId: String) async throws -> WorkflowState {
         callCount += 1

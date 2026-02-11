@@ -3,7 +3,8 @@ import RemoModels
 
 /// Mock client for P1 development. Returns hardcoded responses with realistic delays.
 /// All iOS development uses this via protocol injection until P2 swaps to RealWorkflowClient.
-public final class MockWorkflowClient: WorkflowClientProtocol, @unchecked Sendable {
+/// Actor provides compile-time data race protection for mutable state (states, intakeMessages).
+public actor MockWorkflowClient: WorkflowClientProtocol {
     private var states: [String: WorkflowState] = [:]
     private var intakeMessages: [String: [String]] = [:]
     private let delay: Duration
