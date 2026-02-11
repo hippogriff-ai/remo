@@ -189,12 +189,12 @@ Every uploaded photo (current room or inspiration) is validated. A photo **fails
 #### Entry & Form Selection
 - This step appears after room scan (or skip).
 - The user sees two options:
-  - **Quick Intake** — "3 questions, ~2 minutes"
-  - **Full Intake** — "10 questions, ~8 minutes"
-  - **Open Conversation** — "Tell us everything, take your time". An open-ended conversational mode with no fixed question count.
+  - **Quick Intake** — "~3 questions, ~2 minutes"
+  - **Full Intake** — "~10 questions, ~8 minutes"
+  - **Open Conversation** — "Tell us everything, take your time". An open-ended conversational mode (caps at ~15 turns).
   - **Skip** — "Jump straight to design (not recommended)". **Only available if the user uploaded at least 1 inspiration photo.** If the user skipped inspiration photos, the Skip option is hidden and intake is mandatory (Quick, Full, or Open Conversation).
 - If the user chooses Skip (when available), show a soft warning: "The intake helps Remo understand your style and needs. Designs are significantly better with it. Skip anyway?" with "Yes, skip" and "Start intake" buttons.
-- For Quick and Full modes, the selected form length is shown as a progress indicator throughout: "Question 2 of 3" or "Question 4 of 10." For Open Conversation, show "Conversation" with no count.
+- For all modes, show domain-based progress: "3 of 10 domains covered". This reflects actual coverage rather than a rigid question count, since the agent may cover multiple domains in one turn.
 
 #### Voice Input
 - Every text input field in the intake chat supports iOS native dictation (the microphone button on the standard iOS keyboard).
@@ -229,7 +229,7 @@ The intake agent operates from a **pre-planned question list** (the domains belo
 **Mode behavior:**
 - **Quick Intake**: Agent selects the 3 most impactful domains based on the room type and any inspiration photo notes. Adaptive — if the user covers extra domains in their answers, the agent captures it without adding questions.
 - **Full Intake**: Agent covers all 10 domains. Adaptive — skips domains already covered by earlier answers.
-- **Open Conversation**: Agent starts with a single open prompt: "Tell us about this room — what's on your mind, what you love, what you'd change, anything." The agent listens, follows up on what the user shares, and uses the domain checklist internally to identify gaps. When the user's natural conversation slows, the agent asks about any uncovered domains. The agent ends the conversation when all key domains are sufficiently covered, or when the user signals they're done. There is no fixed question limit.
+- **Open Conversation**: Agent starts with a single open prompt: "Tell us about this room — what's on your mind, what you love, what you'd change, anything." The agent listens, follows up on what the user shares, and uses the domain notepad internally to identify gaps. When the user's natural conversation slows, the agent asks about any uncovered domains. The agent ends the conversation when all key domains are sufficiently covered, or when the user signals they're done. Caps at ~15 turns to prevent endless conversations.
 
 #### Response Format: Numbered Quick-Reply
 
@@ -282,8 +282,8 @@ This Design Brief is displayed to the user as a summary card before generation b
 **Test Cases**:
 | # | Scenario | Expected Result |
 |---|----------|-----------------|
-| INTAKE-1 | User selects "Quick Intake" | Agent asks exactly 3 questions with progress indicator "1 of 3", "2 of 3", "3 of 3" |
-| INTAKE-2 | User selects "Full Intake" | Agent asks up to 10 questions with progress indicator |
+| INTAKE-1 | User selects "Quick Intake" | Agent asks ~3 adaptive questions covering the most impactful domains; progress shows domains covered |
+| INTAKE-2 | User selects "Full Intake" | Agent asks ~10 adaptive questions covering all domains; reorders/merges based on user responses; progress shows domains covered |
 | INTAKE-3 | User taps "Skip" (has inspiration photos) | Warning message shown; if confirmed, user proceeds directly to generation with no brief |
 | INTAKE-3a | User skipped inspiration photos and reaches intake step | Only "Quick Intake", "Full Intake", and "Open Conversation" options shown; "Skip" is hidden; intake is mandatory |
 | INTAKE-4 | User gives vague free-text answer ("make it look good") | Agent follows up with numbered quick-reply options to clarify |
