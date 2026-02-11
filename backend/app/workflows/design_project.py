@@ -100,7 +100,7 @@ class DesignProjectWorkflow:
         self.step = "scan"
         await self._wait(lambda: self.scan_data is not None or self.scan_skipped)
 
-        # --- Phase: Intake -> Generation -> Selection (with Start Over loop) ---
+        # --- Phase: Intake -> Generation -> Selection -> Iteration (with Start Over loop) ---
         while True:
             self.step = "intake"
             self._restart_requested = False
@@ -133,77 +133,81 @@ class DesignProjectWorkflow:
             self.step = "selection"
             await self._wait(lambda: self.selected_option is not None or self._restart_requested)
             if self._restart_requested:
-                # State already cleared by start_over signal handler
                 continue
 
             assert self.selected_option is not None  # guaranteed by wait condition
             self.current_image = self.generated_options[self.selected_option].image_url
-            break
 
-        # --- Phase: Iteration (up to 5 rounds) ---
-        self.step = "iteration"
-        while self.iteration_count < 5 and not self.approved:
-            await self._wait(lambda: len(self._action_queue) > 0 or self.approved)
-            if self.approved:
-                break
+            # --- Iteration (up to 5 rounds) ---
+            self.step = "iteration"
+            while self.iteration_count < 5 and not self.approved:
+                await self._wait(
+                    lambda: len(self._action_queue) > 0 or self.approved or self._restart_requested
+                )
+                if self.approved or self._restart_requested:
+                    break
 
-            action_type, payload = self._action_queue.pop(0)
-            try:
-                if action_type == "lasso":
-                    result = await workflow.execute_activity(
-                        generate_inpaint,
-                        self._inpaint_input(payload),
-                        start_to_close_timeout=timedelta(minutes=3),
-                        retry_policy=_ACTIVITY_RETRY,
+                action_type, payload = self._action_queue.pop(0)
+                try:
+                    if action_type == "lasso":
+                        result = await workflow.execute_activity(
+                            generate_inpaint,
+                            self._inpaint_input(payload),
+                            start_to_close_timeout=timedelta(minutes=3),
+                            retry_policy=_ACTIVITY_RETRY,
+                        )
+                    else:
+                        result = await workflow.execute_activity(
+                            generate_regen,
+                            self._regen_input(payload),
+                            start_to_close_timeout=timedelta(minutes=3),
+                            retry_policy=_ACTIVITY_RETRY,
+                        )
+                    revision_num = self.iteration_count + 1
+                    self.revision_history.append(
+                        RevisionRecord(
+                            revision_number=revision_num,
+                            type=action_type,
+                            base_image_url=self.current_image or "",
+                            revised_image_url=result.revised_image_url,
+                        )
                     )
-                else:
-                    result = await workflow.execute_activity(
-                        generate_regen,
-                        self._regen_input(payload),
-                        start_to_close_timeout=timedelta(minutes=3),
-                        retry_policy=_ACTIVITY_RETRY,
+                    self.current_image = result.revised_image_url
+                    self.iteration_count = revision_num
+                    self.error = None
+                except ActivityError as exc:
+                    workflow.logger.error(
+                        "Iteration %s failed: %s",
+                        action_type,
+                        exc,
                     )
-                revision_num = self.iteration_count + 1
-                self.revision_history.append(
-                    RevisionRecord(
-                        revision_number=revision_num,
-                        type=action_type,
-                        base_image_url=self.current_image or "",
-                        revised_image_url=result.revised_image_url,
+                    self._action_queue.insert(0, (action_type, payload))
+                    self.error = WorkflowError(
+                        message="Revision failed — please retry",
+                        retryable=True,
                     )
-                )
-                self.current_image = result.revised_image_url
-                self.iteration_count = revision_num
-                self.error = None
-            except ActivityError as exc:
-                workflow.logger.error(
-                    "Iteration %s failed: %s",
-                    action_type,
-                    exc,
-                )
-                self._action_queue.insert(0, (action_type, payload))
-                self.error = WorkflowError(
-                    message="Revision failed — please retry",
-                    retryable=True,
-                )
-                await self._wait(lambda: self.error is None)
-            except (ValueError, TypeError) as exc:
-                # Input validation (e.g. malformed lasso regions, invalid regen
-                # feedback) — not retryable with same payload, so discard the
-                # action (don't re-queue).  Pydantic's ValidationError is a
-                # ValueError subclass, so this catches model construction failures
-                # while letting workflow bugs (AttributeError, etc.) crash the
-                # task for investigation.
-                workflow.logger.error(
-                    "Invalid %s input: %s",
-                    action_type,
-                    exc,
-                )
-                self.error = WorkflowError(
-                    message="Invalid edit request — please resubmit",
-                    retryable=True,
-                )
-                await self._wait(lambda: self.error is None)
+                    await self._wait(lambda: self.error is None)
+                except (ValueError, TypeError) as exc:
+                    # Input validation (e.g. malformed lasso regions, invalid regen
+                    # feedback) — not retryable with same payload, so discard the
+                    # action (don't re-queue).  Pydantic's ValidationError is a
+                    # ValueError subclass, so this catches model construction failures
+                    # while letting workflow bugs (AttributeError, etc.) crash the
+                    # task for investigation.
+                    workflow.logger.error(
+                        "Invalid %s input: %s",
+                        action_type,
+                        exc,
+                    )
+                    self.error = WorkflowError(
+                        message="Invalid edit request — please resubmit",
+                        retryable=True,
+                    )
+                    await self._wait(lambda: self.error is None)
+
+            if self._restart_requested:
+                continue  # back to intake
+            break  # proceed to approval/shopping
 
         # --- Phase: Approval ---
         if not self.approved:
@@ -310,11 +314,15 @@ class DesignProjectWorkflow:
     async def start_over(self) -> None:
         self._restart_requested = True
         # Clear all cycle state so the while-loop restarts cleanly from
-        # any phase (intake, generation error, or selection)
+        # any phase (intake, generation error, selection, or iteration)
         self.generated_options = []
         self.selected_option = None
+        self.current_image = None
         self.design_brief = None
         self.intake_skipped = False
+        self.revision_history = []
+        self.iteration_count = 0
+        self._action_queue.clear()
         self.error = None
 
     @workflow.signal

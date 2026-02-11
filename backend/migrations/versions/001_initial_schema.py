@@ -229,6 +229,7 @@ def upgrade() -> None:
         sa.Column("why_matched", sa.Text(), nullable=False),
         sa.Column("fit_status", sa.String(20), nullable=True),
         sa.Column("fit_detail", sa.Text(), nullable=True),
+        sa.Column("dimensions", sa.String(100), nullable=True),
     )
     op.create_index(
         "idx_product_matches_list", "product_matches", ["shopping_list_id"],

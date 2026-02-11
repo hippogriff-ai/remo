@@ -64,6 +64,8 @@ services:
       context: ./backend
       dockerfile: Dockerfile
     command: ["python", "-m", "app.worker"]
+    healthcheck:
+      disable: true
     environment:
       DATABASE_URL: "postgresql+asyncpg://remo:remo_dev@postgres:5432/remo"
       TEMPORAL_ADDRESS: "temporal:7233"

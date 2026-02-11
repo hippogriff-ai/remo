@@ -171,10 +171,16 @@ async def upload_photo(
         return err
     assert state is not None  # guaranteed by _check_step's 404 path
 
-    image_data = await file.read()
-    if len(image_data) > MAX_PHOTO_BYTES:
-        mb = MAX_PHOTO_BYTES // (1024 * 1024)
-        return _error(413, "file_too_large", f"Photo exceeds {mb} MB limit")
+    # Stream-read with early termination to avoid buffering unbounded uploads
+    chunks: list[bytes] = []
+    total = 0
+    while chunk := await file.read(65_536):
+        total += len(chunk)
+        if total > MAX_PHOTO_BYTES:
+            mb = MAX_PHOTO_BYTES // (1024 * 1024)
+            return _error(413, "file_too_large", f"Photo exceeds {mb} MB limit")
+        chunks.append(chunk)
+    image_data = b"".join(chunks)
 
     validation = await asyncio.to_thread(
         validate_photo,

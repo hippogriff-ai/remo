@@ -199,5 +199,6 @@ class ProductMatchRow(Base):
     why_matched: Mapped[str] = mapped_column(Text, nullable=False)
     fit_status: Mapped[str | None] = mapped_column(String(20), nullable=True)
     fit_detail: Mapped[str | None] = mapped_column(Text, nullable=True)
+    dimensions: Mapped[str | None] = mapped_column(String(100), nullable=True)
 
     shopping_list: Mapped["ShoppingList"] = relationship(back_populates="product_matches")

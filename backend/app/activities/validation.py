@@ -36,7 +36,7 @@ def validate_photo(input: ValidatePhotoInput) -> ValidatePhotoOutput:
     try:
         img = Image.open(io.BytesIO(input.image_data))
         img.load()  # Force full decode to catch truncated/decompression bombs early
-    except (OSError, SyntaxError, ValueError) as exc:
+    except (OSError, SyntaxError, ValueError, Image.DecompressionBombError) as exc:
         logger.warning("photo_validation_image_open_failed", error=str(exc))
         return ValidatePhotoOutput(
             passed=False,

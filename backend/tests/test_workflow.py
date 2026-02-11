@@ -1450,6 +1450,38 @@ class TestStartOver:
             assert state.approved is True
             assert state.shopping_list is not None
 
+    async def test_start_over_from_iteration_restarts_at_intake(self, workflow_env, tq):
+        """Verifies start_over during iteration phase returns workflow to intake.
+
+        This tests the fix where _restart_requested is now checked in the
+        iteration wait condition, allowing the workflow to break out of
+        iteration and loop back to intake.
+        """
+        async with Worker(
+            workflow_env.client,
+            task_queue=tq,
+            workflows=[DesignProjectWorkflow],
+            activities=ALL_ACTIVITIES,
+        ):
+            handle = await _start_workflow(workflow_env, tq)
+            await _advance_to_iteration(handle)
+
+            state = await handle.query(DesignProjectWorkflow.get_state)
+            assert state.step == "iteration"
+            assert state.current_image is not None
+
+            # Start over from iteration
+            await handle.signal(DesignProjectWorkflow.start_over)
+            await asyncio.sleep(0.5)
+
+            state = await handle.query(DesignProjectWorkflow.get_state)
+            assert state.step == "intake"
+            assert state.current_image is None
+            assert state.iteration_count == 0
+            assert state.revision_history == []
+            assert state.generated_options == []
+            assert state.selected_option is None
+
 
 class TestSelectionValidation:
     """Tests for selection signal validation."""
