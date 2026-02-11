@@ -210,7 +210,7 @@ struct PhotoThumbnail: View {
             .aspectRatio(1, contentMode: .fit)
             .overlay {
                 VStack(spacing: 4) {
-                    Image(systemName: photo.photoType == "room" ? "house" : "sparkles")
+                    Image(systemName: photo.photoTypeEnum == .room ? "house" : "sparkles")
                         .font(.title3)
                     Text(photo.photoType.capitalized)
                         .font(.caption2)

@@ -101,8 +101,8 @@ final class BackendCompatibilityTests: XCTestCase {
 
         // Photos
         XCTAssertEqual(state.photos.count, 3)
-        XCTAssertEqual(state.photos.filter { $0.photoType == "room" }.count, 2)
-        XCTAssertEqual(state.photos.filter { $0.photoType == "inspiration" }.count, 1)
+        XCTAssertEqual(state.photos.filter { $0.photoTypeEnum == .room }.count, 2)
+        XCTAssertEqual(state.photos.filter { $0.photoTypeEnum == .inspiration }.count, 1)
 
         // Scan
         XCTAssertNotNil(state.scanData)
@@ -122,6 +122,7 @@ final class BackendCompatibilityTests: XCTestCase {
         XCTAssertEqual(state.iterationCount, 1)
         XCTAssertEqual(state.revisionHistory.count, 1)
         XCTAssertEqual(state.revisionHistory[0].type, "annotation")
+        XCTAssertEqual(state.revisionHistory[0].revisionTypeEnum, .annotation)
 
         // Shopping list
         XCTAssertNotNil(state.shoppingList)
@@ -222,5 +223,103 @@ final class BackendCompatibilityTests: XCTestCase {
         XCTAssertFalse(response.validation.passed)
         XCTAssertEqual(response.validation.failures, ["blurry", "too_dark"])
         XCTAssertEqual(response.validation.messages.count, 2)
+    }
+
+    // MARK: - Request Encoding (iOS → Backend)
+
+    /// CreateProjectRequest must encode with snake_case keys.
+    func testEncodeCreateProjectRequest() throws {
+        let request = CreateProjectRequest(deviceFingerprint: "iphone-15-abc", hasLidar: true)
+        let data = try JSONEncoder().encode(request)
+        let dict = try JSONSerialization.jsonObject(with: data) as! [String: Any]
+        XCTAssertEqual(dict["device_fingerprint"] as? String, "iphone-15-abc")
+        XCTAssertEqual(dict["has_lidar"] as? Bool, true)
+        // Verify snake_case keys (not camelCase)
+        XCTAssertNil(dict["deviceFingerprint"])
+        XCTAssertNil(dict["hasLidar"])
+    }
+
+    /// IntakeStartRequest must use "mode" key.
+    func testEncodeIntakeStartRequest() throws {
+        let request = IntakeStartRequest(mode: "quick")
+        let data = try JSONEncoder().encode(request)
+        let dict = try JSONSerialization.jsonObject(with: data) as! [String: Any]
+        XCTAssertEqual(dict["mode"] as? String, "quick")
+    }
+
+    /// IntakeConfirmRequest must encode the brief with snake_case keys.
+    func testEncodeIntakeConfirmRequest() throws {
+        let brief = DesignBrief(
+            roomType: "living room",
+            painPoints: ["bad lighting"],
+            styleProfile: StyleProfile(lighting: "warm", colors: ["cream"])
+        )
+        let request = IntakeConfirmRequest(brief: brief)
+        let data = try JSONEncoder().encode(request)
+        let dict = try JSONSerialization.jsonObject(with: data) as! [String: Any]
+
+        // Top-level has "brief" key
+        let briefDict = dict["brief"] as! [String: Any]
+        XCTAssertEqual(briefDict["room_type"] as? String, "living room")
+        XCTAssertEqual(briefDict["pain_points"] as? [String], ["bad lighting"])
+        // Nested style_profile
+        let style = briefDict["style_profile"] as! [String: Any]
+        XCTAssertEqual(style["lighting"] as? String, "warm")
+    }
+
+    /// AnnotationEditRequest must encode annotations with snake_case keys.
+    func testEncodeAnnotationEditRequest() throws {
+        let region = AnnotationRegion(regionId: 1, centerX: 0.5, centerY: 0.3, radius: 0.1, instruction: "Replace this lamp")
+        let request = AnnotationEditRequest(annotations: [region])
+        let data = try JSONEncoder().encode(request)
+        let dict = try JSONSerialization.jsonObject(with: data) as! [String: Any]
+        let annotations = dict["annotations"] as! [[String: Any]]
+        XCTAssertEqual(annotations.count, 1)
+        XCTAssertEqual(annotations[0]["region_id"] as? Int, 1)
+        XCTAssertEqual(annotations[0]["center_x"] as? Double, 0.5)
+        XCTAssertEqual(annotations[0]["center_y"] as? Double, 0.3)
+        // Verify snake_case (not camelCase)
+        XCTAssertNil(annotations[0]["regionId"])
+        XCTAssertNil(annotations[0]["centerX"])
+    }
+
+    /// SelectOptionRequest encodes index correctly.
+    func testEncodeSelectOptionRequest() throws {
+        let request = SelectOptionRequest(index: 1)
+        let data = try JSONEncoder().encode(request)
+        let dict = try JSONSerialization.jsonObject(with: data) as! [String: Any]
+        XCTAssertEqual(dict["index"] as? Int, 1)
+    }
+
+    /// TextFeedbackRequest encodes feedback correctly.
+    func testEncodeTextFeedbackRequest() throws {
+        let request = TextFeedbackRequest(feedback: "Make the couch darker")
+        let data = try JSONEncoder().encode(request)
+        let dict = try JSONSerialization.jsonObject(with: data) as! [String: Any]
+        XCTAssertEqual(dict["feedback"] as? String, "Make the couch darker")
+    }
+
+    // MARK: - Typed Enum Accessors
+
+    /// PhotoData.photoTypeEnum returns correct enum values.
+    func testPhotoDataTypedAccessor() {
+        let room = PhotoData(photoId: "1", storageKey: "k", photoType: "room")
+        let inspo = PhotoData(photoId: "2", storageKey: "k", photoType: "inspiration")
+        let unknown = PhotoData(photoId: "3", storageKey: "k", photoType: "panorama")
+
+        XCTAssertEqual(room.photoTypeEnum, .room)
+        XCTAssertEqual(inspo.photoTypeEnum, .inspiration)
+        XCTAssertNil(unknown.photoTypeEnum) // forward compat: unknown values return nil
+    }
+
+    /// RevisionRecord.revisionTypeEnum returns correct enum values.
+    func testRevisionRecordTypedAccessor() {
+        let ann = RevisionRecord(revisionNumber: 1, type: "annotation", baseImageUrl: "a", revisedImageUrl: "b")
+        let fb = RevisionRecord(revisionNumber: 2, type: "feedback", baseImageUrl: "a", revisedImageUrl: "b")
+        let unknown = RevisionRecord(revisionNumber: 3, type: "ai_auto", baseImageUrl: "a", revisedImageUrl: "b")
+
+        XCTAssertEqual(ann.revisionTypeEnum, .annotation)
+        XCTAssertEqual(fb.revisionTypeEnum, .feedback)
+        XCTAssertNil(unknown.revisionTypeEnum)
     }
 }

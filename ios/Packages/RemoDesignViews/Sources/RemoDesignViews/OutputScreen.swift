@@ -117,7 +117,7 @@ struct RevisionHistoryView: View {
                     HStack {
                         Label(
                             "Revision \(revision.revisionNumber)",
-                            systemImage: revision.type == "annotation" ? "pencil.circle" : "text.bubble"
+                            systemImage: revision.revisionTypeEnum == .annotation ? "pencil.circle" : "text.bubble"
                         )
                         .font(.subheadline.bold())
 

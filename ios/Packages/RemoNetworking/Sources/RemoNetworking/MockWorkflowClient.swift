@@ -56,7 +56,7 @@ public final class MockWorkflowClient: WorkflowClientProtocol, @unchecked Sendab
         )
         state.photos.append(photo)
 
-        let roomCount = state.photos.filter { $0.photoType == "room" }.count
+        let roomCount = state.photos.filter { $0.photoTypeEnum == .room }.count
         if roomCount >= 2 && state.step == "photos" {
             state.step = "scan"
         }
