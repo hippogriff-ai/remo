@@ -87,7 +87,9 @@ Build the T1 iOS app for Remo (AI room redesign). P1 Independent Build substanti
 - Done: PR fix — HomeScreen refresh merges by projectId instead of array index (safe against concurrent mutations)
 - Done: PR fix — PollingManager skips interval sleep when retrying (was double-sleeping: interval + backoff)
 - Done: Maestro kept as local-only tool (GitHub Free plan: macOS runners too expensive). Commands documented in CLAUDE.md for Claude Code sessions.
-- Now: All P1+P2+P3 deliverables done except real API swap. **99 tests** + Maestro happy path, 0 warnings, 8/8 packages build.
+- Done: Non-happy path Maestro flows (5 flows: empty home, start over, annotation iteration, delete project, multiple projects) — all passing
+- Done: HomeScreen uses NavigationLink (auto-disables in edit mode) + EditButton toolbar for testable deletion
+- Now: All P1+P2+P3 deliverables done except real API swap. **99 tests** + 13 Maestro flows (1 happy + 7 subflows + 5 non-happy), 0 warnings, 8/8 packages build.
 - Next: P2 integration (swap mock for real API)
 
 ## Open Questions

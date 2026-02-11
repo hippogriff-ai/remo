@@ -45,5 +45,11 @@ htmlcov/
 .coverage
 .pytest_cache/
 
+# Maestro screenshots (test artifacts)
+*.png
+
+# Playwright MCP
+.playwright-mcp/
+
 # Docker
 docker-compose.override.yml

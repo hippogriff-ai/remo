@@ -30,9 +30,7 @@ struct HomeScreen: View {
                 } else {
                     List {
                         ForEach(Array(projects.enumerated()), id: \.element.id) { index, project in
-                            Button {
-                                navigationPath.append(project.id)
-                            } label: {
+                            NavigationLink(value: project.id) {
                                 ProjectRow(projectState: project.state)
                             }
                             .accessibilityIdentifier("home_project_\(index)")
@@ -61,6 +59,12 @@ struct HomeScreen: View {
                 Text(errorMessage ?? "")
             }
             .toolbar {
+                if !projects.isEmpty {
+                    ToolbarItem(placement: .cancellationAction) {
+                        EditButton()
+                            .accessibilityIdentifier("home_edit")
+                    }
+                }
                 ToolbarItem(placement: .primaryAction) {
                     Button {
                         Task { await createProject() }

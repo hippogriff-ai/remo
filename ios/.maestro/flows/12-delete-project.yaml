@@ -1,0 +1,30 @@
+appId: com.hippogriff.remo
+---
+# Delete project: create a project, go back to home, then swipe to delete it
+- launchApp:
+    clearState: true
+    arguments:
+      maestro-test: "true"
+    permissions:
+      photos: allow
+      camera: allow
+# Create a project (auto-navigates into project flow)
+- tapOn:
+    id: "home_new_project"
+- assertVisible: "Scan Your Room"
+# Go back to HomeScreen
+- tapOn: "Remo"
+- assertVisible:
+    id: "home_project_0"
+- takeScreenshot: 12-delete-before
+# Enter Edit mode, tap the minus circle, then confirm delete
+- tapOn: "Edit"
+# Tap the red minus circle (accessibility label: "remove")
+- tapOn: "remove"
+# Tap the Delete confirmation that slides in from the right
+- tapOn: "Delete"
+# Verify empty state returns
+- extendedWaitUntil:
+    visible: "No Projects Yet"
+    timeout: 3000
+- takeScreenshot: 12-delete-after

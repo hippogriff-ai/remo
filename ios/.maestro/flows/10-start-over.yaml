@@ -1,0 +1,38 @@
+appId: com.hippogriff.remo
+---
+# Start over from design selection: verify it returns to intake
+# Prerequisite: run after reaching DesignSelectionScreen
+- launchApp:
+    clearState: true
+    arguments:
+      maestro-test: "true"
+    permissions:
+      photos: allow
+      camera: allow
+# Create project and navigate
+- tapOn:
+    id: "home_new_project"
+- assertVisible: "Scan room dimensions"
+- tapOn:
+    id: "home_project_0"
+# Skip scan
+- assertVisible: "Scan Your Room"
+- tapOn:
+    id: "scan_skip"
+- tapOn: "Skip"
+# Skip intake to get to selection
+- assertVisible: "Design Chat"
+- tapOn:
+    id: "chat_skip"
+- assertVisible: "Choose a Design"
+- takeScreenshot: 10-start-over-before
+# Tap "Start Over" — triggers confirmation dialog
+- tapOn:
+    id: "selection_start_over"
+# Confirm destructive action in the dialog
+- tapOn: "Start Over"
+# Verify we're back at intake
+- extendedWaitUntil:
+    visible: "Design Chat"
+    timeout: 5000
+- takeScreenshot: 10-start-over-after
