@@ -138,10 +138,11 @@ async def _fetch_image(client: httpx.AsyncClient, url: str) -> Image.Image:
         ) from exc
 
     if response.status_code >= 400:
-        is_client_error = response.status_code < 500
+        # 429 is retryable (throttling); other 4xx are non-retryable client errors
+        is_non_retryable = response.status_code < 500 and response.status_code != 429
         raise ApplicationError(
             f"HTTP {response.status_code} downloading image: {url[:100]}",
-            non_retryable=is_client_error,
+            non_retryable=is_non_retryable,
         )
 
     content_type = response.headers.get("content-type", "")

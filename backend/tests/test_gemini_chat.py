@@ -290,6 +290,10 @@ class TestDeserializationValidation:
         with pytest.raises(ValueError, match="requires 'role' and 'parts'"):
             deserialize_to_contents([{"role": "user"}])
 
+    def test_invalid_turn_parts_not_list(self):
+        with pytest.raises(ValueError, match="Expected 'parts' to be a list"):
+            deserialize_to_contents([{"role": "user", "parts": "not a list"}])
+
     def test_invalid_inline_data_missing_data_field(self):
         with pytest.raises(ValueError, match="Invalid inline_data"):
             _dict_to_part({"inline_data": {"mime_type": "image/png"}})

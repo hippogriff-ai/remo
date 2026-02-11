@@ -108,6 +108,8 @@ def deserialize_to_contents(serialized: list[dict[str, Any]]) -> list[types.Cont
         if "role" not in turn or "parts" not in turn:
             msg = f"Invalid turn: requires 'role' and 'parts', got {list(turn.keys())}"
             raise ValueError(msg)
+        if not isinstance(turn["parts"], list):
+            raise ValueError(f"Expected 'parts' to be a list, got {type(turn['parts']).__name__}")
         parts = []
         for p in turn["parts"]:
             part = _dict_to_part(p)
