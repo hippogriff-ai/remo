@@ -8,9 +8,8 @@ import pytest
 from temporalio.contrib.pydantic import pydantic_data_converter
 
 from app.activities.mock_stubs import (
+    edit_design,
     generate_designs,
-    generate_inpaint,
-    generate_regen,
     generate_shopping_list,
     purge_project_data,
 )
@@ -22,20 +21,16 @@ class TestActivityRegistration:
     """Verify that the correct activities are registered with the worker."""
 
     def test_all_mock_activities_registered(self) -> None:
-        """All 5 mock activity stubs should be in the ACTIVITIES list."""
-        assert len(ACTIVITIES) == 5
+        """All 4 mock activity stubs should be in the ACTIVITIES list."""
+        assert len(ACTIVITIES) == 4
 
     def test_generate_designs_registered(self) -> None:
         """generate_designs activity should be registered."""
         assert generate_designs in ACTIVITIES
 
-    def test_generate_inpaint_registered(self) -> None:
-        """generate_inpaint activity should be registered."""
-        assert generate_inpaint in ACTIVITIES
-
-    def test_generate_regen_registered(self) -> None:
-        """generate_regen activity should be registered."""
-        assert generate_regen in ACTIVITIES
+    def test_edit_design_registered(self) -> None:
+        """edit_design activity should be registered."""
+        assert edit_design in ACTIVITIES
 
     def test_generate_shopping_list_registered(self) -> None:
         """generate_shopping_list activity should be registered."""

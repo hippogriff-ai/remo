@@ -123,8 +123,8 @@ class TestOpenAPISchema:
             "/api/v1/projects/{project_id}/intake/skip",
             "/api/v1/projects/{project_id}/select",
             "/api/v1/projects/{project_id}/start-over",
-            "/api/v1/projects/{project_id}/iterate/lasso",
-            "/api/v1/projects/{project_id}/iterate/regenerate",
+            "/api/v1/projects/{project_id}/iterate/annotate",
+            "/api/v1/projects/{project_id}/iterate/feedback",
             "/api/v1/projects/{project_id}/approve",
             "/api/v1/projects/{project_id}/retry",
         }
@@ -147,8 +147,8 @@ class TestOpenAPISchema:
             "DesignBrief",
             "DesignOption",
             "IntakeChatOutput",
-            "LassoEditRequest",
-            "RegenerateRequest",
+            "AnnotationEditRequest",
+            "TextFeedbackRequest",
             "GenerateShoppingListOutput",
             "ProductMatch",
         }

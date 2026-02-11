@@ -17,9 +17,8 @@ from temporalio.contrib.pydantic import pydantic_data_converter
 from temporalio.worker import Worker
 
 from app.activities.mock_stubs import (
+    edit_design,
     generate_designs,
-    generate_inpaint,
-    generate_regen,
     generate_shopping_list,
     purge_project_data,
 )
@@ -35,8 +34,7 @@ _MOCK_ACTIVITY_MODULE = "app.activities.mock_stubs"
 
 ACTIVITIES = [
     generate_designs,
-    generate_inpaint,
-    generate_regen,
+    edit_design,
     generate_shopping_list,
     purge_project_data,
 ]

@@ -11,18 +11,19 @@ import pytest
 from pydantic import ValidationError
 
 from app.models.contracts import (
+    AnnotationEditRequest,
+    AnnotationRegion,
     ChatMessage,
     CreateProjectRequest,
     DesignBrief,
     DesignOption,
+    EditDesignInput,
+    EditDesignOutput,
     ErrorResponse,
     GenerateDesignsOutput,
-    GenerateInpaintInput,
     GenerateShoppingListOutput,
     InspirationNote,
     IntakeChatInput,
-    LassoEditRequest,
-    LassoRegion,
     PhotoData,
     PhotoUploadResponse,
     ProductMatch,
@@ -30,6 +31,7 @@ from app.models.contracts import (
     RoomDimensions,
     SelectOptionRequest,
     StyleProfile,
+    TextFeedbackRequest,
     ValidatePhotoInput,
     ValidatePhotoOutput,
     WorkflowError,
@@ -112,47 +114,87 @@ class TestRoomDimensions:
             RoomDimensions(width_m=4.5, length_m=6.0)
 
 
-class TestLassoRegion:
-    """LassoRegion has constraints: region_id 1-3, instruction min 10 chars."""
+class TestAnnotationRegion:
+    """AnnotationRegion: region_id 1-3, center/radius 0-1, instruction min 10."""
 
     def test_valid(self):
         """Valid region with all constraints met."""
-        r = LassoRegion(
+        r = AnnotationRegion(
             region_id=1,
-            path_points=[(0.1, 0.2), (0.3, 0.4), (0.5, 0.6)],
-            action="Replace",
+            center_x=0.5,
+            center_y=0.4,
+            radius=0.2,
             instruction="Replace the old sofa with a modern sectional",
         )
         assert r.region_id == 1
+        assert r.center_x == 0.5
+        assert r.center_y == 0.4
+        assert r.radius == 0.2
 
     def test_region_id_too_high(self):
         """Region ID must be 1-3."""
         with pytest.raises(ValidationError):
-            LassoRegion(
+            AnnotationRegion(
                 region_id=4,
-                path_points=[(0.1, 0.2)],
-                action="Replace",
+                center_x=0.5,
+                center_y=0.5,
+                radius=0.2,
                 instruction="Replace the sofa with a new one",
             )
 
     def test_region_id_too_low(self):
         """Region ID must be >= 1."""
         with pytest.raises(ValidationError):
-            LassoRegion(
+            AnnotationRegion(
                 region_id=0,
-                path_points=[(0.1, 0.2)],
-                action="Replace",
+                center_x=0.5,
+                center_y=0.5,
+                radius=0.2,
                 instruction="Replace the sofa with a new one",
             )
 
     def test_instruction_too_short(self):
         """Instruction must be at least 10 characters."""
         with pytest.raises(ValidationError):
-            LassoRegion(
+            AnnotationRegion(
                 region_id=1,
-                path_points=[(0.1, 0.2)],
-                action="Replace",
+                center_x=0.5,
+                center_y=0.5,
+                radius=0.2,
                 instruction="short",
+            )
+
+    def test_center_x_out_of_range(self):
+        """center_x must be between 0 and 1."""
+        with pytest.raises(ValidationError):
+            AnnotationRegion(
+                region_id=1,
+                center_x=1.5,
+                center_y=0.5,
+                radius=0.2,
+                instruction="Replace the sofa with a new one",
+            )
+
+    def test_center_y_out_of_range(self):
+        """center_y must be between 0 and 1."""
+        with pytest.raises(ValidationError):
+            AnnotationRegion(
+                region_id=1,
+                center_x=0.5,
+                center_y=-0.1,
+                radius=0.2,
+                instruction="Replace the sofa with a new one",
+            )
+
+    def test_radius_out_of_range(self):
+        """radius must be between 0 and 1."""
+        with pytest.raises(ValidationError):
+            AnnotationRegion(
+                region_id=1,
+                center_x=0.5,
+                center_y=0.5,
+                radius=1.5,
+                instruction="Replace the sofa with a new one",
             )
 
 
@@ -214,27 +256,39 @@ class TestChatMessage:
 
 
 class TestRevisionRecord:
-    """RevisionRecord type must be 'lasso' or 'regen'."""
+    """RevisionRecord type is a plain str (annotation, feedback, etc.)."""
 
-    def test_lasso_type(self):
-        """Valid lasso revision."""
+    def test_annotation_type(self):
+        """Valid annotation revision."""
         r = RevisionRecord(
             revision_number=1,
-            type="lasso",
+            type="annotation",
             base_image_url="https://r2.example.com/base.png",
             revised_image_url="https://r2.example.com/rev1.png",
         )
-        assert r.type == "lasso"
+        assert r.type == "annotation"
 
-    def test_invalid_type(self):
-        """Invalid revision type is rejected."""
-        with pytest.raises(ValidationError):
-            RevisionRecord(
-                revision_number=1,
-                type="unknown",
-                base_image_url="https://r2.example.com/base.png",
-                revised_image_url="https://r2.example.com/rev1.png",
-            )
+    def test_instructions_default_empty(self):
+        """Instructions field defaults to empty list."""
+        r = RevisionRecord(
+            revision_number=1,
+            type="feedback",
+            base_image_url="https://r2.example.com/base.png",
+            revised_image_url="https://r2.example.com/rev1.png",
+        )
+        assert r.instructions == []
+
+    def test_instructions_populated(self):
+        """Instructions field can be populated."""
+        r = RevisionRecord(
+            revision_number=1,
+            type="annotation",
+            base_image_url="https://r2.example.com/base.png",
+            revised_image_url="https://r2.example.com/rev1.png",
+            instructions=["Replace the sofa", "Add a floor lamp"],
+        )
+        assert len(r.instructions) == 2
+        assert r.instructions[0] == "Replace the sofa"
 
 
 class TestPhotoData:
@@ -283,28 +337,69 @@ class TestGenerateDesignsOutput:
             )
 
 
-class TestGenerateInpaintInput:
-    """GenerateInpaintInput regions must be 1-3."""
+class TestEditDesignInput:
+    """EditDesignInput accepts annotations, feedback, or both."""
 
-    def test_one_region(self):
-        """Single region is valid."""
-        inp = GenerateInpaintInput(
+    def test_with_annotations(self):
+        """Valid input with annotation regions."""
+        inp = EditDesignInput(
+            project_id="proj-1",
             base_image_url="https://r2/base.png",
-            regions=[
-                LassoRegion(
+            room_photo_urls=["https://r2/room.jpg"],
+            annotations=[
+                AnnotationRegion(
                     region_id=1,
-                    path_points=[(0.1, 0.2), (0.3, 0.4)],
-                    action="Replace",
+                    center_x=0.5,
+                    center_y=0.4,
+                    radius=0.2,
                     instruction="Replace the lamp with a floor lamp",
                 )
             ],
         )
-        assert len(inp.regions) == 1
+        assert len(inp.annotations) == 1
+        assert inp.feedback is None
 
-    def test_empty_regions_fails(self):
-        """Zero regions is rejected."""
+    def test_with_feedback(self):
+        """Valid input with text feedback."""
+        inp = EditDesignInput(
+            project_id="proj-1",
+            base_image_url="https://r2/base.png",
+            room_photo_urls=["https://r2/room.jpg"],
+            feedback="Make the room brighter and more open",
+        )
+        assert inp.feedback == "Make the room brighter and more open"
+        assert inp.annotations == []
+
+    def test_defaults(self):
+        """Annotations and feedback can both be omitted (defaults)."""
+        inp = EditDesignInput(
+            project_id="proj-1",
+            base_image_url="https://r2/base.png",
+            room_photo_urls=["https://r2/room.jpg"],
+        )
+        assert inp.annotations == []
+        assert inp.feedback is None
+        assert inp.inspiration_photo_urls == []
+        assert inp.design_brief is None
+        assert inp.chat_history_key is None
+
+
+class TestEditDesignOutput:
+    """EditDesignOutput requires revised_image_url and chat_history_key."""
+
+    def test_valid(self):
+        """Valid output with both required fields."""
+        out = EditDesignOutput(
+            revised_image_url="https://r2/rev1.png",
+            chat_history_key="proj-1/chat/abc123",
+        )
+        assert out.revised_image_url == "https://r2/rev1.png"
+        assert out.chat_history_key == "proj-1/chat/abc123"
+
+    def test_missing_chat_history_key_fails(self):
+        """chat_history_key is required."""
         with pytest.raises(ValidationError):
-            GenerateInpaintInput(base_image_url="https://r2/base.png", regions=[])
+            EditDesignOutput(revised_image_url="https://r2/rev1.png")
 
 
 class TestGenerateShoppingListOutput:
@@ -404,20 +499,24 @@ class TestWorkflowState:
             revision_history=[
                 RevisionRecord(
                     revision_number=1,
-                    type="lasso",
+                    type="annotation",
                     base_image_url="https://r2/opt0.png",
                     revised_image_url="https://r2/rev1.png",
+                    instructions=["Replace the sofa"],
                 )
             ],
             iteration_count=1,
             error=WorkflowError(message="Revision failed", retryable=True),
+            chat_history_key="proj-1/chat/abc123",
         )
         json_str = s.model_dump_json()
         restored = WorkflowState.model_validate_json(json_str)
         assert restored.step == "iteration"
         assert restored.selected_option == 0
         assert restored.error.retryable is True
-        assert restored.revision_history[0].type == "lasso"
+        assert restored.revision_history[0].type == "annotation"
+        assert restored.revision_history[0].instructions == ["Replace the sofa"]
+        assert restored.chat_history_key == "proj-1/chat/abc123"
 
 
 class TestAPIModels:
@@ -438,10 +537,15 @@ class TestAPIModels:
         with pytest.raises(ValidationError):
             SelectOptionRequest(index=2)
 
-    def test_lasso_edit_request_empty_fails(self):
-        """LassoEditRequest must have at least 1 region."""
+    def test_annotation_edit_request_empty_fails(self):
+        """AnnotationEditRequest must have at least 1 annotation."""
         with pytest.raises(ValidationError):
-            LassoEditRequest(regions=[])
+            AnnotationEditRequest(annotations=[])
+
+    def test_text_feedback_request_empty_fails(self):
+        """TextFeedbackRequest must have non-empty feedback."""
+        with pytest.raises(ValidationError):
+            TextFeedbackRequest(feedback="")
 
     def test_error_response(self):
         """ErrorResponse with all fields."""
@@ -478,7 +582,7 @@ class TestAllModelsImportable:
             "InspirationNote",
             "DesignBrief",
             "RoomDimensions",
-            "LassoRegion",
+            "AnnotationRegion",
             "DesignOption",
             "ProductMatch",
             "UnmatchedItem",
@@ -490,10 +594,8 @@ class TestAllModelsImportable:
             "ScanData",
             "GenerateDesignsInput",
             "GenerateDesignsOutput",
-            "GenerateInpaintInput",
-            "GenerateInpaintOutput",
-            "GenerateRegenInput",
-            "GenerateRegenOutput",
+            "EditDesignInput",
+            "EditDesignOutput",
             "GenerateShoppingListInput",
             "GenerateShoppingListOutput",
             "IntakeChatInput",
@@ -508,8 +610,9 @@ class TestAllModelsImportable:
             "IntakeMessageRequest",
             "IntakeConfirmRequest",
             "SelectOptionRequest",
-            "LassoEditRequest",
-            "RegenerateRequest",
+            "AnnotationEditRequest",
+            "TextFeedbackRequest",
+            "ActionResponse",
             "ErrorResponse",
         ]
         for name in expected:

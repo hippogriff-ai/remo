@@ -46,13 +46,12 @@ class RoomDimensions(BaseModel):
     openings: list[dict] = []
 
 
-class LassoRegion(BaseModel):
+class AnnotationRegion(BaseModel):
     region_id: int = Field(ge=1, le=3)
-    path_points: list[tuple[float, float]]
-    action: str
+    center_x: float = Field(ge=0, le=1)
+    center_y: float = Field(ge=0, le=1)
+    radius: float = Field(ge=0, le=1)
     instruction: str = Field(min_length=10)
-    avoid_tokens: list[str] = []
-    style_nudges: list[str] = []
 
 
 class DesignOption(BaseModel):
@@ -98,9 +97,10 @@ class WorkflowError(BaseModel):
 
 class RevisionRecord(BaseModel):
     revision_number: int
-    type: Literal["lasso", "regen"]
+    type: str
     base_image_url: str
     revised_image_url: str
+    instructions: list[str] = []
 
 
 # === Photo Data ===
@@ -133,25 +133,20 @@ class GenerateDesignsOutput(BaseModel):
     options: list[DesignOption] = Field(min_length=2, max_length=2)
 
 
-class GenerateInpaintInput(BaseModel):
+class EditDesignInput(BaseModel):
+    project_id: str
     base_image_url: str
-    regions: list[LassoRegion] = Field(min_length=1, max_length=3)
-
-
-class GenerateInpaintOutput(BaseModel):
-    revised_image_url: str
-
-
-class GenerateRegenInput(BaseModel):
     room_photo_urls: list[str]
+    inspiration_photo_urls: list[str] = []
     design_brief: DesignBrief | None = None
-    current_image_url: str
-    feedback: str
-    revision_history: list[RevisionRecord] = []
+    annotations: list[AnnotationRegion] = []
+    feedback: str | None = None
+    chat_history_key: str | None = None
 
 
-class GenerateRegenOutput(BaseModel):
+class EditDesignOutput(BaseModel):
     revised_image_url: str
+    chat_history_key: str
 
 
 class GenerateShoppingListInput(BaseModel):
@@ -211,6 +206,7 @@ class WorkflowState(BaseModel):
     shopping_list: GenerateShoppingListOutput | None = None
     approved: bool = False
     error: WorkflowError | None = None
+    chat_history_key: str | None = None
 
 
 # === API Request/Response Models ===
@@ -246,12 +242,12 @@ class SelectOptionRequest(BaseModel):
     index: int = Field(ge=0, le=1)
 
 
-class LassoEditRequest(BaseModel):
-    regions: list[LassoRegion] = Field(min_length=1, max_length=3)
+class AnnotationEditRequest(BaseModel):
+    annotations: list[AnnotationRegion] = Field(min_length=1, max_length=3)
 
 
-class RegenerateRequest(BaseModel):
-    feedback: str
+class TextFeedbackRequest(BaseModel):
+    feedback: str = Field(min_length=1)
 
 
 class ActionResponse(BaseModel):

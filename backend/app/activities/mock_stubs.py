@@ -9,12 +9,10 @@ from temporalio import activity
 
 from app.models.contracts import (
     DesignOption,
+    EditDesignInput,
+    EditDesignOutput,
     GenerateDesignsInput,
     GenerateDesignsOutput,
-    GenerateInpaintInput,
-    GenerateInpaintOutput,
-    GenerateRegenInput,
-    GenerateRegenOutput,
     GenerateShoppingListInput,
     GenerateShoppingListOutput,
     ProductMatch,
@@ -32,13 +30,11 @@ async def generate_designs(input: GenerateDesignsInput) -> GenerateDesignsOutput
 
 
 @activity.defn
-async def generate_inpaint(input: GenerateInpaintInput) -> GenerateInpaintOutput:
-    return GenerateInpaintOutput(revised_image_url="https://r2.example.com/mock/inpaint.png")
-
-
-@activity.defn
-async def generate_regen(input: GenerateRegenInput) -> GenerateRegenOutput:
-    return GenerateRegenOutput(revised_image_url="https://r2.example.com/mock/regen.png")
+async def edit_design(input: EditDesignInput) -> EditDesignOutput:
+    return EditDesignOutput(
+        revised_image_url="https://r2.example.com/mock/edit.png",
+        chat_history_key=f"chat/{input.project_id}/history.json",
+    )
 
 
 @activity.defn

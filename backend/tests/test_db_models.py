@@ -11,8 +11,8 @@ Validates that:
 from app.models.db import (
     Base,
     DesignBriefRow,
+    EditRegionRow,
     GeneratedImage,
-    LassoRegionRow,
     LidarScan,
     Photo,
     ProductMatchRow,
@@ -34,7 +34,7 @@ class TestAllTablesRegistered:
             "design_briefs",
             "generated_images",
             "revisions",
-            "lasso_regions",
+            "edit_regions",
             "shopping_lists",
             "product_matches",
         }
@@ -137,12 +137,12 @@ class TestRevision:
         assert "generated_images" in str(result_fk.target_fullname)
 
 
-class TestLassoRegionRow:
-    """LassoRegionRow cascades from revision."""
+class TestEditRegionRow:
+    """EditRegionRow cascades from revision."""
 
     def test_cascade_delete(self):
         """FK to revisions uses CASCADE."""
-        fk = next(iter(LassoRegionRow.__table__.c.revision_id.foreign_keys))
+        fk = next(iter(EditRegionRow.__table__.c.revision_id.foreign_keys))
         assert fk.ondelete == "CASCADE"
 
 

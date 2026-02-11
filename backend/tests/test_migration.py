@@ -67,7 +67,7 @@ class TestMigrationCompleteness:
             "design_briefs",
             "generated_images",
             "revisions",
-            "lasso_regions",
+            "edit_regions",
             "shopping_lists",
             "product_matches",
         }
@@ -119,7 +119,7 @@ class TestMigrationCompleteness:
         assert table_order == [
             "product_matches",
             "shopping_lists",
-            "lasso_regions",
+            "edit_regions",
             "revisions",
             "generated_images",
             "design_briefs",

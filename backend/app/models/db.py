@@ -140,26 +140,24 @@ class Revision(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     project: Mapped["Project"] = relationship(back_populates="revisions")
-    lasso_regions: Mapped[list["LassoRegionRow"]] = relationship(
+    edit_regions: Mapped[list["EditRegionRow"]] = relationship(
         back_populates="revision", cascade="all, delete"
     )
 
 
-class LassoRegionRow(Base):
-    __tablename__ = "lasso_regions"
+class EditRegionRow(Base):
+    __tablename__ = "edit_regions"
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     revision_id: Mapped[uuid.UUID] = mapped_column(
         ForeignKey("revisions.id", ondelete="CASCADE"), nullable=False
     )
     region_number: Mapped[int] = mapped_column(Integer, nullable=False)
-    path_points: Mapped[list] = mapped_column(JSONB, nullable=False)
-    action: Mapped[str] = mapped_column(String(50), nullable=False)
+    type: Mapped[str] = mapped_column(String(20), nullable=False)
+    region_data: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
     instruction: Mapped[str] = mapped_column(Text, nullable=False)
-    avoid_tokens: Mapped[list | None] = mapped_column(JSONB, nullable=True)
-    style_nudges: Mapped[list | None] = mapped_column(JSONB, nullable=True)
 
-    revision: Mapped["Revision"] = relationship(back_populates="lasso_regions")
+    revision: Mapped["Revision"] = relationship(back_populates="edit_regions")
 
 
 class ShoppingList(Base):

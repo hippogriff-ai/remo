@@ -15,25 +15,22 @@ from temporalio.testing import WorkflowEnvironment
 from temporalio.worker import Worker
 
 from app.activities.mock_stubs import (
+    edit_design,
     generate_designs,
-    generate_inpaint,
-    generate_regen,
     generate_shopping_list,
     purge_project_data,
 )
 from app.models.contracts import (
+    AnnotationRegion,
     DesignBrief,
     DesignOption,
+    EditDesignInput,
+    EditDesignOutput,
     GenerateDesignsInput,
     GenerateDesignsOutput,
-    GenerateInpaintInput,
-    GenerateInpaintOutput,
-    GenerateRegenInput,
-    GenerateRegenOutput,
     GenerateShoppingListInput,
     GenerateShoppingListOutput,
     InspirationNote,
-    LassoRegion,
     PhotoData,
     ProductMatch,
     RoomDimensions,
@@ -43,8 +40,7 @@ from app.workflows.design_project import DesignProjectWorkflow
 
 ALL_ACTIVITIES = [
     generate_designs,
-    generate_inpaint,
-    generate_regen,
+    edit_design,
     generate_shopping_list,
     purge_project_data,
 ]
@@ -111,13 +107,14 @@ def _brief() -> DesignBrief:
     return DesignBrief(room_type="living room")
 
 
-def _lasso_regions() -> list[dict]:
-    """Helper to create a test lasso edit payload."""
+def _annotations() -> list[dict]:
+    """Helper to create a test annotation edit payload."""
     return [
-        LassoRegion(
+        AnnotationRegion(
             region_id=1,
-            path_points=[(0.1, 0.1), (0.9, 0.1), (0.9, 0.9), (0.1, 0.9)],
-            action="Replace",
+            center_x=0.5,
+            center_y=0.5,
+            radius=0.2,
             instruction="Replace the couch with a modern sectional",
         ).model_dump()
     ]
@@ -160,10 +157,10 @@ async def _failing_generate(_input) -> None:
     raise RuntimeError("AI service unavailable")
 
 
-@activity.defn(name="generate_inpaint")
-async def _failing_inpaint(_input) -> None:
-    """Always-failing generate_inpaint for error testing."""
-    raise RuntimeError("Inpainting service error")
+@activity.defn(name="edit_design")
+async def _failing_edit(_input) -> None:
+    """Always-failing edit_design for error testing."""
+    raise RuntimeError("Edit service error")
 
 
 @activity.defn(name="generate_shopping_list")
@@ -174,24 +171,21 @@ async def _failing_shopping(_input) -> None:
 
 _FAILING_GENERATION_ACTIVITIES = [
     _failing_generate,
-    generate_inpaint,
-    generate_regen,
+    edit_design,
     generate_shopping_list,
     purge_project_data,
 ]
 
-_FAILING_INPAINT_ACTIVITIES = [
+_FAILING_EDIT_ACTIVITIES = [
     generate_designs,
-    _failing_inpaint,
-    generate_regen,
+    _failing_edit,
     generate_shopping_list,
     purge_project_data,
 ]
 
 _FAILING_SHOPPING_ACTIVITIES = [
     generate_designs,
-    generate_inpaint,
-    generate_regen,
+    edit_design,
     _failing_shopping,
     purge_project_data,
 ]
@@ -223,8 +217,7 @@ async def _flaky_generate(_input) -> GenerateDesignsOutput:
 
 _FLAKY_GENERATION_ACTIVITIES = [
     _flaky_generate,
-    generate_inpaint,
-    generate_regen,
+    edit_design,
     generate_shopping_list,
     purge_project_data,
 ]
@@ -258,34 +251,35 @@ async def _flaky_shopping(_input) -> GenerateShoppingListOutput:
 
 _FLAKY_SHOPPING_ACTIVITIES = [
     generate_designs,
-    generate_inpaint,
-    generate_regen,
+    edit_design,
     _flaky_shopping,
     purge_project_data,
 ]
 
 
-_flaky_inpaint_calls = 0
+_flaky_edit_calls = 0
 
 
-@activity.defn(name="generate_inpaint")
-async def _flaky_inpaint(_input) -> GenerateInpaintOutput:
+@activity.defn(name="edit_design")
+async def _flaky_edit(_input) -> EditDesignOutput:
     """Fails first 2 calls (exhausting RetryPolicy), succeeds after.
 
     Used to test the retry→approve flow: first attempt fails (error surfaces),
     user retries, second attempt succeeds (no error), user can then approve.
     """
-    global _flaky_inpaint_calls
-    _flaky_inpaint_calls += 1
-    if _flaky_inpaint_calls <= 2:
-        raise RuntimeError("Temporary inpainting error")
-    return GenerateInpaintOutput(revised_image_url="https://r2.example.com/retry/inpaint.png")
+    global _flaky_edit_calls
+    _flaky_edit_calls += 1
+    if _flaky_edit_calls <= 2:
+        raise RuntimeError("Temporary edit service error")
+    return EditDesignOutput(
+        revised_image_url="https://r2.example.com/retry/edit.png",
+        chat_history_key="chat/retry-key.json",
+    )
 
 
-_FLAKY_INPAINT_ACTIVITIES = [
+_FLAKY_EDIT_ACTIVITIES = [
     generate_designs,
-    _flaky_inpaint,
-    generate_regen,
+    _flaky_edit,
     generate_shopping_list,
     purge_project_data,
 ]
@@ -311,8 +305,7 @@ async def _capturing_generate(input: GenerateDesignsInput) -> GenerateDesignsOut
 
 _CAPTURING_GEN_ACTIVITIES = [
     _capturing_generate,
-    generate_inpaint,
-    generate_regen,
+    edit_design,
     generate_shopping_list,
     purge_project_data,
 ]
@@ -345,58 +338,32 @@ async def _capturing_shopping(input: GenerateShoppingListInput) -> GenerateShopp
 
 _CAPTURING_SHOPPING_ACTIVITIES = [
     generate_designs,
-    generate_inpaint,
-    generate_regen,
+    edit_design,
     _capturing_shopping,
     purge_project_data,
 ]
 
-# --- Capturing stub: records inpaint input for verification ---
+# --- Capturing stub: records edit_design input for verification ---
 
-_captured_inpaint_input: GenerateInpaintInput | None = None
+_captured_edit_input: EditDesignInput | None = None
 
 
-@activity.defn(name="generate_inpaint")
-async def _capturing_inpaint(
-    input: GenerateInpaintInput,
-) -> GenerateInpaintOutput:
-    """Captures inpaint input for verification, then returns mock output."""
-    global _captured_inpaint_input
-    _captured_inpaint_input = input
-    return GenerateInpaintOutput(
-        revised_image_url="https://r2.example.com/cap/inpaint.png",
+@activity.defn(name="edit_design")
+async def _capturing_edit(
+    input: EditDesignInput,
+) -> EditDesignOutput:
+    """Captures edit_design input for verification, then returns mock output."""
+    global _captured_edit_input
+    _captured_edit_input = input
+    return EditDesignOutput(
+        revised_image_url="https://r2.example.com/cap/edit.png",
+        chat_history_key="chat/cap-key.json",
     )
 
 
-_CAPTURING_INPAINT_ACTIVITIES = [
+_CAPTURING_EDIT_ACTIVITIES = [
     generate_designs,
-    _capturing_inpaint,
-    generate_regen,
-    generate_shopping_list,
-    purge_project_data,
-]
-
-# --- Capturing stub: records regen input for verification ---
-
-_captured_regen_input: GenerateRegenInput | None = None
-
-
-@activity.defn(name="generate_regen")
-async def _capturing_regen(
-    input: GenerateRegenInput,
-) -> GenerateRegenOutput:
-    """Captures regen input for verification, then returns mock output."""
-    global _captured_regen_input
-    _captured_regen_input = input
-    return GenerateRegenOutput(
-        revised_image_url="https://r2.example.com/cap/regen.png",
-    )
-
-
-_CAPTURING_REGEN_ACTIVITIES = [
-    generate_designs,
-    generate_inpaint,
-    _capturing_regen,
+    _capturing_edit,
     generate_shopping_list,
     purge_project_data,
 ]
@@ -405,17 +372,19 @@ _CAPTURING_REGEN_ACTIVITIES = [
 # --- Slow stubs: simulate in-flight activities for signal-during-activity tests ---
 
 
-@activity.defn(name="generate_inpaint")
-async def _slow_inpaint(_input: GenerateInpaintInput) -> GenerateInpaintOutput:
-    """Slow inpaint that gives time for signals to arrive during execution."""
+@activity.defn(name="edit_design")
+async def _slow_edit(_input: EditDesignInput) -> EditDesignOutput:
+    """Slow edit_design that gives time for signals to arrive during execution."""
     await asyncio.sleep(2)
-    return GenerateInpaintOutput(revised_image_url="https://r2.example.com/slow/inpaint.png")
+    return EditDesignOutput(
+        revised_image_url="https://r2.example.com/slow/edit.png",
+        chat_history_key="chat/slow-key.json",
+    )
 
 
-_SLOW_INPAINT_ACTIVITIES = [
+_SLOW_EDIT_ACTIVITIES = [
     generate_designs,
-    _slow_inpaint,
-    generate_regen,
+    _slow_edit,
     generate_shopping_list,
     purge_project_data,
 ]
@@ -432,8 +401,7 @@ async def _failing_purge(_project_id: str) -> None:
 
 _FAILING_PURGE_ACTIVITIES = [
     generate_designs,
-    generate_inpaint,
-    generate_regen,
+    edit_design,
     generate_shopping_list,
     _failing_purge,
 ]
@@ -889,7 +857,7 @@ class TestShoppingInput:
         """Verifies shopping input gets full context: revisions, brief, dimensions, current image.
 
         Uses a capturing shopping stub to inspect GenerateShoppingListInput.
-        After 2 lasso edits + approve, the shopping activity should receive:
+        After 2 annotation edits + approve, the shopping activity should receive:
         - design_image_url = last revised image (from iteration 2)
         - original_room_photo_urls = room photo storage keys
         - design_brief from intake
@@ -935,12 +903,12 @@ class TestShoppingInput:
             await handle.signal(DesignProjectWorkflow.complete_intake, brief)
             await asyncio.sleep(1.0)
 
-            # Select + 2 lasso edits
+            # Select + 2 annotation edits
             await handle.signal(DesignProjectWorkflow.select_option, 0)
             await asyncio.sleep(0.5)
-            await handle.signal(DesignProjectWorkflow.submit_lasso_edit, _lasso_regions())
+            await handle.signal(DesignProjectWorkflow.submit_annotation_edit, _annotations())
             await asyncio.sleep(1.0)
-            await handle.signal(DesignProjectWorkflow.submit_lasso_edit, _lasso_regions())
+            await handle.signal(DesignProjectWorkflow.submit_annotation_edit, _annotations())
             await asyncio.sleep(1.0)
 
             # Approve → triggers shopping
@@ -960,8 +928,8 @@ class TestShoppingInput:
             assert _captured_shopping_input.design_brief.room_type == "living room"
             # Revision history accumulated from iterations
             assert len(_captured_shopping_input.revision_history) == 2
-            assert _captured_shopping_input.revision_history[0].type == "lasso"
-            assert _captured_shopping_input.revision_history[1].type == "lasso"
+            assert _captured_shopping_input.revision_history[0].type == "annotation"
+            assert _captured_shopping_input.revision_history[1].type == "annotation"
             # Room dimensions forwarded
             assert _captured_shopping_input.room_dimensions is not None
             assert _captured_shopping_input.room_dimensions.width_m == 3.5
@@ -1009,25 +977,25 @@ class TestShoppingInput:
             assert len(_captured_shopping_input.original_room_photo_urls) == 2
 
 
-class TestInpaintInput:
-    """Tests verifying inpaint input builder passes correct data to T2 activity."""
+class TestEditInput:
+    """Tests verifying edit_design input builder passes correct data to T2 activity."""
 
-    async def test_inpaint_input_includes_base_image_and_regions(self, workflow_env, tq):
-        """Verifies inpaint input contains the current image and lasso regions.
+    async def test_annotation_edit_input_has_base_image_and_annotations(self, workflow_env, tq):
+        """Verifies annotation edit input contains the current image and annotations.
 
-        The inpaint activity receives `base_image_url` (the selected/current design)
-        and `regions` (lasso selections with instructions). This test captures the
+        The edit_design activity receives `base_image_url` (the selected/current design)
+        and `annotations` (annotation regions with instructions). This test captures the
         input and verifies both fields are correctly populated from workflow state.
-        Critical for P2: T2's real inpaint activity depends on these exact fields.
+        Critical for P2: T2's real edit_design activity depends on these exact fields.
         """
-        global _captured_inpaint_input
-        _captured_inpaint_input = None
+        global _captured_edit_input
+        _captured_edit_input = None
 
         async with Worker(
             workflow_env.client,
             task_queue=tq,
             workflows=[DesignProjectWorkflow],
-            activities=_CAPTURING_INPAINT_ACTIVITIES,
+            activities=_CAPTURING_EDIT_ACTIVITIES,
         ):
             handle = await _start_workflow(workflow_env, tq)
             await _advance_to_iteration(handle)
@@ -1035,45 +1003,42 @@ class TestInpaintInput:
             regions = [
                 {
                     "region_id": 1,
-                    "path_points": [[0.1, 0.1], [0.9, 0.9]],
-                    "action": "Replace",
+                    "center_x": 0.5,
+                    "center_y": 0.5,
+                    "radius": 0.2,
                     "instruction": "Replace the sofa with a modern sectional",
                 },
             ]
             await handle.signal(
-                DesignProjectWorkflow.submit_lasso_edit,
+                DesignProjectWorkflow.submit_annotation_edit,
                 regions,
             )
             await asyncio.sleep(1.0)
 
-            assert _captured_inpaint_input is not None
+            assert _captured_edit_input is not None
             # base_image_url is the selected option's image
-            assert _captured_inpaint_input.base_image_url != ""
-            # Regions forwarded as LassoRegion objects
-            assert len(_captured_inpaint_input.regions) == 1
-            assert _captured_inpaint_input.regions[0].region_id == 1
-            assert "sectional" in _captured_inpaint_input.regions[0].instruction
+            assert _captured_edit_input.base_image_url != ""
+            # Annotations forwarded as AnnotationRegion objects
+            assert len(_captured_edit_input.annotations) == 1
+            assert _captured_edit_input.annotations[0].region_id == 1
+            assert "sectional" in _captured_edit_input.annotations[0].instruction
 
+    async def test_feedback_edit_input_includes_brief_feedback_and_history(self, workflow_env, tq):
+        """Verifies feedback edit input contains room photos, brief, feedback, and history.
 
-class TestRegenInput:
-    """Tests verifying regen input builder passes correct data to T2 activity."""
-
-    async def test_regen_input_includes_brief_feedback_and_history(self, workflow_env, tq):
-        """Verifies regen input contains room photos, brief, feedback, and history.
-
-        The regen activity needs `room_photo_urls` (original room photos only),
-        `design_brief`, `current_image_url`, `feedback`, and `revision_history`.
-        This test does a lasso edit first (building revision_history), then a regen,
+        The edit_design activity needs `room_photo_urls` (original room photos only),
+        `design_brief`, `base_image_url`, `feedback`, and the workflow tracks history.
+        This test does an annotation edit first (building revision_history), then feedback,
         verifying the accumulated state flows correctly to the activity.
         """
-        global _captured_regen_input
-        _captured_regen_input = None
+        global _captured_edit_input
+        _captured_edit_input = None
 
         async with Worker(
             workflow_env.client,
             task_queue=tq,
             workflows=[DesignProjectWorkflow],
-            activities=_CAPTURING_REGEN_ACTIVITIES,
+            activities=_CAPTURING_EDIT_ACTIVITIES,
         ):
             handle = await _start_workflow(workflow_env, tq)
             # Add room + inspiration photos
@@ -1106,53 +1071,52 @@ class TestRegenInput:
             await handle.signal(DesignProjectWorkflow.select_option, 0)
             await asyncio.sleep(0.5)
 
-            # Do a lasso edit first to build revision history
+            # Do an annotation edit first to build revision history
             await handle.signal(
-                DesignProjectWorkflow.submit_lasso_edit,
-                _lasso_regions(),
+                DesignProjectWorkflow.submit_annotation_edit,
+                _annotations(),
             )
             await asyncio.sleep(1.0)
 
             state = await handle.query(DesignProjectWorkflow.get_state)
             assert state.iteration_count == 1
 
-            # Now regen — this should capture the input
+            # Now text feedback — this should capture the input
             await handle.signal(
-                DesignProjectWorkflow.submit_regenerate,
+                DesignProjectWorkflow.submit_text_feedback,
                 "Make it brighter and more modern",
             )
             await asyncio.sleep(1.0)
 
-            assert _captured_regen_input is not None
-            # Only room photos (not inspiration)
-            assert _captured_regen_input.room_photo_urls == ["photos/room_r1.jpg"]
+            assert _captured_edit_input is not None
+            # Room photos forwarded (not inspiration)
+            assert _captured_edit_input.room_photo_urls == ["photos/room_r1.jpg"]
             # Brief forwarded
-            assert _captured_regen_input.design_brief is not None
-            assert _captured_regen_input.design_brief.room_type == "office"
-            # Current image is last revision's output
-            assert _captured_regen_input.current_image_url != ""
+            assert _captured_edit_input.design_brief is not None
+            assert _captured_edit_input.design_brief.room_type == "office"
+            # Base image is the current image (last revision's output)
+            assert _captured_edit_input.base_image_url != ""
             # Feedback forwarded
-            assert _captured_regen_input.feedback == ("Make it brighter and more modern")
-            # Revision history includes the prior lasso edit
-            assert len(_captured_regen_input.revision_history) == 1
-            assert _captured_regen_input.revision_history[0].type == "lasso"
+            assert _captured_edit_input.feedback == "Make it brighter and more modern"
+            # Chat history key forwarded from prior edit
+            assert _captured_edit_input.chat_history_key is not None
 
-    async def test_regen_input_with_skipped_intake(self, workflow_env, tq):
-        """Verifies regen input has design_brief=None when intake was skipped.
+    async def test_feedback_edit_input_with_skipped_intake(self, workflow_env, tq):
+        """Verifies feedback edit input has design_brief=None when intake was skipped.
 
-        When the user skips intake, no DesignBrief is stored. The regen input
-        builder must forward None (not crash or default). T2's real regen
+        When the user skips intake, no DesignBrief is stored. The edit input
+        builder must forward None (not crash or default). T2's real edit_design
         activity must handle both DesignBrief and None — this test proves
         the builder doesn't assume a brief exists.
         """
-        global _captured_regen_input
-        _captured_regen_input = None
+        global _captured_edit_input
+        _captured_edit_input = None
 
         async with Worker(
             workflow_env.client,
             task_queue=tq,
             workflows=[DesignProjectWorkflow],
-            activities=_CAPTURING_REGEN_ACTIVITIES,
+            activities=_CAPTURING_EDIT_ACTIVITIES,
         ):
             handle = await _start_workflow(workflow_env, tq)
             await handle.signal(DesignProjectWorkflow.add_photo, _photo(0))
@@ -1167,16 +1131,15 @@ class TestRegenInput:
             await asyncio.sleep(0.5)
 
             await handle.signal(
-                DesignProjectWorkflow.submit_regenerate,
+                DesignProjectWorkflow.submit_text_feedback,
                 "Make it more modern",
             )
             await asyncio.sleep(1.0)
 
-            assert _captured_regen_input is not None
-            assert _captured_regen_input.design_brief is None
-            assert _captured_regen_input.feedback == "Make it more modern"
-            assert _captured_regen_input.current_image_url != ""
-            assert _captured_regen_input.revision_history == []
+            assert _captured_edit_input is not None
+            assert _captured_edit_input.design_brief is None
+            assert _captured_edit_input.feedback == "Make it more modern"
+            assert _captured_edit_input.base_image_url != ""
 
 
 class TestStartOver:
@@ -1579,7 +1542,7 @@ class TestStartOver:
 
             # Exhaust all 5 iteration rounds to reach approval
             for i in range(5):
-                await handle.signal(DesignProjectWorkflow.submit_regenerate, f"change {i}")
+                await handle.signal(DesignProjectWorkflow.submit_text_feedback, f"change {i}")
                 await asyncio.sleep(0.5)
 
             await asyncio.sleep(0.5)
@@ -1608,7 +1571,7 @@ class TestStartOver:
             workflow_env.client,
             task_queue=tq,
             workflows=[DesignProjectWorkflow],
-            activities=_SLOW_INPAINT_ACTIVITIES,
+            activities=_SLOW_EDIT_ACTIVITIES,
         ):
             handle = await _start_workflow(workflow_env, tq)
             await _advance_to_iteration(handle)
@@ -1616,8 +1579,8 @@ class TestStartOver:
             state = await handle.query(DesignProjectWorkflow.get_state)
             assert state.step == "iteration"
 
-            # Submit a lasso edit — the slow stub takes 2s
-            await handle.signal(DesignProjectWorkflow.submit_lasso_edit, _lasso_regions())
+            # Submit an annotation edit — the slow stub takes 2s
+            await handle.signal(DesignProjectWorkflow.submit_annotation_edit, _annotations())
             # Give the activity time to start but not finish
             await asyncio.sleep(0.3)
 
@@ -1682,10 +1645,10 @@ class TestSelectionValidation:
 
 
 class TestIterationPhase:
-    """Tests for the iteration (lasso/regen) phase."""
+    """Tests for the iteration (annotation/feedback) phase."""
 
-    async def test_lasso_edit_creates_revision(self, workflow_env, tq):
-        """Verifies lasso edit signal creates a revision record."""
+    async def test_annotation_edit_creates_revision(self, workflow_env, tq):
+        """Verifies annotation edit signal creates a revision record."""
 
         async with Worker(
             workflow_env.client,
@@ -1707,21 +1670,21 @@ class TestIterationPhase:
             state = await handle.query(DesignProjectWorkflow.get_state)
             assert state.step == "iteration"
 
-            await handle.signal(DesignProjectWorkflow.submit_lasso_edit, _lasso_regions())
+            await handle.signal(DesignProjectWorkflow.submit_annotation_edit, _annotations())
             await asyncio.sleep(1.0)
 
             state = await handle.query(DesignProjectWorkflow.get_state)
             assert state.iteration_count == 1
             assert len(state.revision_history) == 1
             rev = state.revision_history[0]
-            assert rev.type == "lasso"
+            assert rev.type == "annotation"
             assert rev.revision_number == 1
             assert rev.base_image_url != ""
             assert rev.revised_image_url != rev.base_image_url
             assert state.current_image == rev.revised_image_url
 
-    async def test_regenerate_creates_revision(self, workflow_env, tq):
-        """Verifies regenerate signal creates a revision record."""
+    async def test_text_feedback_creates_revision(self, workflow_env, tq):
+        """Verifies text feedback signal creates a revision record."""
 
         async with Worker(
             workflow_env.client,
@@ -1740,14 +1703,14 @@ class TestIterationPhase:
             await handle.signal(DesignProjectWorkflow.select_option, 0)
             await asyncio.sleep(0.5)
 
-            await handle.signal(DesignProjectWorkflow.submit_regenerate, "Make it warmer")
+            await handle.signal(DesignProjectWorkflow.submit_text_feedback, "Make it warmer")
             await asyncio.sleep(1.0)
 
             state = await handle.query(DesignProjectWorkflow.get_state)
             assert state.iteration_count == 1
             assert len(state.revision_history) == 1
             rev = state.revision_history[0]
-            assert rev.type == "regen"
+            assert rev.type == "feedback"
             assert rev.revision_number == 1
             assert rev.base_image_url != ""
             assert rev.revised_image_url != rev.base_image_url
@@ -1775,7 +1738,7 @@ class TestIterationPhase:
 
             # Do 5 iterations
             for i in range(5):
-                await handle.signal(DesignProjectWorkflow.submit_regenerate, f"Feedback {i}")
+                await handle.signal(DesignProjectWorkflow.submit_text_feedback, f"Feedback {i}")
                 await asyncio.sleep(1.0)
 
             state = await handle.query(DesignProjectWorkflow.get_state)
@@ -1803,10 +1766,10 @@ class TestIterationPhase:
 
             # Do 5 iterations (mixed types to be realistic)
             for _ in range(3):
-                await handle.signal(DesignProjectWorkflow.submit_lasso_edit, _lasso_regions())
+                await handle.signal(DesignProjectWorkflow.submit_annotation_edit, _annotations())
                 await asyncio.sleep(1.0)
             for j in range(2):
-                await handle.signal(DesignProjectWorkflow.submit_regenerate, f"Feedback {j}")
+                await handle.signal(DesignProjectWorkflow.submit_text_feedback, f"Feedback {j}")
                 await asyncio.sleep(1.0)
 
             state = await handle.query(DesignProjectWorkflow.get_state)
@@ -1825,8 +1788,8 @@ class TestIterationPhase:
             assert state.iteration_count == 5
             assert len(state.revision_history) == 5
 
-    async def test_mixed_lasso_and_regen_iterations(self, workflow_env, tq):
-        """Verifies mixed lasso + regenerate iterations are all tracked correctly."""
+    async def test_mixed_annotation_and_feedback_iterations(self, workflow_env, tq):
+        """Verifies mixed annotation + feedback iterations are all tracked correctly."""
 
         async with Worker(
             workflow_env.client,
@@ -1837,21 +1800,21 @@ class TestIterationPhase:
             handle = await _start_workflow(workflow_env, tq)
             await _advance_to_iteration(handle)
 
-            # Lasso, Lasso, Regen, Lasso
-            await handle.signal(DesignProjectWorkflow.submit_lasso_edit, _lasso_regions())
+            # Annotation, Annotation, Feedback, Annotation
+            await handle.signal(DesignProjectWorkflow.submit_annotation_edit, _annotations())
             await asyncio.sleep(1.0)
-            await handle.signal(DesignProjectWorkflow.submit_lasso_edit, _lasso_regions())
+            await handle.signal(DesignProjectWorkflow.submit_annotation_edit, _annotations())
             await asyncio.sleep(1.0)
-            await handle.signal(DesignProjectWorkflow.submit_regenerate, "Make it warmer")
+            await handle.signal(DesignProjectWorkflow.submit_text_feedback, "Make it warmer")
             await asyncio.sleep(1.0)
-            await handle.signal(DesignProjectWorkflow.submit_lasso_edit, _lasso_regions())
+            await handle.signal(DesignProjectWorkflow.submit_annotation_edit, _annotations())
             await asyncio.sleep(1.0)
 
             state = await handle.query(DesignProjectWorkflow.get_state)
             assert state.iteration_count == 4
             assert len(state.revision_history) == 4
             types = [r.type for r in state.revision_history]
-            assert types == ["lasso", "lasso", "regen", "lasso"]
+            assert types == ["annotation", "annotation", "feedback", "annotation"]
             # Each revision number is sequential
             nums = [r.revision_number for r in state.revision_history]
             assert nums == [1, 2, 3, 4]
@@ -1862,7 +1825,7 @@ class TestIterationPhase:
         Each revision's base_image_url must equal the previous revision's
         revised_image_url (or the selected option's image for the first).
         This chain lets T1 iOS display a revision timeline and T2's
-        inpaint activity receives the correct base image.
+        edit activity receives the correct base image.
         """
 
         async with Worker(
@@ -1874,20 +1837,20 @@ class TestIterationPhase:
             handle = await _start_workflow(workflow_env, tq)
             await _advance_to_iteration(handle)
 
-            # 3 iterations: lasso, regen, lasso
+            # 3 iterations: annotation, feedback, annotation
             await handle.signal(
-                DesignProjectWorkflow.submit_lasso_edit,
-                _lasso_regions(),
+                DesignProjectWorkflow.submit_annotation_edit,
+                _annotations(),
             )
             await asyncio.sleep(1.0)
             await handle.signal(
-                DesignProjectWorkflow.submit_regenerate,
+                DesignProjectWorkflow.submit_text_feedback,
                 "Make it brighter",
             )
             await asyncio.sleep(1.0)
             await handle.signal(
-                DesignProjectWorkflow.submit_lasso_edit,
-                _lasso_regions(),
+                DesignProjectWorkflow.submit_annotation_edit,
+                _annotations(),
             )
             await asyncio.sleep(1.0)
 
@@ -1928,7 +1891,7 @@ class TestApproval:
             handle = await _start_workflow(workflow_env, tq)
             await _advance_to_iteration(handle)
 
-            # Approve immediately without any lasso/regen
+            # Approve immediately without any edits
             await handle.signal(DesignProjectWorkflow.approve_design)
             await asyncio.sleep(1.0)
 
@@ -1979,13 +1942,13 @@ class TestApproval:
             workflow_env.client,
             task_queue=tq,
             workflows=[DesignProjectWorkflow],
-            activities=_FAILING_INPAINT_ACTIVITIES,
+            activities=_FAILING_EDIT_ACTIVITIES,
         ):
             handle = await _start_workflow(workflow_env, tq)
             await _advance_to_iteration(handle)
 
-            # Submit a lasso edit that will fail (2 retry attempts)
-            await handle.signal(DesignProjectWorkflow.submit_lasso_edit, _lasso_regions())
+            # Submit an annotation edit that will fail (2 retry attempts)
+            await handle.signal(DesignProjectWorkflow.submit_annotation_edit, _annotations())
             # Wait for both retry attempts to exhaust + error to surface
             await asyncio.sleep(3.0)
 
@@ -2024,7 +1987,7 @@ class TestCancellation:
             await _advance_to_iteration(handle)
 
             # Do one iteration before cancelling
-            await handle.signal(DesignProjectWorkflow.submit_lasso_edit, _lasso_regions())
+            await handle.signal(DesignProjectWorkflow.submit_annotation_edit, _annotations())
             await asyncio.sleep(1.0)
 
             state = await handle.query(DesignProjectWorkflow.get_state)
@@ -2166,7 +2129,7 @@ class TestCancellation:
     async def test_cancel_during_iteration_error_abandons(self, workflow_env, tq):
         """Verifies cancel_project escapes the iteration error wait.
 
-        When an inpaint/regen activity fails and the user is stuck with a
+        When an edit_design activity fails and the user is stuck with a
         retryable error, cancel_project should abandon instead of waiting
         for retry. Tests the same _cancelled check in _wait but from the
         iteration error wait context.
@@ -2176,12 +2139,12 @@ class TestCancellation:
             workflow_env.client,
             task_queue=tq,
             workflows=[DesignProjectWorkflow],
-            activities=_FAILING_INPAINT_ACTIVITIES,
+            activities=_FAILING_EDIT_ACTIVITIES,
         ):
             handle = await _start_workflow(workflow_env, tq)
             await _advance_to_iteration(handle)
 
-            await handle.signal(DesignProjectWorkflow.submit_lasso_edit, _lasso_regions())
+            await handle.signal(DesignProjectWorkflow.submit_annotation_edit, _annotations())
             await asyncio.sleep(2.0)
 
             state = await handle.query(DesignProjectWorkflow.get_state)
@@ -2518,7 +2481,7 @@ class TestErrorRecovery:
             workflow_env.client,
             task_queue=tq,
             workflows=[DesignProjectWorkflow],
-            activities=_FAILING_INPAINT_ACTIVITIES,
+            activities=_FAILING_EDIT_ACTIVITIES,
         ):
             handle = await _start_workflow(workflow_env, tq)
             await _advance_to_iteration(handle)
@@ -2526,7 +2489,7 @@ class TestErrorRecovery:
             state = await handle.query(DesignProjectWorkflow.get_state)
             assert state.step == "iteration"
 
-            await handle.signal(DesignProjectWorkflow.submit_lasso_edit, _lasso_regions())
+            await handle.signal(DesignProjectWorkflow.submit_annotation_edit, _annotations())
             await asyncio.sleep(2.0)
 
             state = await handle.query(DesignProjectWorkflow.get_state)
@@ -2538,23 +2501,23 @@ class TestErrorRecovery:
     async def test_iteration_retry_clears_error_and_accepts_approval(self, workflow_env, tq):
         """Verifies retry → approve escapes an iteration error loop.
 
-        Uses a flaky inpaint stub that fails first (surfacing an error),
+        Uses a flaky edit stub that fails first (surfacing an error),
         then succeeds on retry.  After retry succeeds the error is cleared,
         so approve_design is accepted and the workflow proceeds to shopping.
         """
-        global _flaky_inpaint_calls
-        _flaky_inpaint_calls = 0
+        global _flaky_edit_calls
+        _flaky_edit_calls = 0
 
         async with Worker(
             workflow_env.client,
             task_queue=tq,
             workflows=[DesignProjectWorkflow],
-            activities=_FLAKY_INPAINT_ACTIVITIES,
+            activities=_FLAKY_EDIT_ACTIVITIES,
         ):
             handle = await _start_workflow(workflow_env, tq)
             await _advance_to_iteration(handle)
 
-            await handle.signal(DesignProjectWorkflow.submit_lasso_edit, _lasso_regions())
+            await handle.signal(DesignProjectWorkflow.submit_annotation_edit, _annotations())
             await asyncio.sleep(2.0)
 
             state = await handle.query(DesignProjectWorkflow.get_state)
@@ -2599,10 +2562,10 @@ class TestErrorRecovery:
             assert "Shopping list failed" in state.error.message
             assert state.error.retryable is True
 
-    async def test_malformed_lasso_regions_surfaces_error(self, workflow_env, tq):
-        """Verifies malformed lasso regions surface an error instead of crashing.
+    async def test_malformed_annotations_surfaces_error(self, workflow_env, tq):
+        """Verifies malformed annotations surface an error instead of crashing.
 
-        When a signal delivers invalid lasso region data (e.g. missing required
+        When a signal delivers invalid annotation data (e.g. missing required
         fields), the Pydantic ValidationError during input construction must be
         caught and surfaced as a WorkflowError, not left to crash the workflow
         task into infinite retry.
@@ -2617,9 +2580,9 @@ class TestErrorRecovery:
             handle = await _start_workflow(workflow_env, tq)
             await _advance_to_iteration(handle)
 
-            # Send malformed regions: missing required fields, instruction too short
+            # Send malformed annotations: missing required fields, instruction too short
             bad_regions = [{"region_id": 99, "instruction": "short"}]
-            await handle.signal(DesignProjectWorkflow.submit_lasso_edit, bad_regions)
+            await handle.signal(DesignProjectWorkflow.submit_annotation_edit, bad_regions)
             await asyncio.sleep(1.0)
 
             state = await handle.query(DesignProjectWorkflow.get_state)
@@ -2632,7 +2595,7 @@ class TestErrorRecovery:
             await handle.signal(DesignProjectWorkflow.retry_failed_step)
             await asyncio.sleep(0.3)
 
-            await handle.signal(DesignProjectWorkflow.submit_lasso_edit, _lasso_regions())
+            await handle.signal(DesignProjectWorkflow.submit_annotation_edit, _annotations())
             await asyncio.sleep(1.0)
 
             state = await handle.query(DesignProjectWorkflow.get_state)

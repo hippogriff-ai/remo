@@ -15,6 +15,7 @@ from fastapi.responses import JSONResponse
 from app.activities.validation import validate_photo
 from app.models.contracts import (
     ActionResponse,
+    AnnotationEditRequest,
     CreateProjectRequest,
     CreateProjectResponse,
     DesignBrief,
@@ -25,15 +26,14 @@ from app.models.contracts import (
     IntakeConfirmRequest,
     IntakeMessageRequest,
     IntakeStartRequest,
-    LassoEditRequest,
     PhotoData,
     PhotoUploadResponse,
     ProductMatch,
     QuickReplyOption,
-    RegenerateRequest,
     RevisionRecord,
     ScanData,
     SelectOptionRequest,
+    TextFeedbackRequest,
     UnmatchedItem,
     ValidatePhotoInput,
     WorkflowState,
@@ -94,6 +94,7 @@ def _apply_revision(
     state: WorkflowState,
     project_id: str,
     revision_type: str,
+    instructions: list[str] | None = None,
 ) -> None:
     revision_num = state.iteration_count + 1
     revised_url = (
@@ -105,9 +106,11 @@ def _apply_revision(
             type=revision_type,
             base_image_url=state.current_image or "",
             revised_image_url=revised_url,
+            instructions=instructions or [],
         )
     )
     state.current_image = revised_url
+    state.chat_history_key = f"chat/{project_id}/history.json"
     state.iteration_count = revision_num
     if state.iteration_count >= 5:
         state.step = "approval"
@@ -427,6 +430,7 @@ async def start_over(project_id: str):
     state.approved = False
     state.shopping_list = None
     state.error = None
+    state.chat_history_key = None
     state.step = "intake"
     _mock_intake_messages.pop(project_id, None)
     return ActionResponse()
@@ -436,32 +440,33 @@ async def start_over(project_id: str):
 
 
 @router.post(
-    "/projects/{project_id}/iterate/lasso",
+    "/projects/{project_id}/iterate/annotate",
     response_model=ActionResponse,
     responses={404: {"model": ErrorResponse}, 409: {"model": ErrorResponse}},
 )
-async def submit_lasso_edit(project_id: str, body: LassoEditRequest):
-    """Submit lasso-based inpaint edit."""
+async def submit_annotation_edit(project_id: str, body: AnnotationEditRequest):
+    """Submit annotation-based edit (numbered circles on design)."""
     state = _get_state(project_id)
-    if err := _check_step(state, "iteration", "submit lasso edit"):
+    if err := _check_step(state, "iteration", "submit annotation edit"):
         return err
     assert state is not None
-    _apply_revision(state, project_id, "lasso")
+    instructions = [a.instruction for a in body.annotations]
+    _apply_revision(state, project_id, "annotation", instructions=instructions)
     return ActionResponse()
 
 
 @router.post(
-    "/projects/{project_id}/iterate/regenerate",
+    "/projects/{project_id}/iterate/feedback",
     response_model=ActionResponse,
     responses={404: {"model": ErrorResponse}, 409: {"model": ErrorResponse}},
 )
-async def submit_regenerate(project_id: str, body: RegenerateRequest):
-    """Submit full regeneration with feedback."""
+async def submit_text_feedback(project_id: str, body: TextFeedbackRequest):
+    """Submit text feedback for design revision."""
     state = _get_state(project_id)
-    if err := _check_step(state, "iteration", "regenerate"):
+    if err := _check_step(state, "iteration", "submit feedback"):
         return err
     assert state is not None
-    _apply_revision(state, project_id, "regen")
+    _apply_revision(state, project_id, "feedback", instructions=[body.feedback])
     return ActionResponse()
 
 

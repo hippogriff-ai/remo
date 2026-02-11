@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project
 
-Remo is an AI-powered room redesign iOS app. Users photograph a room, describe their style via an AI chat, receive photorealistic redesign options, iteratively refine them with lasso-based inpainting, and get a shoppable product list.
+Remo is an AI-powered room redesign iOS app. Users photograph a room, describe their style via an AI chat, receive photorealistic redesign options, iteratively refine them with annotation-based editing, and get a shoppable product list.
 
 ## Status
 
@@ -95,10 +95,12 @@ ios/                           # (T1-owned, not yet scaffolded in this worktree)
 |------|----------|---------------|------|
 | T0: Platform | `/Hanalei/remo` (main) | `team/platform/*` | contracts, DB, API, workflow, CI, validation, purge, R2 |
 | T1: iOS | `/Hanalei/remo-ios` | `team/ios/*` | All `ios/` and `Packages/` |
-| T2: Image Gen | `/Hanalei/remo-gen` | `team/gen/*` | `activities/{generate,inpaint,regen}.py`, image utils, gen prompts |
+| T2: Image Gen | `/Hanalei/remo-gen` | `team/gen/*` | `activities/{generate,edit}.py`, image utils, gemini chat, gen prompts |
 | T3: AI Agents | `/Hanalei/remo-ai` | `team/ai/*` | `activities/{intake,shopping}.py`, AI prompts |
 
 ## Specs & Plans
+
+Plans in `specs/` (tracked). Agent prompts in `specs/PROMPT_*.md` (gitignored — not open-sourced).
 
 | File | Purpose |
 |------|---------|
@@ -108,6 +110,9 @@ ios/                           # (T1-owned, not yet scaffolded in this worktree)
 | `specs/PLAN_T1_IOS.md` | T1 sub-plan |
 | `specs/PLAN_T2_IMAGE_GEN.md` | T2 sub-plan |
 | `specs/PLAN_T3_AI_AGENTS.md` | T3 sub-plan |
+| `specs/DESIGN_INTELLIGENCE.md` | Design reasoning reference for T3 intake + shopping agents |
+| `specs/PROMPT_T1_IOS.md` | T1 ralph loop prompt (gitignored) |
+| `specs/PROMPT_T2_IMAGE_GEN.md` | T2 ralph loop prompt (gitignored) |
 
 ## Key Contracts
 

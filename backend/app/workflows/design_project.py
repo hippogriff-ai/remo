@@ -18,18 +18,17 @@ from temporalio.exceptions import ActivityError
 
 with workflow.unsafe.imports_passed_through():
     from app.activities.mock_stubs import (
+        edit_design,
         generate_designs,
-        generate_inpaint,
-        generate_regen,
         generate_shopping_list,
         purge_project_data,
     )
     from app.models.contracts import (
+        AnnotationRegion,
         DesignBrief,
         DesignOption,
+        EditDesignInput,
         GenerateDesignsInput,
-        GenerateInpaintInput,
-        GenerateRegenInput,
         GenerateShoppingListInput,
         PhotoData,
         RevisionRecord,
@@ -67,6 +66,7 @@ class DesignProjectWorkflow:
         self.shopping_list = None
         self.approved = False
         self.error: WorkflowError | None = None
+        self.chat_history_key: str | None = None
         self._action_queue: list[tuple[str, Any]] = []
         self._restart_requested = False
         self._cancelled = False
@@ -150,20 +150,12 @@ class DesignProjectWorkflow:
 
                 action_type, payload = self._action_queue.pop(0)
                 try:
-                    if action_type == "lasso":
-                        result = await workflow.execute_activity(
-                            generate_inpaint,
-                            self._inpaint_input(payload),
-                            start_to_close_timeout=timedelta(minutes=3),
-                            retry_policy=_ACTIVITY_RETRY,
-                        )
-                    else:
-                        result = await workflow.execute_activity(
-                            generate_regen,
-                            self._regen_input(payload),
-                            start_to_close_timeout=timedelta(minutes=3),
-                            retry_policy=_ACTIVITY_RETRY,
-                        )
+                    result = await workflow.execute_activity(
+                        edit_design,
+                        self._edit_input(action_type, payload),
+                        start_to_close_timeout=timedelta(minutes=3),
+                        retry_policy=_ACTIVITY_RETRY,
+                    )
                     # If start_over was signaled while the activity was
                     # in-flight, state has been cleared — discard the stale
                     # result so the next cycle starts clean.
@@ -176,9 +168,11 @@ class DesignProjectWorkflow:
                             type=action_type,
                             base_image_url=self.current_image or "",
                             revised_image_url=result.revised_image_url,
+                            instructions=self._extract_instructions(action_type, payload),
                         )
                     )
                     self.current_image = result.revised_image_url
+                    self.chat_history_key = result.chat_history_key
                     self.iteration_count = revision_num
                     self.error = None
                 except ActivityError as exc:
@@ -194,7 +188,7 @@ class DesignProjectWorkflow:
                     )
                     await self._wait(lambda: self.error is None or self._restart_requested)
                 except (ValueError, TypeError) as exc:
-                    # Input validation (e.g. malformed lasso regions, invalid regen
+                    # Input validation (e.g. malformed annotations, invalid
                     # feedback) — not retryable with same payload, so discard the
                     # action (don't re-queue).  Pydantic's ValidationError is a
                     # ValueError subclass, so this catches model construction failures
@@ -342,16 +336,17 @@ class DesignProjectWorkflow:
         self.intake_skipped = False
         self.revision_history = []
         self.iteration_count = 0
+        self.chat_history_key = None
         self._action_queue.clear()
         self.error = None
 
     @workflow.signal
-    async def submit_lasso_edit(self, regions: list[dict[str, Any]]) -> None:
-        self._action_queue.append(("lasso", regions))
+    async def submit_annotation_edit(self, annotations: list[dict[str, Any]]) -> None:
+        self._action_queue.append(("annotation", annotations))
 
     @workflow.signal
-    async def submit_regenerate(self, feedback: str) -> None:
-        self._action_queue.append(("regen", feedback))
+    async def submit_text_feedback(self, feedback: str) -> None:
+        self._action_queue.append(("feedback", feedback))
 
     @workflow.signal
     async def approve_design(self) -> None:
@@ -388,6 +383,7 @@ class DesignProjectWorkflow:
             shopping_list=self.shopping_list,
             approved=self.approved,
             error=self.error,
+            chat_history_key=self.chat_history_key,
         )
 
     # --- Input builders ---
@@ -403,22 +399,34 @@ class DesignProjectWorkflow:
             room_dimensions=self.scan_data.room_dimensions if self.scan_data else None,
         )
 
-    def _inpaint_input(self, regions: list[dict[str, Any]]) -> GenerateInpaintInput:
+    def _edit_input(self, action_type: str, payload: Any) -> EditDesignInput:
         assert self.current_image is not None
-        return GenerateInpaintInput(
+        base = EditDesignInput(
+            project_id=self._project_id,
             base_image_url=self.current_image,
-            regions=regions,
-        )
-
-    def _regen_input(self, feedback: str) -> GenerateRegenInput:
-        assert self.current_image is not None
-        return GenerateRegenInput(
             room_photo_urls=[p.storage_key for p in self.photos if p.photo_type == "room"],
+            inspiration_photo_urls=[
+                p.storage_key for p in self.photos if p.photo_type == "inspiration"
+            ],
             design_brief=self.design_brief,
-            current_image_url=self.current_image,
-            feedback=feedback,
-            revision_history=self.revision_history,
+            chat_history_key=self.chat_history_key,
         )
+        if action_type == "annotation":
+            base.annotations = [
+                AnnotationRegion(**r) if isinstance(r, dict) else r for r in payload
+            ]
+        elif action_type == "feedback":
+            base.feedback = payload
+        else:
+            raise ValueError(f"Unknown edit action type: {action_type!r}")
+        return base
+
+    def _extract_instructions(self, action_type: str, payload: Any) -> list[str]:
+        if action_type == "annotation":
+            return [(r["instruction"] if isinstance(r, dict) else r.instruction) for r in payload]
+        if action_type == "feedback":
+            return [payload]
+        raise ValueError(f"Unknown edit action type: {action_type!r}")
 
     def _shopping_input(self) -> GenerateShoppingListInput:
         assert self.current_image is not None

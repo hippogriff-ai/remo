@@ -581,7 +581,7 @@ class TestSelectionEndpoints:
         state.revision_history = [
             RevisionRecord(
                 revision_number=1,
-                type="lasso",
+                type="annotation",
                 base_image_url="https://r2.example.com/base.png",
                 revised_image_url="https://r2.example.com/rev1.png",
             ),
@@ -734,18 +734,19 @@ class TestIterationEndpoints:
     """POST /api/v1/projects/{id}/iterate/*"""
 
     @pytest.mark.asyncio
-    async def test_lasso_edit(self, client, project_id):
-        """Lasso edit produces a revision and increments iteration count."""
+    async def test_annotation_edit(self, client, project_id):
+        """Annotation edit produces a revision and increments iteration count."""
         _mock_states[project_id].step = "iteration"
         _mock_states[project_id].current_image = "https://r2.example.com/base.png"
         resp = await client.post(
-            f"/api/v1/projects/{project_id}/iterate/lasso",
+            f"/api/v1/projects/{project_id}/iterate/annotate",
             json={
-                "regions": [
+                "annotations": [
                     {
                         "region_id": 1,
-                        "path_points": [[0.1, 0.2], [0.3, 0.4], [0.5, 0.6]],
-                        "action": "Replace",
+                        "center_x": 0.5,
+                        "center_y": 0.5,
+                        "radius": 0.1,
                         "instruction": "Replace the sofa with a modern sectional",
                     }
                 ]
@@ -756,34 +757,35 @@ class TestIterationEndpoints:
         body = state.json()
         assert body["iteration_count"] == 1
         assert len(body["revision_history"]) == 1
-        assert body["revision_history"][0]["type"] == "lasso"
+        assert body["revision_history"][0]["type"] == "annotation"
 
     @pytest.mark.asyncio
-    async def test_regenerate(self, client, project_id):
-        """Regenerate produces a revision with type 'regen'."""
+    async def test_text_feedback(self, client, project_id):
+        """Text feedback produces a revision with type 'feedback'."""
         _mock_states[project_id].step = "iteration"
         _mock_states[project_id].current_image = "https://r2.example.com/base.png"
         resp = await client.post(
-            f"/api/v1/projects/{project_id}/iterate/regenerate",
+            f"/api/v1/projects/{project_id}/iterate/feedback",
             json={"feedback": "Make it warmer and more cozy"},
         )
         assert resp.status_code == 200
         state = await client.get(f"/api/v1/projects/{project_id}")
         body = state.json()
         assert body["iteration_count"] == 1
-        assert body["revision_history"][0]["type"] == "regen"
+        assert body["revision_history"][0]["type"] == "feedback"
 
     @pytest.mark.asyncio
-    async def test_lasso_wrong_step_returns_409(self, client, project_id):
-        """Lasso edit at wrong step (photos) returns 409."""
+    async def test_annotate_wrong_step_returns_409(self, client, project_id):
+        """Annotation edit at wrong step (photos) returns 409."""
         resp = await client.post(
-            f"/api/v1/projects/{project_id}/iterate/lasso",
+            f"/api/v1/projects/{project_id}/iterate/annotate",
             json={
-                "regions": [
+                "annotations": [
                     {
                         "region_id": 1,
-                        "path_points": [[0.1, 0.2], [0.3, 0.4]],
-                        "action": "Replace",
+                        "center_x": 0.5,
+                        "center_y": 0.5,
+                        "radius": 0.1,
                         "instruction": "Replace the old furniture",
                     }
                 ]
@@ -793,48 +795,49 @@ class TestIterationEndpoints:
         assert resp.json()["error"] == "wrong_step"
 
     @pytest.mark.asyncio
-    async def test_regenerate_wrong_step_returns_409(self, client, project_id):
-        """Regenerate at wrong step (photos) returns 409."""
+    async def test_feedback_wrong_step_returns_409(self, client, project_id):
+        """Text feedback at wrong step (photos) returns 409."""
         resp = await client.post(
-            f"/api/v1/projects/{project_id}/iterate/regenerate",
+            f"/api/v1/projects/{project_id}/iterate/feedback",
             json={"feedback": "Make it warmer"},
         )
         assert resp.status_code == 409
         assert resp.json()["error"] == "wrong_step"
 
     @pytest.mark.asyncio
-    async def test_missing_regenerate_feedback_returns_422(self, client, project_id):
+    async def test_missing_feedback_returns_422(self, client, project_id):
         """Missing feedback field returns 422 validation error."""
         _mock_states[project_id].step = "iteration"
         resp = await client.post(
-            f"/api/v1/projects/{project_id}/iterate/regenerate",
+            f"/api/v1/projects/{project_id}/iterate/feedback",
             json={},
         )
         assert resp.status_code == 422
         assert resp.json()["error"] == "validation_error"
 
     @pytest.mark.asyncio
-    async def test_lasso_empty_regions_returns_422(self, client, project_id):
-        """Empty regions array violates min_length=1 constraint."""
+    async def test_annotate_empty_annotations_returns_422(self, client, project_id):
+        """Empty annotations array violates min_length=1 constraint."""
         _mock_states[project_id].step = "iteration"
         resp = await client.post(
-            f"/api/v1/projects/{project_id}/iterate/lasso",
-            json={"regions": []},
+            f"/api/v1/projects/{project_id}/iterate/annotate",
+            json={"annotations": []},
         )
         assert resp.status_code == 422
 
     @pytest.mark.asyncio
-    async def test_lasso_short_instruction_returns_422(self, client, project_id):
+    async def test_annotate_short_instruction_returns_422(self, client, project_id):
         """Instruction below min_length=10 returns 422."""
         _mock_states[project_id].step = "iteration"
         resp = await client.post(
-            f"/api/v1/projects/{project_id}/iterate/lasso",
+            f"/api/v1/projects/{project_id}/iterate/annotate",
             json={
-                "regions": [
+                "annotations": [
                     {
                         "region_id": 1,
-                        "path_points": [[0.1, 0.2], [0.3, 0.4]],
-                        "action": "Replace",
+                        "center_x": 0.5,
+                        "center_y": 0.5,
+                        "radius": 0.1,
                         "instruction": "short",
                     }
                 ]
@@ -843,18 +846,21 @@ class TestIterationEndpoints:
         assert resp.status_code == 422
 
     @pytest.mark.asyncio
-    async def test_lasso_too_many_regions_returns_422(self, client, project_id):
-        """More than 3 regions violates max_length=3 constraint."""
+    async def test_annotate_too_many_annotations_returns_422(self, client, project_id):
+        """More than 3 annotations violates max_length=3 constraint."""
         _mock_states[project_id].step = "iteration"
-        region = {
+        annotation = {
             "region_id": 1,
-            "path_points": [[0.1, 0.2], [0.3, 0.4]],
-            "action": "Replace",
+            "center_x": 0.5,
+            "center_y": 0.5,
+            "radius": 0.1,
             "instruction": "Replace this furniture piece",
         }
         resp = await client.post(
-            f"/api/v1/projects/{project_id}/iterate/lasso",
-            json={"regions": [region, region, region, region]},  # 4 > max_length=3
+            f"/api/v1/projects/{project_id}/iterate/annotate",
+            json={
+                "annotations": [annotation, annotation, annotation, annotation],  # 4 > max 3
+            },
         )
         assert resp.status_code == 422
 
@@ -888,15 +894,16 @@ class TestIterationEndpoints:
         option_image = body["generated_options"][0]["image_url"]
         assert body["current_image"] == option_image
 
-        # Lasso edit → current_image updates to revision 1
+        # Annotation edit → current_image updates to revision 1
         await client.post(
-            f"/api/v1/projects/{project_id}/iterate/lasso",
+            f"/api/v1/projects/{project_id}/iterate/annotate",
             json={
-                "regions": [
+                "annotations": [
                     {
                         "region_id": 1,
-                        "path_points": [[0.1, 0.2], [0.3, 0.4]],
-                        "action": "Replace",
+                        "center_x": 0.5,
+                        "center_y": 0.5,
+                        "radius": 0.1,
                         "instruction": "Replace the old furniture",
                     }
                 ],
@@ -907,9 +914,9 @@ class TestIterationEndpoints:
         assert body["current_image"] == rev1_image
         assert body["current_image"] != option_image
 
-        # Regen → current_image updates to revision 2
+        # Text feedback → current_image updates to revision 2
         await client.post(
-            f"/api/v1/projects/{project_id}/iterate/regenerate",
+            f"/api/v1/projects/{project_id}/iterate/feedback",
             json={"feedback": "Make it brighter"},
         )
         body = (await client.get(f"/api/v1/projects/{project_id}")).json()
@@ -928,7 +935,7 @@ class TestIterationEndpoints:
 
         for i in range(5):
             resp = await client.post(
-                f"/api/v1/projects/{project_id}/iterate/regenerate",
+                f"/api/v1/projects/{project_id}/iterate/feedback",
                 json={"feedback": f"Iteration {i + 1} feedback"},
             )
             assert resp.status_code == 200
@@ -948,13 +955,14 @@ class TestIterationEndpoints:
         # Do 5 iterations (transitions to approval)
         for i in range(5):
             await client.post(
-                f"/api/v1/projects/{project_id}/iterate/lasso",
+                f"/api/v1/projects/{project_id}/iterate/annotate",
                 json={
-                    "regions": [
+                    "annotations": [
                         {
                             "region_id": 1,
-                            "path_points": [[0.1, 0.2], [0.3, 0.4], [0.5, 0.6]],
-                            "action": "Replace",
+                            "center_x": 0.5,
+                            "center_y": 0.5,
+                            "radius": 0.1,
                             "instruction": f"Iteration {i + 1} replace the furniture",
                         }
                     ]
@@ -963,13 +971,14 @@ class TestIterationEndpoints:
 
         # 6th iteration should fail (step is now "approval", not "iteration")
         resp = await client.post(
-            f"/api/v1/projects/{project_id}/iterate/lasso",
+            f"/api/v1/projects/{project_id}/iterate/annotate",
             json={
-                "regions": [
+                "annotations": [
                     {
                         "region_id": 1,
-                        "path_points": [[0.1, 0.2], [0.3, 0.4], [0.5, 0.6]],
-                        "action": "Replace",
+                        "center_x": 0.5,
+                        "center_y": 0.5,
+                        "radius": 0.1,
                         "instruction": "This should be blocked by iteration cap",
                     }
                 ]
@@ -1232,16 +1241,17 @@ class TestNotFoundOnAllEndpoints:
         assert resp.status_code == 404
 
     @pytest.mark.asyncio
-    async def test_lasso_edit_returns_404(self, client):
-        """Lasso edit on nonexistent project returns 404."""
+    async def test_annotate_returns_404(self, client):
+        """Annotation edit on nonexistent project returns 404."""
         resp = await client.post(
-            f"/api/v1/projects/{self._FAKE_ID}/iterate/lasso",
+            f"/api/v1/projects/{self._FAKE_ID}/iterate/annotate",
             json={
-                "regions": [
+                "annotations": [
                     {
                         "region_id": 1,
-                        "path_points": [[0.1, 0.1], [0.9, 0.9]],
-                        "action": "Replace",
+                        "center_x": 0.5,
+                        "center_y": 0.5,
+                        "radius": 0.1,
                         "instruction": "Replace the old couch with something modern",
                     }
                 ]
@@ -1250,10 +1260,10 @@ class TestNotFoundOnAllEndpoints:
         assert resp.status_code == 404
 
     @pytest.mark.asyncio
-    async def test_regenerate_returns_404(self, client):
-        """Regenerate on nonexistent project returns 404."""
+    async def test_feedback_returns_404(self, client):
+        """Text feedback on nonexistent project returns 404."""
         resp = await client.post(
-            f"/api/v1/projects/{self._FAKE_ID}/iterate/regenerate",
+            f"/api/v1/projects/{self._FAKE_ID}/iterate/feedback",
             json={"feedback": "Make it brighter"},
         )
         assert resp.status_code == 404
@@ -1390,15 +1400,16 @@ class TestFullFlow:
         # 7. Select option 0
         await client.post(f"/api/v1/projects/{pid}/select", json={"index": 0})
 
-        # 8. Lasso edit
+        # 8. Annotation edit
         await client.post(
-            f"/api/v1/projects/{pid}/iterate/lasso",
+            f"/api/v1/projects/{pid}/iterate/annotate",
             json={
-                "regions": [
+                "annotations": [
                     {
                         "region_id": 1,
-                        "path_points": [[0.1, 0.2], [0.3, 0.4]],
-                        "action": "Replace",
+                        "center_x": 0.5,
+                        "center_y": 0.5,
+                        "radius": 0.1,
                         "instruction": "Replace the old coffee table",
                     }
                 ]

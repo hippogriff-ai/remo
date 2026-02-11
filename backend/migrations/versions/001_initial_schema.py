@@ -126,7 +126,9 @@ def upgrade() -> None:
         ),
     )
     op.create_index(
-        "idx_generated_images_project", "generated_images", ["project_id", "type"],
+        "idx_generated_images_project",
+        "generated_images",
+        ["project_id", "type"],
     )
 
     # --- revisions ---
@@ -162,12 +164,14 @@ def upgrade() -> None:
         ),
     )
     op.create_index(
-        "idx_revisions_project", "revisions", ["project_id", "revision_number"],
+        "idx_revisions_project",
+        "revisions",
+        ["project_id", "revision_number"],
     )
 
-    # --- lasso_regions ---
+    # --- edit_regions ---
     op.create_table(
-        "lasso_regions",
+        "edit_regions",
         sa.Column("id", UUID(as_uuid=True), primary_key=True),
         sa.Column(
             "revision_id",
@@ -176,11 +180,9 @@ def upgrade() -> None:
             nullable=False,
         ),
         sa.Column("region_number", sa.Integer(), nullable=False),
-        sa.Column("path_points", JSONB(), nullable=False),
-        sa.Column("action", sa.String(50), nullable=False),
+        sa.Column("type", sa.String(20), nullable=False),
+        sa.Column("region_data", JSONB(), nullable=True),
         sa.Column("instruction", sa.Text(), nullable=False),
-        sa.Column("avoid_tokens", JSONB(), nullable=True),
-        sa.Column("style_nudges", JSONB(), nullable=True),
     )
 
     # --- shopping_lists ---
@@ -232,14 +234,16 @@ def upgrade() -> None:
         sa.Column("dimensions", sa.String(100), nullable=True),
     )
     op.create_index(
-        "idx_product_matches_list", "product_matches", ["shopping_list_id"],
+        "idx_product_matches_list",
+        "product_matches",
+        ["shopping_list_id"],
     )
 
 
 def downgrade() -> None:
     op.drop_table("product_matches")
     op.drop_table("shopping_lists")
-    op.drop_table("lasso_regions")
+    op.drop_table("edit_regions")
     op.drop_table("revisions")
     op.drop_table("generated_images")
     op.drop_table("design_briefs")

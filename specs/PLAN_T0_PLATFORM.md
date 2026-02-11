@@ -57,8 +57,7 @@
                         │  Activities:              │
                         │   ├── run_intake_chat    │ → Claude Opus 4.6
                         │   ├── generate_designs   │ → Gemini 3 Pro Image
-                        │   ├── generate_inpaint   │ → Gemini 3 Pro Image
-                        │   ├── generate_regen     │ → Gemini 3 Pro Image
+                        │   ├── edit_design        │ → Gemini 3 Pro Image (multi-turn chat)
                         │   ├── generate_shopping  │ → Claude + Exa
                         │   └── purge_project      │ → R2 + DB cleanup
                         └──┬──────┬──────┬─────────┘
@@ -146,13 +145,12 @@ remo/
 
 ### Shared Files
 
-- `backend/app/utils/image.py` — shared with T2 (mask rendering, image processing)
-
 ### Files T0 Does NOT Own
 
 - `backend/app/activities/generate.py` — T2
-- `backend/app/activities/inpaint.py` — T2
-- `backend/app/activities/regen.py` — T2
+- `backend/app/activities/edit.py` — T2
+- `backend/app/utils/image.py` — T2 (annotation drawing utility)
+- `backend/app/utils/gemini_chat.py` — T2 (Gemini chat session manager)
 - `backend/app/activities/intake.py` — T3
 - `backend/app/activities/shopping.py` — T3
 - `backend/app/prompts/` — T2/T3
@@ -309,18 +307,14 @@ class DesignProjectWorkflow:
 
             action_type, payload = self._action_queue.pop(0)
             try:
-                if action_type == "lasso":
-                    result = await workflow.execute_activity(
-                        generate_inpaint, args=[self._inpaint_context(payload)],
-                        start_to_close_timeout=timedelta(minutes=3),
-                        retry_policy=RetryPolicy(maximum_attempts=2)
-                    )
-                elif action_type == "regen":
-                    result = await workflow.execute_activity(
-                        generate_regen, args=[self._regen_context(payload)],
-                        start_to_close_timeout=timedelta(minutes=3),
-                        retry_policy=RetryPolicy(maximum_attempts=2)
-                    )
+                # Both annotation edits and text feedback use the same
+                # edit_design activity (multi-turn Gemini chat)
+                result = await workflow.execute_activity(
+                    edit_design, args=[self._edit_context(action_type, payload)],
+                    start_to_close_timeout=timedelta(minutes=3),
+                    retry_policy=RetryPolicy(maximum_attempts=2)
+                )
+                self.chat_history_key = result.chat_history_key
                 self.current_image = result.revised_image_url
                 self.iteration_count += 1
                 self.revision_history.append(result)
@@ -394,12 +388,12 @@ class DesignProjectWorkflow:
         self._restart_requested = True
 
     @workflow.signal
-    async def submit_lasso_edit(self, edit: LassoEdit):
-        self._action_queue.append(("lasso", edit))  # FIX: queue pattern
+    async def submit_annotation_edit(self, edit: AnnotationEdit):
+        self._action_queue.append(("annotation", edit))  # FIX: queue pattern
 
     @workflow.signal
-    async def submit_regenerate(self, feedback: str):
-        self._action_queue.append(("regen", feedback))  # FIX: queue pattern
+    async def submit_text_feedback(self, feedback: str):
+        self._action_queue.append(("feedback", feedback))  # FIX: queue pattern
 
     @workflow.signal
     async def approve_design(self):
@@ -426,6 +420,7 @@ class DesignProjectWorkflow:
             current_image=self.current_image,
             revision_history=self.revision_history,
             iteration_count=self.iteration_count,
+            chat_history_key=self.chat_history_key,
             shopping_list=self.shopping_list,
             approved=self.approved,
             error=self.error,                      # NEW: error state
@@ -438,7 +433,7 @@ class DesignProjectWorkflow:
 3. Added 48h abandonment timeout at every wait point via `_wait_with_abandonment`
 4. Added `start_over` signal (required by product spec Section 4.6)
 5. Added `cancel_project` signal
-6. Separated `generate_inpaint` and `generate_regen` activities (different input contracts)
+6. Unified `edit_design` activity handles both annotation edits and text feedback (multi-turn Gemini chat)
 7. Used queue pattern for edit actions (prevents race condition)
 8. Added error state tracking and `retry_failed_step` signal
 9. Added `WorkflowError` to query response
@@ -454,8 +449,8 @@ class DesignProjectWorkflow:
 | **LidarScan** | `id`, `project_id` (FK CASCADE, UNIQUE), `storage_key`, `room_dimensions` (JSONB) |
 | **DesignBrief** | `id`, `project_id` (FK CASCADE, UNIQUE), `intake_mode`, `brief_data` (JSONB), `conversation_history` (JSONB) |
 | **GeneratedImage** | `id`, `project_id` (FK CASCADE), `type` (initial/revision/overlay), `storage_key`, `selected`, `is_final`, `generation_model` |
-| **Revision** | `id`, `project_id` (FK CASCADE), `revision_number` (1-5), `type` (lasso/regen), `base_image_id` (FK), `result_image_id` (FK), `edit_payload` (JSONB) |
-| **LassoRegion** | `id`, `revision_id` (FK CASCADE), `region_number` (1-3), `path_points` (JSONB, normalized 0-1), `action`, `instruction`, `avoid_tokens`, `style_nudges` |
+| **Revision** | `id`, `project_id` (FK CASCADE), `revision_number` (1-5), `type` (annotation/feedback), `base_image_id` (FK), `result_image_id` (FK), `edit_payload` (JSONB) |
+| **AnnotationRegion** | `id`, `revision_id` (FK CASCADE), `region_number` (1-3), `center_x` (FLOAT, 0-1), `center_y` (FLOAT, 0-1), `radius` (FLOAT, 0-1), `instruction` |
 | **ShoppingList** | `id`, `project_id` (FK CASCADE, UNIQUE), `generated_image_id` (FK), `total_estimated_cost_cents` (INT) |
 | **ProductMatch** | `id`, `shopping_list_id` (FK CASCADE), `category_group`, `product_name`, `retailer`, `price_cents` (INT), `product_url`, `image_url`, `confidence_score`, `why_matched`, `fit_status`, `fit_detail` |
 
@@ -488,6 +483,7 @@ Bucket: remo-assets (dev: remo-assets-dev)
   generated/option_0.png, option_1.png
   generated/revision_1.png, revision_1_overlay.png ...
   generated/final.png
+  gemini_chat_history.json               # serialized Gemini chat session
 ```
 
 **R2 lifecycle rule: 120h (5 days)** — safety net behind Temporal-driven purge. Set to 120h (not 72h) to prevent premature deletion of early-uploaded photos in long-running projects.
@@ -511,8 +507,8 @@ Bucket: remo-assets (dev: remo-assets-dev)
 | `POST` | `/api/v1/projects/{id}/intake/skip` | Signal skip_intake | 200 |
 | `POST` | `/api/v1/projects/{id}/select` | Signal select_option | 200 |
 | `POST` | `/api/v1/projects/{id}/start-over` | Signal start_over | 200 |
-| `POST` | `/api/v1/projects/{id}/iterate/lasso` | Signal submit_lasso_edit | 200 |
-| `POST` | `/api/v1/projects/{id}/iterate/regenerate` | Signal submit_regenerate | 200 |
+| `POST` | `/api/v1/projects/{id}/iterate/annotate` | Signal submit_annotation_edit | 200 |
+| `POST` | `/api/v1/projects/{id}/iterate/feedback` | Signal submit_text_feedback | 200 |
 | `POST` | `/api/v1/projects/{id}/approve` | Signal approve_design | 200 |
 | `POST` | `/api/v1/projects/{id}/retry` | Signal retry_failed_step | 200 |
 | `GET` | `/health` | Health check | `{ postgres, temporal, r2 }` |
@@ -600,13 +596,12 @@ class RoomDimensions(BaseModel):
     walls: list[dict] = []     # JSONB-friendly
     openings: list[dict] = []  # doors, windows
 
-class LassoRegion(BaseModel):
+class AnnotationRegion(BaseModel):
     region_id: int                       # 1-3
-    path_points: list[tuple[float, float]]  # normalized 0-1
-    action: str                          # Replace, Remove, Change, Resize, Reposition
+    center_x: float                      # normalized 0-1
+    center_y: float                      # normalized 0-1
+    radius: float                        # normalized 0-1
     instruction: str                     # min 10 chars
-    avoid_tokens: list[str] = []
-    style_nudges: list[str] = []
 
 class DesignOption(BaseModel):
     image_url: str
@@ -645,9 +640,10 @@ class WorkflowError(BaseModel):
 
 class RevisionRecord(BaseModel):
     revision_number: int
-    type: str                            # "lasso" or "regen"
+    type: str                            # "annotation" or "feedback"
     base_image_url: str
     revised_image_url: str
+    instructions: list[str] = []         # annotation instructions or text feedback
 
 # === Activity Input/Output ===
 class GenerateDesignsInput(BaseModel):
@@ -660,22 +656,19 @@ class GenerateDesignsInput(BaseModel):
 class GenerateDesignsOutput(BaseModel):
     options: list[DesignOption]          # exactly 2
 
-class GenerateInpaintInput(BaseModel):
+class EditDesignInput(BaseModel):
+    project_id: str
     base_image_url: str
-    regions: list[LassoRegion]           # 1-3 regions
-
-class GenerateInpaintOutput(BaseModel):
-    revised_image_url: str
-
-class GenerateRegenInput(BaseModel):
-    room_photo_urls: list[str]
+    room_photo_urls: list[str] = []
+    inspiration_photo_urls: list[str] = []
     design_brief: DesignBrief | None = None
-    current_image_url: str
-    feedback: str
-    revision_history: list[RevisionRecord] = []
+    annotations: list[AnnotationRegion] = []  # empty for text-only feedback
+    feedback: str | None = None               # text feedback (optional)
+    chat_history_key: str | None = None       # None = first edit (bootstraps chat)
 
-class GenerateRegenOutput(BaseModel):
+class EditDesignOutput(BaseModel):
     revised_image_url: str
+    chat_history_key: str                     # R2 key for serialized Gemini chat
 
 class GenerateShoppingListInput(BaseModel):
     design_image_url: str
@@ -784,9 +777,9 @@ T0 leads integration in P2. The strategy is **incremental, not big-bang** — wi
 - T1 points iOS at real API
 - TEST: Upload photos -> get 2 real generated designs
 
-**Step 2**: Wire `intake_chat` + `generate_inpaint` + `generate_regen`
-- T1 tests real intake + lasso -> inpaint flow
-- T1 builds multi-region lasso
+**Step 2**: Wire `intake_chat` + `edit_design`
+- T1 tests real intake + annotation -> edit flow
+- T1 polishes annotation tool
 - TEST: Full flow through iteration with real AI
 
 **Step 3**: Wire shopping list pipeline + Temporal timers
