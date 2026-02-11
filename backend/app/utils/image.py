@@ -9,10 +9,13 @@ from __future__ import annotations
 import io
 from typing import TYPE_CHECKING
 
+import structlog
 from PIL import Image, ImageDraw, ImageFont
 
 if TYPE_CHECKING:
     from app.models.contracts import AnnotationRegion
+
+logger = structlog.get_logger()
 
 # Circle outline colors by region_id (1-indexed)
 REGION_COLORS = {
@@ -128,6 +131,7 @@ def _load_font(size: int) -> ImageFont.FreeTypeFont | ImageFont.ImageFont:
             return ImageFont.truetype(path, size)
         except OSError:
             continue
+    logger.warning("font_fallback_to_default", requested_size=size, tried_paths=font_paths)
     return ImageFont.load_default()
 
 

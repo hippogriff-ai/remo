@@ -1,8 +1,8 @@
 """edit_design activity — multi-turn annotation-based image editing.
 
-Handles both annotation-based edits (numbered circles on image) and
-text-only feedback. Uses a persistent Gemini chat session serialized
-to R2 between Temporal activity calls.
+Handles annotation-based edits (numbered circles on image), text-only
+feedback, or both combined in a single call. Uses a persistent Gemini
+chat session serialized to R2 between Temporal activity calls.
 
 First call: bootstraps a new chat with reference images + selected design.
 Subsequent calls: restores chat history from R2, continues the conversation.
@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
+    import httpx
     from google import genai
 
 import structlog
@@ -58,9 +59,20 @@ TEXT_FEEDBACK_TEMPLATE = (
     "Return a clean photorealistic image reflecting these changes."
 )
 
+# NOTE: Download helpers (_fetch_image, _download_image, _download_images)
+# are duplicated in generate.py — extract to shared utility in P2.
+
 
 def _load_prompt(name: str) -> str:
-    return (PROMPTS_DIR / name).read_text()
+    """Load a prompt template file, raising non-retryable error if missing."""
+    path = PROMPTS_DIR / name
+    try:
+        return path.read_text()
+    except FileNotFoundError as exc:
+        raise ApplicationError(
+            f"Prompt template not found: {name}",
+            non_retryable=True,
+        ) from exc
 
 
 def _build_edit_instructions(annotations: list[AnnotationRegion]) -> str:
@@ -73,42 +85,65 @@ def _build_edit_instructions(annotations: list[AnnotationRegion]) -> str:
     return "\n".join(lines)
 
 
+async def _fetch_image(client: httpx.AsyncClient, url: str) -> Image.Image:
+    """Fetch and validate a single image using the given HTTP client."""
+    import httpx
+
+    try:
+        response = await client.get(url, timeout=30)
+    except httpx.TimeoutException as exc:
+        raise ApplicationError(
+            f"Timeout downloading image: {url[:100]}",
+            non_retryable=False,
+        ) from exc
+    except httpx.RequestError as exc:
+        raise ApplicationError(
+            f"Network error downloading image: {url[:100]}: {type(exc).__name__}",
+            non_retryable=False,
+        ) from exc
+
+    if response.status_code >= 400:
+        is_client_error = response.status_code < 500
+        raise ApplicationError(
+            f"HTTP {response.status_code} downloading image: {url[:100]}",
+            non_retryable=is_client_error,
+        )
+
+    content_type = response.headers.get("content-type", "")
+    if content_type and not content_type.startswith("image/"):
+        raise ApplicationError(
+            f"Expected image content-type, got: {content_type}",
+            non_retryable=True,
+        )
+
+    try:
+        img = Image.open(io.BytesIO(response.content))
+        img.load()  # Force full decode to catch truncation
+    except Exception as exc:
+        raise ApplicationError(
+            f"Downloaded image is corrupt: {url[:100]}",
+            non_retryable=True,
+        ) from exc
+    return img
+
+
 async def _download_image(url: str) -> Image.Image:
     """Download an image from a URL."""
     import httpx
 
     async with httpx.AsyncClient() as client:
-        try:
-            response = await client.get(url, timeout=30)
-        except httpx.TimeoutException as exc:
-            raise ApplicationError(
-                f"Timeout downloading image: {url[:100]}",
-                non_retryable=False,
-            ) from exc
-
-        if response.status_code >= 400:
-            is_client_error = response.status_code < 500
-            raise ApplicationError(
-                f"HTTP {response.status_code} downloading image: {url[:100]}",
-                non_retryable=is_client_error,
-            )
-
-        content_type = response.headers.get("content-type", "")
-        if content_type and not content_type.startswith("image/"):
-            raise ApplicationError(
-                f"Expected image content-type, got: {content_type}",
-                non_retryable=True,
-            )
-
-        return Image.open(io.BytesIO(response.content))
+        return await _fetch_image(client, url)
 
 
 async def _download_images(urls: list[str]) -> list[Image.Image]:
-    """Download multiple images concurrently."""
+    """Download multiple images concurrently with a shared HTTP client."""
     if not urls:
         return []
-    tasks = [_download_image(url) for url in urls]
-    return await asyncio.gather(*tasks)
+    import httpx
+
+    async with httpx.AsyncClient() as client:
+        tasks = [_fetch_image(client, url) for url in urls]
+        return await asyncio.gather(*tasks)
 
 
 def _upload_image(image: Image.Image, project_id: str) -> str:
@@ -131,7 +166,7 @@ async def _bootstrap_chat(
 ) -> tuple[genai.chats.Chat, Image.Image | None]:
     """Bootstrap a new chat session with context images.
 
-    Returns (chat object, first edit result or None).
+    Returns (chat object, generated image or None if Gemini returned text-only).
     """
     client = get_client()
 
@@ -141,7 +176,7 @@ async def _bootstrap_chat(
         _download_images(input.inspiration_photo_urls),
     )
 
-    # Create chat and send context
+    # Create chat and send context (sync SDK call in thread pool)
     chat = create_chat(client)
 
     # Turn 1: Reference images + selected design + context
@@ -153,7 +188,7 @@ async def _bootstrap_chat(
     context_parts.append(base_image)
     context_parts.append(CONTEXT_PROMPT)
 
-    chat.send_message(context_parts)
+    await asyncio.to_thread(chat.send_message, context_parts)
     logger.info("edit_bootstrap_context_sent", project_id=input.project_id)
 
     # Turn 2: Send the actual edit (supports annotations, feedback, or both)
@@ -175,16 +210,21 @@ async def _bootstrap_chat(
         else:
             edit_parts.append(feedback_prompt)
 
-    if edit_parts:
-        response2 = chat.send_message(edit_parts)
-        result_image = extract_image(response2)
+    if not edit_parts:
+        raise ApplicationError(
+            "No annotations or feedback provided for bootstrap",
+            non_retryable=True,
+        )
 
-        if result_image is None:
-            response2 = chat.send_message(
-                "Please generate the edited room image now. "
-                "Remove ALL annotation circles and markers."
-            )
-            result_image = extract_image(response2)
+    response2 = await asyncio.to_thread(chat.send_message, edit_parts)
+    result_image = extract_image(response2)
+
+    if result_image is None:
+        response2 = await asyncio.to_thread(
+            chat.send_message,
+            "Please generate the edited room image now. Remove ALL annotation circles and markers.",
+        )
+        result_image = extract_image(response2)
 
     return chat, result_image
 
@@ -200,7 +240,8 @@ async def _continue_chat(
     from google.genai import types as gtypes
 
     client = get_client()
-    history = restore_from_r2(input.project_id)
+    # Sync R2 download in thread pool
+    history = await asyncio.to_thread(restore_from_r2, input.project_id)
 
     # Build message parts (supports annotations, feedback, or both)
     message_parts: list = []
@@ -224,7 +265,8 @@ async def _continue_chat(
             non_retryable=True,
         )
 
-    response = continue_chat(history, message_parts, client)
+    # Sync Gemini call in thread pool
+    response = await asyncio.to_thread(continue_chat, history, message_parts, client)
     result_image = extract_image(response)
 
     # Build updated history: history + user turn + model response
@@ -244,10 +286,17 @@ async def _continue_chat(
     model_content = response_to_content(response)
     if model_content:
         updated_history.append(model_content)
+    else:
+        logger.warning(
+            "gemini_model_response_empty",
+            project_id=input.project_id,
+            history_len=len(updated_history),
+        )
 
     if result_image is None:
         # Retry with explicit request
-        response = continue_chat(
+        response = await asyncio.to_thread(
+            continue_chat,
             updated_history,
             ["Please generate the edited room image now. Remove all annotations."],
             client,
@@ -295,9 +344,9 @@ async def edit_design(input: EditDesignInput) -> EditDesignOutput:
                     non_retryable=False,
                 )
 
-            # Upload result and serialize history
-            revised_url = _upload_image(result_image, input.project_id)
-            history_key = serialize_to_r2(chat, input.project_id)
+            # Upload result and serialize history (sync calls in thread pool)
+            revised_url = await asyncio.to_thread(_upload_image, result_image, input.project_id)
+            history_key = await asyncio.to_thread(serialize_to_r2, chat, input.project_id)
 
         else:
             # Subsequent call: continue from R2 history
@@ -309,11 +358,13 @@ async def edit_design(input: EditDesignInput) -> EditDesignOutput:
                     non_retryable=False,
                 )
 
-            # Upload result
-            revised_url = _upload_image(result_image, input.project_id)
+            # Upload result (sync call in thread pool)
+            revised_url = await asyncio.to_thread(_upload_image, result_image, input.project_id)
 
             # Serialize updated history back to R2 using shared helper
-            history_key = serialize_contents_to_r2(updated_history, input.project_id)
+            history_key = await asyncio.to_thread(
+                serialize_contents_to_r2, updated_history, input.project_id
+            )
 
         return EditDesignOutput(
             revised_image_url=revised_url,
@@ -323,9 +374,16 @@ async def edit_design(input: EditDesignInput) -> EditDesignOutput:
     except ApplicationError:
         raise
     except Exception as e:
+        error_type = type(e).__name__
         error_msg = str(e)
 
-        if "429" in error_msg or "RESOURCE_EXHAUSTED" in error_msg:
+        # TODO: Catch typed google.genai exceptions when SDK stabilizes
+        is_rate_limit = (
+            "429" in error_msg
+            or "RESOURCE_EXHAUSTED" in error_msg
+            or "ResourceExhausted" in error_type
+        )
+        if is_rate_limit:
             raise ApplicationError(
                 "Gemini rate limited",
                 non_retryable=False,
@@ -344,6 +402,6 @@ async def edit_design(input: EditDesignInput) -> EditDesignOutput:
             ) from e
 
         raise ApplicationError(
-            f"Edit failed: {type(e).__name__}: {error_msg[:200]}",
+            f"Edit failed: {error_type}: {error_msg[:200]}",
             non_retryable=False,
         ) from e

@@ -357,10 +357,11 @@ class TestRestoreFromR2:
         assert contents[0].role == "user"
         assert contents[0].parts[0].text == "hello"
 
-    def test_restore_not_found_raises_value_error(self):
+    def test_restore_not_found_raises_application_error(self):
         from unittest.mock import patch
 
         from botocore.exceptions import ClientError
+        from temporalio.exceptions import ApplicationError
 
         from app.utils.gemini_chat import restore_from_r2
 
@@ -372,12 +373,14 @@ class TestRestoreFromR2:
 
         with (
             patch("app.utils.r2._get_client", return_value=mock_r2),
-            pytest.raises(ValueError, match="not found"),
+            pytest.raises(ApplicationError, match="not found"),
         ):
             restore_from_r2("proj-missing")
 
-    def test_restore_corrupt_json_raises_value_error(self):
+    def test_restore_corrupt_json_raises_application_error(self):
         from unittest.mock import patch
+
+        from temporalio.exceptions import ApplicationError
 
         from app.utils.gemini_chat import restore_from_r2
 
@@ -388,7 +391,7 @@ class TestRestoreFromR2:
 
         with (
             patch("app.utils.r2._get_client", return_value=mock_r2),
-            pytest.raises(ValueError, match="corrupted"),
+            pytest.raises(ApplicationError, match="corrupted"),
         ):
             restore_from_r2("proj-corrupt")
 

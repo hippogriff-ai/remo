@@ -11,6 +11,10 @@ import asyncio
 import io
 import re
 from pathlib import Path
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    import httpx
 
 import structlog
 from PIL import Image
@@ -36,9 +40,20 @@ logger = structlog.get_logger()
 
 PROMPTS_DIR = Path(__file__).parent.parent.parent / "prompts"
 
+# NOTE: Download helpers (_fetch_image, _download_image, _download_images)
+# are duplicated in edit.py — extract to shared utility in P2.
+
 
 def _load_prompt(name: str) -> str:
-    return (PROMPTS_DIR / name).read_text()
+    """Load a prompt template file, raising non-retryable error if missing."""
+    path = PROMPTS_DIR / name
+    try:
+        return path.read_text()
+    except FileNotFoundError as exc:
+        raise ApplicationError(
+            f"Prompt template not found: {name}",
+            non_retryable=True,
+        ) from exc
 
 
 def _build_generation_prompt(
@@ -82,9 +97,10 @@ def _build_generation_prompt(
         notes = [f"  - Photo {n.photo_index}: {n.note}" for n in inspiration_notes]
         brief_text += "\n\nInspiration notes:\n" + "\n".join(notes)
 
+    # Escape curly braces in user-provided text to prevent str.format() KeyError
     return template.format(
-        brief=brief_text,
-        keep_items=keep_items_text,
+        brief=brief_text.replace("{", "{{").replace("}", "}}"),
+        keep_items=keep_items_text.replace("{", "{{").replace("}", "}}"),
         room_preservation=preservation,
     )
 
@@ -93,7 +109,7 @@ _PROJECT_ID_RE = re.compile(r"projects/([a-zA-Z0-9_-]+)/")
 
 
 def _extract_project_id(urls: list[str]) -> str:
-    """Extract project_id from R2 storage keys like projects/{id}/..."""
+    """Extract project_id from R2 URLs containing the pattern projects/{id}/..."""
     for url in urls:
         match = _PROJECT_ID_RE.search(url)
         if match:
@@ -104,42 +120,65 @@ def _extract_project_id(urls: list[str]) -> str:
     )
 
 
+async def _fetch_image(client: httpx.AsyncClient, url: str) -> Image.Image:
+    """Fetch and validate a single image using the given HTTP client."""
+    import httpx
+
+    try:
+        response = await client.get(url, timeout=30)
+    except httpx.TimeoutException as exc:
+        raise ApplicationError(
+            f"Timeout downloading image: {url[:100]}",
+            non_retryable=False,
+        ) from exc
+    except httpx.RequestError as exc:
+        raise ApplicationError(
+            f"Network error downloading image: {url[:100]}: {type(exc).__name__}",
+            non_retryable=False,
+        ) from exc
+
+    if response.status_code >= 400:
+        is_client_error = response.status_code < 500
+        raise ApplicationError(
+            f"HTTP {response.status_code} downloading image: {url[:100]}",
+            non_retryable=is_client_error,
+        )
+
+    content_type = response.headers.get("content-type", "")
+    if content_type and not content_type.startswith("image/"):
+        raise ApplicationError(
+            f"Expected image content-type, got: {content_type}",
+            non_retryable=True,
+        )
+
+    try:
+        img = Image.open(io.BytesIO(response.content))
+        img.load()  # Force full decode to catch truncation
+    except Exception as exc:
+        raise ApplicationError(
+            f"Downloaded image is corrupt: {url[:100]}",
+            non_retryable=True,
+        ) from exc
+    return img
+
+
 async def _download_image(url: str) -> Image.Image:
-    """Download an image from a URL (R2 presigned or public)."""
+    """Download an image from a URL."""
     import httpx
 
     async with httpx.AsyncClient() as client:
-        try:
-            response = await client.get(url, timeout=30)
-        except httpx.TimeoutException as exc:
-            raise ApplicationError(
-                f"Timeout downloading image: {url[:100]}",
-                non_retryable=False,
-            ) from exc
-
-        if response.status_code >= 400:
-            is_client_error = response.status_code < 500
-            raise ApplicationError(
-                f"HTTP {response.status_code} downloading image: {url[:100]}",
-                non_retryable=is_client_error,
-            )
-
-        content_type = response.headers.get("content-type", "")
-        if content_type and not content_type.startswith("image/"):
-            raise ApplicationError(
-                f"Expected image content-type, got: {content_type}",
-                non_retryable=True,
-            )
-
-        return Image.open(io.BytesIO(response.content))
+        return await _fetch_image(client, url)
 
 
 async def _download_images(urls: list[str]) -> list[Image.Image]:
-    """Download multiple images concurrently."""
+    """Download multiple images concurrently with a shared HTTP client."""
     if not urls:
         return []
-    tasks = [_download_image(url) for url in urls]
-    return await asyncio.gather(*tasks)
+    import httpx
+
+    async with httpx.AsyncClient() as client:
+        tasks = [_fetch_image(client, url) for url in urls]
+        return await asyncio.gather(*tasks)
 
 
 def _upload_image(image: Image.Image, project_id: str, filename: str) -> str:
@@ -178,7 +217,9 @@ async def _generate_single_option(
         num_inspiration_images=len(inspiration_images),
     )
 
-    response = client.models.generate_content(
+    # Run sync Gemini call in thread pool to avoid blocking the event loop
+    response = await asyncio.to_thread(
+        client.models.generate_content,
         model=GEMINI_MODEL,
         contents=contents,
         config=IMAGE_CONFIG,
@@ -188,8 +229,14 @@ async def _generate_single_option(
 
     if result_image is None:
         # Retry once with explicit image request
-        logger.warning("gemini_no_image_response", option=option_index)
-        response = client.models.generate_content(
+        text_response = extract_text(response)
+        logger.warning(
+            "gemini_no_image_response",
+            option=option_index,
+            gemini_text=text_response[:300],
+        )
+        response = await asyncio.to_thread(
+            client.models.generate_content,
             model=GEMINI_MODEL,
             contents=contents + ["Please generate the room image now."],
             config=IMAGE_CONFIG,
@@ -215,7 +262,7 @@ async def generate_designs(input: GenerateDesignsInput) -> GenerateDesignsOutput
         num_inspiration_photos=len(input.inspiration_photo_urls),
     )
 
-    # Extract project_id from the R2 storage key pattern: projects/{id}/...
+    # Extract project_id from R2 URL path pattern: projects/{id}/...
     project_id = _extract_project_id(input.room_photo_urls)
 
     try:
@@ -240,9 +287,9 @@ async def generate_designs(input: GenerateDesignsInput) -> GenerateDesignsOutput
             _generate_single_option(prompt, room_images, inspiration_images, 1),
         )
 
-        # Upload to R2
-        url_0 = _upload_image(option_0, project_id, "option_0.png")
-        url_1 = _upload_image(option_1, project_id, "option_1.png")
+        # Upload to R2 (sync boto3 calls run in thread pool)
+        url_0 = await asyncio.to_thread(_upload_image, option_0, project_id, "option_0.png")
+        url_1 = await asyncio.to_thread(_upload_image, option_1, project_id, "option_1.png")
 
         return GenerateDesignsOutput(
             options=[
@@ -257,7 +304,13 @@ async def generate_designs(input: GenerateDesignsInput) -> GenerateDesignsOutput
         error_type = type(e).__name__
         error_msg = str(e)
 
-        if "429" in error_msg or "RESOURCE_EXHAUSTED" in error_msg:
+        # TODO: Catch typed google.genai exceptions when SDK stabilizes
+        is_rate_limit = (
+            "429" in error_msg
+            or "RESOURCE_EXHAUSTED" in error_msg
+            or "ResourceExhausted" in error_type
+        )
+        if is_rate_limit:
             raise ApplicationError(
                 "Gemini rate limited",
                 non_retryable=False,

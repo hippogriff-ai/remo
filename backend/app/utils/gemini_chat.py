@@ -3,7 +3,8 @@
 Handles creation, serialization to R2, and restoration of Gemini chat
 sessions. Chat history (including thought signatures and inline images)
 is persisted to R2 between Temporal activity calls so that each activity
-invocation is stateless and independently restartable.
+invocation is stateless and can reconstruct full chat context from
+persisted R2 state.
 """
 
 from __future__ import annotations
@@ -17,6 +18,7 @@ import structlog
 from google import genai
 from google.genai import types
 from PIL import Image
+from temporalio.exceptions import ApplicationError
 
 from app.config import settings
 
@@ -83,6 +85,12 @@ def _part_to_dict(part: types.Part) -> dict[str, Any]:
     # Preserve thought signatures (critical for Gemini 3 Pro multi-turn)
     if hasattr(part, "thought_signature") and part.thought_signature:
         result["thought_signature"] = part.thought_signature
+
+    if not result:
+        logger.warning(
+            "gemini_part_dropped_during_serialization",
+            part_type=type(part).__name__,
+        )
 
     return result
 
@@ -176,7 +184,7 @@ def restore_from_r2(project_id: str) -> list[types.Content]:
     """Download and deserialize chat history from R2.
 
     Returns the contents array ready for generate_content.
-    Raises ValueError if history is missing or corrupted.
+    Raises ApplicationError (non-retryable) if history is missing or corrupted.
     """
     from botocore.exceptions import ClientError
 
@@ -191,16 +199,30 @@ def restore_from_r2(project_id: str) -> list[types.Content]:
     except ClientError as e:
         error_code = e.response.get("Error", {}).get("Code", "Unknown")
         if error_code in ("NoSuchKey", "404"):
-            raise ValueError(f"Chat history not found for project {project_id}") from e
+            raise ApplicationError(
+                f"Chat history not found for project {project_id}",
+                non_retryable=True,
+            ) from e
         raise
 
     try:
         serialized = json.loads(json_bytes)
     except json.JSONDecodeError as e:
         logger.error("gemini_chat_json_corrupt", project_id=project_id, error=str(e))
-        raise ValueError(f"Chat history JSON corrupted for {project_id}") from e
+        raise ApplicationError(
+            f"Chat history JSON corrupted for {project_id}",
+            non_retryable=True,
+        ) from e
 
-    contents = deserialize_to_contents(serialized)
+    try:
+        contents = deserialize_to_contents(serialized)
+    except ValueError as e:
+        logger.error("gemini_chat_deserialization_failed", project_id=project_id, error=str(e))
+        raise ApplicationError(
+            f"Chat history data invalid for {project_id}: {e}",
+            non_retryable=True,
+        ) from e
+
     logger.info(
         "gemini_chat_restored",
         project_id=project_id,
@@ -228,6 +250,9 @@ def continue_chat(
 
     Since we can't inject history into a new Chat object, we reconstruct
     the full contents array and call generate_content directly.
+
+    new_message items can be strings, types.Part objects, or PIL Images
+    (auto-converted to inline PNG parts).
     """
     if client is None:
         client = get_client()
@@ -243,6 +268,11 @@ def continue_chat(
             user_parts.append(types.Part.from_bytes(data=buf.getvalue(), mime_type="image/png"))
         elif isinstance(item, types.Part):
             user_parts.append(item)
+        else:
+            logger.warning(
+                "gemini_chat_unexpected_part_type",
+                item_type=type(item).__name__,
+            )
 
     contents = list(history) + [types.Content(role="user", parts=user_parts)]
 
@@ -254,16 +284,30 @@ def continue_chat(
 
 
 def extract_image(response: types.GenerateContentResponse) -> Image.Image | None:
-    """Extract the first image from a Gemini response as PIL Image."""
+    """Extract the first image from a Gemini response as PIL Image.
+
+    Returns None if no image parts found. May raise if image data is corrupt.
+    """
     if not response.candidates:
         return None
     content = response.candidates[0].content
     if content is None or content.parts is None:
         return None
     for part in content.parts:
-        genai_img = part.as_image()
+        try:
+            genai_img = part.as_image()
+        except Exception:
+            logger.warning("gemini_part_as_image_failed", exc_info=True)
+            continue
         if genai_img is not None and genai_img.image_bytes is not None:
-            return Image.open(io.BytesIO(genai_img.image_bytes))
+            try:
+                return Image.open(io.BytesIO(genai_img.image_bytes))
+            except Exception:
+                logger.error(
+                    "gemini_image_decode_failed",
+                    image_bytes_len=len(genai_img.image_bytes),
+                )
+                raise
     return None
 
 
