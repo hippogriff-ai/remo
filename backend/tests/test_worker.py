@@ -218,3 +218,24 @@ class TestConfigureLogging:
         from app.logging import configure_logging
 
         configure_logging()
+
+    def test_log_level_respected(self, monkeypatch) -> None:
+        """LOG_LEVEL setting should control structlog filtering level."""
+        import structlog
+
+        monkeypatch.setenv("LOG_LEVEL", "ERROR")
+
+        from app.config import Settings
+
+        fresh_settings = Settings()
+        monkeypatch.setattr("app.logging.settings", fresh_settings)
+
+        from app.logging import configure_logging
+
+        configure_logging()
+
+        # Bind a logger to instantiate the wrapper class — its name
+        # encodes the filtering level (e.g. BoundLoggerFilteringAtError)
+        bound = structlog.get_logger().bind()
+        class_name = type(bound).__name__
+        assert "Error" in class_name, f"Expected filtering at ERROR, got {class_name}"

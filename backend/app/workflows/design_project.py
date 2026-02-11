@@ -207,12 +207,15 @@ class DesignProjectWorkflow:
 
             if self._restart_requested:
                 continue  # back to intake
-            break  # proceed to approval/shopping
 
-        # --- Phase: Approval ---
-        if not self.approved:
-            self.step = "approval"
-            await self._wait(lambda: self.approved)
+            # --- Phase: Approval ---
+            if not self.approved:
+                self.step = "approval"
+                await self._wait(lambda: self.approved or self._restart_requested)
+                if self._restart_requested:
+                    continue  # back to intake
+
+            break  # proceed to shopping
 
         # --- Phase: Shopping List ---
         self.step = "shopping"

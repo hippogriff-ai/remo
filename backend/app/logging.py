@@ -2,9 +2,19 @@
 
 from __future__ import annotations
 
+import logging
+
 import structlog
 
 from app.config import settings
+
+_LOG_LEVEL_MAP: dict[str, int] = {
+    "DEBUG": logging.DEBUG,
+    "INFO": logging.INFO,
+    "WARNING": logging.WARNING,
+    "ERROR": logging.ERROR,
+    "CRITICAL": logging.CRITICAL,
+}
 
 
 def configure_logging() -> None:
@@ -15,6 +25,8 @@ def configure_logging() -> None:
         else structlog.processors.JSONRenderer()
     )
 
+    level = _LOG_LEVEL_MAP.get(settings.log_level.upper(), logging.INFO)
+
     structlog.configure(
         processors=[
             structlog.contextvars.merge_contextvars,
@@ -22,7 +34,7 @@ def configure_logging() -> None:
             structlog.processors.TimeStamper(fmt="iso"),
             renderer,
         ],
-        wrapper_class=structlog.make_filtering_bound_logger(0),
+        wrapper_class=structlog.make_filtering_bound_logger(level),
         context_class=dict,
         logger_factory=structlog.PrintLoggerFactory(),
         cache_logger_on_first_use=True,

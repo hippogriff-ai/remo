@@ -1516,6 +1516,41 @@ class TestStartOver:
             assert state.approved is True
             assert state.step in ("shopping", "completed")
 
+    async def test_start_over_from_approval_restarts_at_intake(self, workflow_env, tq):
+        """Verifies start_over during approval phase returns workflow to intake.
+
+        When the user hits the 5-iteration cap and lands on the approval step,
+        they should be able to start over instead of being forced to approve.
+        The approval wait condition must observe _restart_requested.
+        """
+        async with Worker(
+            workflow_env.client,
+            task_queue=tq,
+            workflows=[DesignProjectWorkflow],
+            activities=ALL_ACTIVITIES,
+        ):
+            handle = await _start_workflow(workflow_env, tq)
+            await _advance_to_iteration(handle)
+
+            # Exhaust all 5 iteration rounds to reach approval
+            for i in range(5):
+                await handle.signal(DesignProjectWorkflow.submit_regenerate, f"change {i}")
+                await asyncio.sleep(0.5)
+
+            await asyncio.sleep(0.5)
+            state = await handle.query(DesignProjectWorkflow.get_state)
+            assert state.step == "approval"
+            assert state.approved is False
+
+            # Start over from approval
+            await handle.signal(DesignProjectWorkflow.start_over)
+            await asyncio.sleep(0.5)
+
+            state = await handle.query(DesignProjectWorkflow.get_state)
+            assert state.step == "intake"
+            assert state.approved is False
+            assert state.iteration_count == 0
+
 
 class TestSelectionValidation:
     """Tests for selection signal validation."""
