@@ -12,21 +12,21 @@ public final class MockWorkflowClient: WorkflowClientProtocol, @unchecked Sendab
         self.delay = delay
     }
 
-    private func simulateDelay() async {
-        try? await Task.sleep(for: delay)
+    private func simulateDelay() async throws {
+        try await Task.sleep(for: delay)
     }
 
     // MARK: - Project lifecycle
 
     public func createProject(deviceFingerprint: String, hasLidar: Bool) async throws -> String {
-        await simulateDelay()
+        try await simulateDelay()
         let id = UUID().uuidString
         states[id] = WorkflowState(step: "photos")
         return id
     }
 
     public func getState(projectId: String) async throws -> WorkflowState {
-        await simulateDelay()
+        try await simulateDelay()
         guard let state = states[projectId] else {
             throw APIError.httpError(
                 statusCode: 404,
@@ -37,7 +37,7 @@ public final class MockWorkflowClient: WorkflowClientProtocol, @unchecked Sendab
     }
 
     public func deleteProject(projectId: String) async throws {
-        await simulateDelay()
+        try await simulateDelay()
         states.removeValue(forKey: projectId)
         intakeMessages.removeValue(forKey: projectId)
     }
@@ -45,7 +45,7 @@ public final class MockWorkflowClient: WorkflowClientProtocol, @unchecked Sendab
     // MARK: - Photos
 
     public func uploadPhoto(projectId: String, imageData: Data, photoType: String) async throws -> PhotoUploadResponse {
-        await simulateDelay()
+        try await simulateDelay()
         guard var state = states[projectId] else { throw notFound() }
 
         let photoId = UUID().uuidString
@@ -71,7 +71,7 @@ public final class MockWorkflowClient: WorkflowClientProtocol, @unchecked Sendab
     // MARK: - Scan
 
     public func uploadScan(projectId: String, scanData: [String: Any]) async throws {
-        await simulateDelay()
+        try await simulateDelay()
         guard var state = states[projectId] else { throw notFound() }
         state.scanData = RemoModels.ScanData(
             storageKey: "projects/\(projectId)/lidar/scan.json",
@@ -82,7 +82,7 @@ public final class MockWorkflowClient: WorkflowClientProtocol, @unchecked Sendab
     }
 
     public func skipScan(projectId: String) async throws {
-        await simulateDelay()
+        try await simulateDelay()
         guard var state = states[projectId] else { throw notFound() }
         state.step = "intake"
         states[projectId] = state
@@ -91,7 +91,7 @@ public final class MockWorkflowClient: WorkflowClientProtocol, @unchecked Sendab
     // MARK: - Intake
 
     public func startIntake(projectId: String, mode: String) async throws -> IntakeChatOutput {
-        await simulateDelay()
+        try await simulateDelay()
         intakeMessages[projectId] = []
         return IntakeChatOutput(
             agentMessage: "Welcome! Let's design your perfect room. What type of room are we working with?",
@@ -105,7 +105,7 @@ public final class MockWorkflowClient: WorkflowClientProtocol, @unchecked Sendab
     }
 
     public func sendIntakeMessage(projectId: String, message: String) async throws -> IntakeChatOutput {
-        await simulateDelay()
+        try await simulateDelay()
         var messages = intakeMessages[projectId] ?? []
         messages.append(message)
         intakeMessages[projectId] = messages
@@ -140,7 +140,7 @@ public final class MockWorkflowClient: WorkflowClientProtocol, @unchecked Sendab
     }
 
     public func confirmIntake(projectId: String, brief: DesignBrief) async throws {
-        await simulateDelay()
+        try await simulateDelay()
         guard var state = states[projectId] else { throw notFound() }
         state.designBrief = brief
         state.generatedOptions = mockOptions(projectId: projectId)
@@ -149,7 +149,7 @@ public final class MockWorkflowClient: WorkflowClientProtocol, @unchecked Sendab
     }
 
     public func skipIntake(projectId: String) async throws {
-        await simulateDelay()
+        try await simulateDelay()
         guard var state = states[projectId] else { throw notFound() }
         state.generatedOptions = mockOptions(projectId: projectId)
         state.step = "selection"
@@ -159,7 +159,7 @@ public final class MockWorkflowClient: WorkflowClientProtocol, @unchecked Sendab
     // MARK: - Selection
 
     public func selectOption(projectId: String, index: Int) async throws {
-        await simulateDelay()
+        try await simulateDelay()
         guard var state = states[projectId] else { throw notFound() }
         state.selectedOption = index
         state.currentImage = state.generatedOptions[index].imageUrl
@@ -170,7 +170,7 @@ public final class MockWorkflowClient: WorkflowClientProtocol, @unchecked Sendab
     // MARK: - Iteration
 
     public func submitAnnotationEdit(projectId: String, annotations: [AnnotationRegion]) async throws {
-        try? await Task.sleep(for: .seconds(1)) // Simulate generation time
+        try await Task.sleep(for: .seconds(1)) // Simulate generation time
         guard var state = states[projectId] else { throw notFound() }
         let revisionNum = state.iterationCount + 1
         let revisedUrl = "https://r2.example.com/projects/\(projectId)/generated/revision_\(revisionNum).png"
@@ -189,7 +189,7 @@ public final class MockWorkflowClient: WorkflowClientProtocol, @unchecked Sendab
     }
 
     public func submitTextFeedback(projectId: String, feedback: String) async throws {
-        try? await Task.sleep(for: .seconds(1))
+        try await Task.sleep(for: .seconds(1))
         guard var state = states[projectId] else { throw notFound() }
         let revisionNum = state.iterationCount + 1
         let revisedUrl = "https://r2.example.com/projects/\(projectId)/generated/revision_\(revisionNum).png"
@@ -210,7 +210,7 @@ public final class MockWorkflowClient: WorkflowClientProtocol, @unchecked Sendab
     // MARK: - Approval & other
 
     public func approveDesign(projectId: String) async throws {
-        await simulateDelay()
+        try await simulateDelay()
         guard var state = states[projectId] else { throw notFound() }
         state.approved = true
         state.shoppingList = mockShoppingList()
@@ -219,7 +219,7 @@ public final class MockWorkflowClient: WorkflowClientProtocol, @unchecked Sendab
     }
 
     public func startOver(projectId: String) async throws {
-        await simulateDelay()
+        try await simulateDelay()
         guard var state = states[projectId] else { throw notFound() }
         state.generatedOptions = []
         state.selectedOption = nil
@@ -237,7 +237,7 @@ public final class MockWorkflowClient: WorkflowClientProtocol, @unchecked Sendab
     }
 
     public func retryFailedStep(projectId: String) async throws {
-        await simulateDelay()
+        try await simulateDelay()
         guard var state = states[projectId] else { throw notFound() }
         state.error = nil
         states[projectId] = state

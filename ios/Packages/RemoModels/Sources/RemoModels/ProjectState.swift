@@ -1,5 +1,8 @@
 import Foundation
 import Observation
+import OSLog
+
+private let logger = Logger(subsystem: "com.remo.app", category: "ProjectState")
 
 /// Central observable state for a single design project.
 /// Views observe this; the poller updates it from WorkflowState responses.
@@ -82,6 +85,8 @@ public final class ProjectState {
     public func apply(_ state: WorkflowState) {
         if let newStep = ProjectStep(rawValue: state.step) {
             self.step = newStep
+        } else {
+            logger.warning("Unknown workflow step from backend: '\(state.step)' — keeping current step '\(self.step.rawValue)'")
         }
         self.photos = state.photos
         self.scanData = state.scanData

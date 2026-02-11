@@ -52,10 +52,20 @@ public struct AnyCodable: Codable, Hashable, @unchecked Sendable {
     }
 
     public static func == (lhs: AnyCodable, rhs: AnyCodable) -> Bool {
-        String(describing: lhs.value) == String(describing: rhs.value)
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = .sortedKeys
+        guard let lhsData = try? encoder.encode(lhs),
+              let rhsData = try? encoder.encode(rhs) else {
+            return false
+        }
+        return lhsData == rhsData
     }
 
     public func hash(into hasher: inout Hasher) {
-        hasher.combine(String(describing: value))
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = .sortedKeys
+        if let data = try? encoder.encode(self) {
+            hasher.combine(data)
+        }
     }
 }

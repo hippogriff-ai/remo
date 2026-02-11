@@ -1,32 +1,3 @@
-import Foundation
-import RemoModels
-
-/// Polls GET /projects/{id} at a configurable interval.
-/// Cancel-safe: stops when the Task is cancelled (view disappears).
-actor PollingManager {
-    private let client: any WorkflowClientProtocol
-    private let interval: Duration
-
-    init(client: any WorkflowClientProtocol, interval: Duration = .seconds(2)) {
-        self.client = client
-        self.interval = interval
-    }
-
-    /// Polls until the step changes from `currentStep` or the task is cancelled.
-    /// Returns the new WorkflowState when a transition is detected.
-    func pollUntilStepChanges(projectId: String, currentStep: String) async throws -> WorkflowState {
-        while !Task.isCancelled {
-            try await Task.sleep(for: interval)
-            let state = try await client.getState(projectId: projectId)
-            if state.step != currentStep || state.error != nil {
-                return state
-            }
-        }
-        throw CancellationError()
-    }
-
-    /// Single poll — useful for manual refresh.
-    func poll(projectId: String) async throws -> WorkflowState {
-        try await client.getState(projectId: projectId)
-    }
-}
+// PollingManager has been moved to RemoNetworking package.
+// This file is kept for build compatibility — the app target imports RemoNetworking.
+// See: ios/Packages/RemoNetworking/Sources/RemoNetworking/PollingManager.swift

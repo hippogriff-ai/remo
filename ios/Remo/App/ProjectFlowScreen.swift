@@ -18,9 +18,9 @@ struct ProjectFlowScreen: View {
                 }
         }
         .onChange(of: projectState.step) { _, newStep in
-            // When the step advances, push the new screen
+            // Replace path with just the new step — workflow is linear, no backward navigation
             if path.last != newStep {
-                path.append(newStep)
+                path = [newStep]
             }
         }
         .overlay {
@@ -28,9 +28,16 @@ struct ProjectFlowScreen: View {
                 ErrorOverlay(error: error) {
                     Task {
                         guard let projectId = projectState.projectId else { return }
-                        try? await client.retryFailedStep(projectId: projectId)
-                        let state = try? await client.getState(projectId: projectId)
-                        if let state { projectState.apply(state) }
+                        do {
+                            try await client.retryFailedStep(projectId: projectId)
+                            let state = try await client.getState(projectId: projectId)
+                            projectState.apply(state)
+                        } catch is CancellationError {
+                            // Task cancelled (e.g., view disappeared) — do nothing
+                        } catch {
+                            // Retry itself failed — keep showing the error overlay
+                            // (projectState.error remains set)
+                        }
                     }
                 }
             }

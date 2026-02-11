@@ -23,14 +23,16 @@ public enum APIError: LocalizedError {
 
     public var isRetryable: Bool {
         switch self {
-        case .networkError:
-            return true
+        case .networkError(let urlError):
+            // Not retryable if the request was cancelled
+            return urlError.code != .cancelled
         case .httpError(let code, let response):
             return response.retryable || code >= 500
         case .decodingError:
             return false
-        case .unknown:
-            return true
+        case .unknown(let error):
+            // Don't retry cancellations
+            return !(error is CancellationError)
         }
     }
 }

@@ -2,9 +2,9 @@ import SwiftUI
 import RemoModels
 import RemoNetworking
 
-/// Loading screen shown while designs are being generated.
-/// Polls the backend every 2s until the step advances or an error occurs.
-public struct GeneratingScreen: View {
+/// Loading screen shown while the shopping list is being generated.
+/// Polls the backend every 2s until the step advances to "completed" or an error occurs.
+public struct ShoppingGeneratingScreen: View {
     @Bindable var projectState: ProjectState
     let client: any WorkflowClientProtocol
 
@@ -23,10 +23,10 @@ public struct GeneratingScreen: View {
                 .scaleEffect(1.5)
                 .padding()
 
-            Text("Creating your designs...")
+            Text("Building your shopping list...")
                 .font(.title3.bold())
 
-            Text("This usually takes 15-30 seconds.\nWe're generating 2 unique options for you.")
+            Text("Finding matching products and\nchecking availability.")
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
@@ -34,7 +34,7 @@ public struct GeneratingScreen: View {
             Spacer()
         }
         .padding()
-        .navigationTitle("Generating")
+        .navigationTitle("Shopping List")
         #if os(iOS)
         .navigationBarTitleDisplayMode(.inline)
         .navigationBarBackButtonHidden()
@@ -50,13 +50,12 @@ public struct GeneratingScreen: View {
             do {
                 let newState = try await poller.pollUntilStepChanges(
                     projectId: projectId,
-                    currentStep: ProjectStep.generation.rawValue
+                    currentStep: ProjectStep.shopping.rawValue
                 )
                 projectState.apply(newState)
             } catch is CancellationError {
                 // View disappeared — expected
             } catch {
-                // Network error during polling — set error so ErrorOverlay shows
                 projectState.error = WorkflowError(message: error.localizedDescription, retryable: true)
             }
         }
@@ -65,6 +64,6 @@ public struct GeneratingScreen: View {
 
 #Preview {
     NavigationStack {
-        GeneratingScreen(projectState: .preview(step: .generation), client: MockWorkflowClient(delay: .zero))
+        ShoppingGeneratingScreen(projectState: .preview(step: .shopping), client: MockWorkflowClient(delay: .zero))
     }
 }

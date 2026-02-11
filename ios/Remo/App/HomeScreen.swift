@@ -52,6 +52,9 @@ struct HomeScreen: View {
                     .disabled(isCreating)
                 }
             }
+            .task {
+                await refreshProjectStates()
+            }
         }
     }
 
@@ -75,6 +78,19 @@ struct HomeScreen: View {
             navigationPath.append(projectId)
         } catch {
             errorMessage = error.localizedDescription
+        }
+    }
+
+    private func refreshProjectStates() async {
+        for i in projects.indices {
+            do {
+                let state = try await client.getState(projectId: projects[i].id)
+                projects[i].state.apply(state)
+            } catch is CancellationError {
+                return
+            } catch {
+                // Project may have been purged — leave stale state
+            }
         }
     }
 

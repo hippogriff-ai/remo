@@ -217,4 +217,116 @@ final class ModelsTests: XCTestCase {
         XCTAssertEqual(ProjectStep(rawValue: "completed"), .completed)
         XCTAssertNil(ProjectStep(rawValue: "invalid"))
     }
+
+    // MARK: - ProjectState.apply()
+
+    func testApplyUpdatesStep() {
+        let state = ProjectState()
+        XCTAssertEqual(state.step, .photoUpload)
+
+        let workflow = WorkflowState(step: "iteration", currentImage: "https://example.com/img.png", iterationCount: 3)
+        state.apply(workflow)
+
+        XCTAssertEqual(state.step, .iteration)
+        XCTAssertEqual(state.iterationCount, 3)
+        XCTAssertEqual(state.currentImage, "https://example.com/img.png")
+    }
+
+    func testApplyKeepsStepOnUnknownString() {
+        let state = ProjectState()
+        state.step = .selection
+
+        let workflow = WorkflowState(step: "unknown_future_step")
+        state.apply(workflow)
+
+        // Unknown step should NOT change the current step
+        XCTAssertEqual(state.step, .selection)
+    }
+
+    func testApplyUpdatesError() {
+        let state = ProjectState()
+        XCTAssertNil(state.error)
+
+        let workflow = WorkflowState(
+            step: "generation",
+            error: WorkflowError(message: "Gemini API failed", retryable: true)
+        )
+        state.apply(workflow)
+
+        XCTAssertEqual(state.error?.message, "Gemini API failed")
+        XCTAssertTrue(state.error?.retryable == true)
+    }
+
+    func testApplyClearsError() {
+        let state = ProjectState()
+        state.error = WorkflowError(message: "old error", retryable: false)
+
+        let workflow = WorkflowState(step: "generation")
+        state.apply(workflow)
+
+        XCTAssertNil(state.error)
+    }
+
+    // MARK: - ProjectState.preview()
+
+    func testPreviewFactoryPhotoUpload() {
+        let state = ProjectState.preview(step: .photoUpload)
+        XCTAssertEqual(state.step, .photoUpload)
+        XCTAssertEqual(state.projectId, "preview-1")
+    }
+
+    func testPreviewFactoryCompleted() {
+        let state = ProjectState.preview(step: .completed)
+        XCTAssertEqual(state.step, .completed)
+        XCTAssertNotNil(state.currentImage)
+        XCTAssertNotNil(state.shoppingList)
+        XCTAssertFalse(state.revisionHistory.isEmpty)
+    }
+
+    func testPreviewFactorySelection() {
+        let state = ProjectState.preview(step: .selection)
+        XCTAssertEqual(state.generatedOptions.count, 2)
+    }
+
+    // MARK: - ProjectState computed properties
+
+    func testRoomPhotoCount() {
+        let state = ProjectState()
+        state.photos = [
+            PhotoData(photoId: "r1", storageKey: "k", photoType: "room"),
+            PhotoData(photoId: "r2", storageKey: "k", photoType: "room"),
+            PhotoData(photoId: "i1", storageKey: "k", photoType: "inspiration"),
+        ]
+        XCTAssertEqual(state.roomPhotoCount, 2)
+        XCTAssertEqual(state.inspirationPhotoCount, 1)
+    }
+
+    // MARK: - AnyCodable
+
+    func testAnyCodableEqualityIntegers() {
+        let a = AnyCodable(42)
+        let b = AnyCodable(42)
+        XCTAssertEqual(a, b)
+    }
+
+    func testAnyCodableEqualityStrings() {
+        let a = AnyCodable("hello")
+        let b = AnyCodable("hello")
+        let c = AnyCodable("world")
+        XCTAssertEqual(a, b)
+        XCTAssertNotEqual(a, c)
+    }
+
+    func testAnyCodableEqualityDicts() {
+        let a = AnyCodable(["key": "value"])
+        let b = AnyCodable(["key": "value"])
+        XCTAssertEqual(a, b)
+    }
+
+    func testAnyCodableRoundTrip() throws {
+        let original = AnyCodable(["width": 4.2, "name": "wall_1"])
+        let data = try JSONEncoder().encode(original)
+        let decoded = try JSONDecoder().decode(AnyCodable.self, from: data)
+        XCTAssertEqual(original, decoded)
+    }
 }

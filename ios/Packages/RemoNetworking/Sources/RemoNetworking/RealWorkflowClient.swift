@@ -132,9 +132,21 @@ public final class RealWorkflowClient: WorkflowClientProtocol, @unchecked Sendab
 
     private func get<T: Decodable>(_ path: String) async throws -> T {
         let url = baseURL.appendingPathComponent(path)
-        let (data, response) = try await session.data(from: url)
-        try checkHTTPResponse(response, data: data)
-        return try decoder.decode(T.self, from: data)
+        do {
+            let (data, response) = try await session.data(from: url)
+            try checkHTTPResponse(response, data: data)
+            return try decoder.decode(T.self, from: data)
+        } catch let error as APIError {
+            throw error
+        } catch let error as CancellationError {
+            throw error
+        } catch let error as URLError {
+            throw APIError.networkError(error)
+        } catch let error as DecodingError {
+            throw APIError.decodingError(error)
+        } catch {
+            throw APIError.unknown(error)
+        }
     }
 
     private func post<T: Decodable>(_ path: String) async throws -> T {
@@ -142,9 +154,21 @@ public final class RealWorkflowClient: WorkflowClientProtocol, @unchecked Sendab
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        let (data, response) = try await session.data(for: request)
-        try checkHTTPResponse(response, data: data)
-        return try decoder.decode(T.self, from: data)
+        do {
+            let (data, response) = try await session.data(for: request)
+            try checkHTTPResponse(response, data: data)
+            return try decoder.decode(T.self, from: data)
+        } catch let error as APIError {
+            throw error
+        } catch let error as CancellationError {
+            throw error
+        } catch let error as URLError {
+            throw APIError.networkError(error)
+        } catch let error as DecodingError {
+            throw APIError.decodingError(error)
+        } catch {
+            throw APIError.unknown(error)
+        }
     }
 
     private func post<B: Encodable, T: Decodable>(_ path: String, body: B) async throws -> T {
@@ -153,25 +177,53 @@ public final class RealWorkflowClient: WorkflowClientProtocol, @unchecked Sendab
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.httpBody = try encoder.encode(body)
-        let (data, response) = try await session.data(for: request)
-        try checkHTTPResponse(response, data: data)
-        return try decoder.decode(T.self, from: data)
+        do {
+            let (data, response) = try await session.data(for: request)
+            try checkHTTPResponse(response, data: data)
+            return try decoder.decode(T.self, from: data)
+        } catch let error as APIError {
+            throw error
+        } catch let error as CancellationError {
+            throw error
+        } catch let error as URLError {
+            throw APIError.networkError(error)
+        } catch let error as DecodingError {
+            throw APIError.decodingError(error)
+        } catch {
+            throw APIError.unknown(error)
+        }
     }
 
     private func delete(_ path: String) async throws {
         let url = baseURL.appendingPathComponent(path)
         var request = URLRequest(url: url)
         request.httpMethod = "DELETE"
-        let (data, response) = try await session.data(for: request)
-        // 204 No Content is success for DELETE
-        if let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 204 {
-            return
+        do {
+            let (data, response) = try await session.data(for: request)
+            // 204 No Content is success for DELETE
+            if let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 204 {
+                return
+            }
+            try checkHTTPResponse(response, data: data)
+        } catch let error as APIError {
+            throw error
+        } catch let error as CancellationError {
+            throw error
+        } catch let error as URLError {
+            throw APIError.networkError(error)
+        } catch {
+            throw APIError.unknown(error)
         }
-        try checkHTTPResponse(response, data: data)
     }
 
     private func checkHTTPResponse(_ response: URLResponse, data: Data) throws {
-        guard let httpResponse = response as? HTTPURLResponse else { return }
+        guard let httpResponse = response as? HTTPURLResponse else {
+            throw APIError.unknown(
+                NSError(domain: "RealWorkflowClient", code: -1, userInfo: [
+                    NSLocalizedDescriptionKey: "Unexpected non-HTTP response"
+                ])
+            )
+        }
         guard (200...299).contains(httpResponse.statusCode) else {
             if let errorResponse = try? decoder.decode(ErrorResponse.self, from: data) {
                 throw APIError.httpError(statusCode: httpResponse.statusCode, response: errorResponse)

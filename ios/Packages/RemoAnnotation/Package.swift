@@ -13,5 +13,6 @@ let package = Package(
     ],
     targets: [
         .target(name: "RemoAnnotation", dependencies: ["RemoModels", "RemoNetworking"]),
+        .testTarget(name: "RemoAnnotationTests", dependencies: ["RemoAnnotation", "RemoModels"]),
     ]
 )

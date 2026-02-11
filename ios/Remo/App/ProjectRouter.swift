@@ -1,5 +1,11 @@
 import SwiftUI
 import RemoModels
+import RemoPhotoUpload
+import RemoChatUI
+import RemoAnnotation
+import RemoDesignViews
+import RemoShoppingList
+import RemoLiDAR
 
 /// Maps ProjectStep to the correct destination view.
 /// Used inside NavigationStack to drive the flow.
@@ -17,7 +23,7 @@ struct ProjectRouter: View {
         case .intake:
             IntakeChatScreen(projectState: projectState, client: client)
         case .generation:
-            GeneratingScreen(projectState: projectState)
+            GeneratingScreen(projectState: projectState, client: client)
         case .selection:
             DesignSelectionScreen(projectState: projectState, client: client)
         case .iteration:
@@ -25,7 +31,7 @@ struct ProjectRouter: View {
         case .approval:
             ApprovalScreen(projectState: projectState, client: client)
         case .shopping:
-            ShoppingListScreen(projectState: projectState)
+            ShoppingGeneratingScreen(projectState: projectState, client: client)
         case .completed:
             OutputScreen(projectState: projectState, client: client)
         }

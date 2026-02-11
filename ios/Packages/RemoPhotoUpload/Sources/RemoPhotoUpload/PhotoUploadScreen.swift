@@ -1,5 +1,8 @@
 import SwiftUI
 import PhotosUI
+#if os(iOS)
+import UIKit
+#endif
 import RemoModels
 import RemoNetworking
 
@@ -39,7 +42,9 @@ public struct PhotoUploadScreen: View {
                 if !projectState.photos.isEmpty {
                     LazyVGrid(columns: [GridItem(.adaptive(minimum: 100))], spacing: 12) {
                         ForEach(projectState.photos) { photo in
-                            PhotoThumbnail(photo: photo)
+                            PhotoThumbnail(photo: photo, onDelete: {
+                                deletePhoto(photo)
+                            })
                         }
                     }
                     .padding(.horizontal)
@@ -115,8 +120,17 @@ public struct PhotoUploadScreen: View {
         defer { isUploading = false; selectedItems = [] }
 
         for item in items {
-            guard let data = try? await item.loadTransferable(type: Data.self) else { continue }
-            await uploadPhoto(data, type: "room")
+            do {
+                guard let data = try await item.loadTransferable(type: Data.self) else {
+                    validationMessages.append("Could not load selected photo.")
+                    continue
+                }
+                await uploadPhoto(data, type: "room")
+            } catch is CancellationError {
+                return
+            } catch {
+                validationMessages.append("Failed to load photo: \(error.localizedDescription)")
+            }
         }
     }
 
@@ -136,12 +150,22 @@ public struct PhotoUploadScreen: View {
             validationMessages = [error.localizedDescription]
         }
     }
+
+    private func deletePhoto(_ photo: PhotoData) {
+        withAnimation(.easeOut(duration: 0.2)) {
+            projectState.photos.removeAll { $0.photoId == photo.photoId }
+        }
+        #if os(iOS)
+        UIImpactFeedbackGenerator(style: .light).impactOccurred()
+        #endif
+    }
 }
 
 // MARK: - Photo Thumbnail
 
 struct PhotoThumbnail: View {
     let photo: PhotoData
+    var onDelete: (() -> Void)?
 
     var body: some View {
         RoundedRectangle(cornerRadius: 8)
@@ -155,6 +179,19 @@ struct PhotoThumbnail: View {
                         .font(.caption2)
                 }
                 .foregroundStyle(.secondary)
+            }
+            .overlay(alignment: .topTrailing) {
+                if let onDelete {
+                    Button {
+                        onDelete()
+                    } label: {
+                        Image(systemName: "xmark.circle.fill")
+                            .font(.title3)
+                            .symbolRenderingMode(.palette)
+                            .foregroundStyle(.white, .red)
+                    }
+                    .offset(x: 6, y: -6)
+                }
             }
     }
 }
