@@ -93,12 +93,26 @@ stateDiagram-v2
     shopping --> completed : generate_shopping_list succeeds
     completed --> [*] : 24h purge timer
 
-    photos --> abandoned : 48h timeout (any phase)
-    scan --> abandoned : 48h timeout
-    intake --> abandoned : 48h timeout
+    note right of abandoned
+        Every _wait() call has a 48h
+        abandonment timeout. If any phase
+        stalls (no user action for 48h),
+        R2 purge runs, then workflow
+        enters "abandoned" state.
+    end note
 
-    photos --> cancelled : cancel_project signal
-    scan --> cancelled : cancel_project signal
+    photos --> abandoned : 48h timeout + R2 purge
+    scan --> abandoned : 48h timeout + R2 purge
+    intake --> abandoned : 48h timeout + R2 purge
+    generation_error --> abandoned : 48h timeout + R2 purge
+    selection --> abandoned : 48h timeout + R2 purge
+    iteration --> abandoned : 48h timeout + R2 purge
+    iteration_error --> abandoned : 48h timeout + R2 purge
+    approval --> abandoned : 48h timeout + R2 purge
+    shopping_error --> abandoned : 48h timeout + R2 purge
+
+    photos --> cancelled : cancel_project + R2 purge
+    scan --> cancelled : cancel_project + R2 purge
 ```
 
 ## Signal & Query Map
@@ -235,6 +249,48 @@ flowchart TD
     Rev -->|"< 5 rounds"| Input
     Rev -->|"approve_design"| Done["→ shopping phase"]
     Rev -->|"5 rounds reached"| Approval["→ approval phase"]
+```
+
+## Abandonment & Purge Mechanism
+
+Every user-facing wait in the workflow uses `_wait()`, which wraps `workflow.wait_condition()` with a **48-hour abandonment timeout**. If the user takes no action for 48h at any phase, the workflow:
+
+1. Runs `purge_project_data` (best-effort R2 cleanup via `delete_prefix`)
+2. Raises `_AbandonedError`
+3. Sets `step = "abandoned"` and the workflow completes
+
+The 10 wait points that carry this timeout:
+
+| Phase | Waiting for |
+|-------|-------------|
+| `photos` | 2+ room photos |
+| `scan` | scan data or skip |
+| `intake` | design brief or skip |
+| `generation` (error) | retry or start_over |
+| `selection` | option selected or start_over |
+| `iteration` | edit action, approve, or start_over |
+| `iteration` (ActivityError) | retry or start_over |
+| `iteration` (ValueError) | retry or start_over |
+| `approval` | approve or start_over |
+| `shopping` (error) | retry |
+
+Additionally, `cancel_project` triggers R2 purge immediately, and `completed` runs a 24h purge timer (not abandonment — the workflow reached success).
+
+```mermaid
+flowchart TD
+    Wait["_wait(condition, timeout=48h)"]
+    Cond{"condition met<br/>within 48h?"}
+    Cancel{"_cancelled?"}
+    Purge["_try_purge()<br/>R2 delete_prefix"]
+    Abandon["_AbandonedError<br/>step = 'abandoned'"]
+    Continue["continue workflow"]
+
+    Wait --> Cond
+    Cond -->|"yes"| Cancel
+    Cond -->|"TimeoutError"| Purge
+    Cancel -->|"no"| Continue
+    Cancel -->|"yes"| Purge
+    Purge --> Abandon
 ```
 
 ## Data Flow: Photo Upload
