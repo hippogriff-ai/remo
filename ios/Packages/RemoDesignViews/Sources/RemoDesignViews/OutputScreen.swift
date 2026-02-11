@@ -11,6 +11,7 @@ public struct OutputScreen: View {
     @State private var showShoppingList = false
     @State private var showRevisionHistory = false
     @State private var savedToPhotos = false
+    @State private var zoomScale: CGFloat = 1.0
 
     public init(projectState: ProjectState, client: any WorkflowClientProtocol) {
         self.projectState = projectState
@@ -20,9 +21,21 @@ public struct OutputScreen: View {
     public var body: some View {
         ScrollView {
             VStack(spacing: 20) {
-                // Final design image
+                // Final design image (pinch to zoom)
                 DesignImageView(projectState.currentImage)
                     .aspectRatio(4/3, contentMode: .fit)
+                    .scaleEffect(zoomScale)
+                    .gesture(
+                        MagnifyGesture()
+                            .onChanged { value in
+                                zoomScale = max(1.0, min(3.0, value.magnification))
+                            }
+                            .onEnded { _ in
+                                withAnimation(.spring(response: 0.3)) {
+                                    zoomScale = 1.0
+                                }
+                            }
+                    )
                     .padding(.horizontal)
 
                 Text("Your Design is Ready!")
@@ -50,6 +63,14 @@ public struct OutputScreen: View {
                     }
                     .buttonStyle(.borderedProminent)
                     .disabled(savedToPhotos)
+
+                    if let imageUrl = projectState.currentImage, let url = URL(string: imageUrl) {
+                        ShareLink(item: url) {
+                            Label("Share Design", systemImage: "square.and.arrow.up")
+                                .frame(maxWidth: .infinity)
+                        }
+                        .buttonStyle(.bordered)
+                    }
 
                     Button {
                         showShoppingList = true

@@ -8,6 +8,7 @@ struct HomeScreen: View {
 
     @State private var projects: [(id: String, state: ProjectState)] = []
     @State private var isCreating = false
+    @State private var errorMessage: String?
     @State private var navigationPath = NavigationPath()
 
     var body: some View {
@@ -35,6 +36,11 @@ struct HomeScreen: View {
                     ProjectFlowScreen(projectState: project.state, client: client)
                 }
             }
+            .alert("Error", isPresented: .init(get: { errorMessage != nil }, set: { if !$0 { errorMessage = nil } })) {
+                Button("OK") { errorMessage = nil }
+            } message: {
+                Text(errorMessage ?? "")
+            }
             .toolbar {
                 ToolbarItem(placement: .primaryAction) {
                     Button {
@@ -53,7 +59,11 @@ struct HomeScreen: View {
         isCreating = true
         defer { isCreating = false }
         do {
+            #if os(iOS)
             let fingerprint = UIDevice.current.identifierForVendor?.uuidString ?? UUID().uuidString
+            #else
+            let fingerprint = UUID().uuidString
+            #endif
             let hasLidar = checkLiDARAvailability()
             let projectId = try await client.createProject(
                 deviceFingerprint: fingerprint,
@@ -64,7 +74,7 @@ struct HomeScreen: View {
             projects.append((id: projectId, state: state))
             navigationPath.append(projectId)
         } catch {
-            // TODO: Show error alert
+            errorMessage = error.localizedDescription
         }
     }
 
