@@ -97,11 +97,17 @@ def _check_blur(img: Image.Image) -> tuple[bool, str]:
     """Detect blur via Laplacian variance on a normalized grayscale image."""
     gray = img.convert("L")
     # Normalize to NORMALIZE_SIZE on shortest side for consistent measurement
-    shortest = min(gray.size)
+    w, h = gray.size
+    shortest = min(w, h)
     if shortest > NORMALIZE_SIZE:
         scale = NORMALIZE_SIZE / shortest
-        new_size = (int(gray.size[0] * scale), int(gray.size[1] * scale))
-        gray = gray.resize(new_size, Image.LANCZOS)
+        gray = gray.resize((int(w * scale), int(h * scale)), Image.LANCZOS)
+    # Cap longest side to prevent memory exhaustion on extreme aspect ratios
+    # (e.g. 1024x50000 bypasses shortest-side normalization)
+    w, h = gray.size
+    if max(w, h) > NORMALIZE_SIZE * 4:
+        scale = (NORMALIZE_SIZE * 4) / max(w, h)
+        gray = gray.resize((max(1, int(w * scale)), max(1, int(h * scale))), Image.LANCZOS)
 
     # Laplacian filter (edge detection) — low variance = blurry
     laplacian = gray.filter(ImageFilter.Kernel((3, 3), [0, 1, 0, 1, -4, 1, 0, 1, 0], scale=1))

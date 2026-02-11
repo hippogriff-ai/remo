@@ -116,6 +116,8 @@ class DesignProjectWorkflow:
                     start_to_close_timeout=timedelta(minutes=3),
                     retry_policy=_ACTIVITY_RETRY,
                 )
+                if self._restart_requested:
+                    continue
                 self.generated_options = result.options
                 self.error = None
             except ActivityError as exc:
@@ -316,10 +318,11 @@ class DesignProjectWorkflow:
 
     @workflow.signal
     async def start_over(self) -> None:
-        if self.step in ("shopping", "completed", "abandoned", "cancelled"):
+        if self.approved or self.step in ("shopping", "completed", "abandoned", "cancelled"):
             workflow.logger.warning(
-                "start_over ignored: already at step '%s' for project %s",
+                "start_over ignored: already at step '%s' (approved=%s) for project %s",
                 self.step,
+                self.approved,
                 self._project_id,
             )
             return

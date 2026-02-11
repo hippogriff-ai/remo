@@ -570,14 +570,13 @@ class TestSelectionEndpoints:
 
     @pytest.mark.asyncio
     async def test_start_over_from_iteration_resets_all_state(self, client, project_id):
-        """Start over from iteration clears revision history, iteration count, and approval."""
-        from app.models.contracts import DesignOption, GenerateShoppingListOutput, RevisionRecord
+        """Start over from iteration clears revision history, iteration count, etc."""
+        from app.models.contracts import DesignOption, RevisionRecord
 
         state = _mock_states[project_id]
         state.step = "iteration"
         state.iteration_count = 3
         state.current_image = "https://r2.example.com/old.png"
-        state.approved = True
         state.revision_history = [
             RevisionRecord(
                 revision_number=1,
@@ -589,10 +588,6 @@ class TestSelectionEndpoints:
         state.generated_options = [
             DesignOption(image_url="https://r2.example.com/opt.png", caption="Test"),
         ]
-        state.shopping_list = GenerateShoppingListOutput(
-            items=[],
-            total_estimated_cost_cents=0,
-        )
 
         resp = await client.post(f"/api/v1/projects/{project_id}/start-over")
         assert resp.status_code == 200
@@ -606,6 +601,21 @@ class TestSelectionEndpoints:
         assert body["current_image"] is None
         assert body["design_brief"] is None
         assert body["shopping_list"] is None
+
+    @pytest.mark.asyncio
+    async def test_start_over_blocked_after_approval(self, client, project_id):
+        """Start over returns 409 once design is approved."""
+        _mock_states[project_id].step = "iteration"
+        _mock_states[project_id].approved = True
+        resp = await client.post(f"/api/v1/projects/{project_id}/start-over")
+        assert resp.status_code == 409
+
+    @pytest.mark.asyncio
+    async def test_start_over_blocked_from_completed(self, client, project_id):
+        """Start over returns 409 from completed step."""
+        _mock_states[project_id].step = "completed"
+        resp = await client.post(f"/api/v1/projects/{project_id}/start-over")
+        assert resp.status_code == 409
 
     @pytest.mark.asyncio
     async def test_start_over_preserves_photos_and_scan_data(

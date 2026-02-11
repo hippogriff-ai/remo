@@ -11,6 +11,8 @@ row from PostgreSQL (children cascade via ON DELETE CASCADE).
 
 from __future__ import annotations
 
+import asyncio
+
 import structlog
 from temporalio import activity
 
@@ -29,7 +31,7 @@ async def purge_project_data(project_id: str) -> None:
     r2_prefix = f"projects/{project_id}/"
 
     logger.info("purge_start", project_id=project_id, r2_prefix=r2_prefix)
-    delete_prefix(r2_prefix)
+    await asyncio.to_thread(delete_prefix, r2_prefix)
     logger.info("purge_r2_complete", project_id=project_id)
 
     # DB deletion deferred to P2 — requires wiring async SQLAlchemy session

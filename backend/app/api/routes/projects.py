@@ -421,6 +421,8 @@ async def start_over(project_id: str):
     if err := _check_step(state, None, "start over"):
         return err
     assert state is not None
+    if state.approved or state.step in ("shopping", "completed"):
+        return _error(409, "wrong_step", f"Cannot start over in step '{state.step}'")
     state.generated_options = []
     state.selected_option = None
     state.current_image = None
