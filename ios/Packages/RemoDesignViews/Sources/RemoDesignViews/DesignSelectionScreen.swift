@@ -50,7 +50,9 @@ public struct DesignSelectionScreen: View {
             .padding(.bottom)
         }
         .navigationTitle("Choose a Design")
+        #if os(iOS)
         .navigationBarTitleDisplayMode(.inline)
+        #endif
     }
 
     @ViewBuilder
@@ -63,7 +65,9 @@ public struct DesignSelectionScreen: View {
                 .tag(Optional(index))
             }
         }
+        #if os(iOS)
         .tabViewStyle(.page(indexDisplayMode: .always))
+        #endif
     }
 
     @ViewBuilder
@@ -112,20 +116,8 @@ struct DesignCard: View {
 
     var body: some View {
         VStack(spacing: 8) {
-            // Placeholder image (real images loaded via AsyncImage in P2)
-            RoundedRectangle(cornerRadius: 12)
-                .fill(Color.secondary.opacity(0.1))
+            DesignImageView(option.imageUrl)
                 .aspectRatio(4/3, contentMode: .fit)
-                .overlay {
-                    VStack {
-                        Image(systemName: "photo.artframe")
-                            .font(.largeTitle)
-                            .foregroundStyle(.secondary)
-                        Text(option.caption)
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
-                }
                 .overlay(
                     RoundedRectangle(cornerRadius: 12)
                         .strokeBorder(isSelected ? Color.accentColor : .clear, lineWidth: 3)
@@ -136,8 +128,10 @@ struct DesignCard: View {
                             .font(.title2)
                             .foregroundStyle(.white, .blue)
                             .padding(8)
+                            .transition(.scale.combined(with: .opacity))
                     }
                 }
+                .animation(.spring(response: 0.3), value: isSelected)
 
             Text(option.caption)
                 .font(.subheadline.bold())

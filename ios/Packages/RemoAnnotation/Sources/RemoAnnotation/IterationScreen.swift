@@ -79,7 +79,9 @@ public struct IterationScreen: View {
             .padding(.bottom)
         }
         .navigationTitle("Refine Design")
+        #if os(iOS)
         .navigationBarTitleDisplayMode(.inline)
+        #endif
     }
 
     private var canSubmit: Bool {
@@ -98,18 +100,21 @@ public struct IterationScreen: View {
                 .font(.caption)
                 .foregroundStyle(.secondary)
 
-            ForEach(Array(regions.enumerated()), id: \.offset) { index, _ in
-                RegionEditor(region: Binding(
-                    get: { regions[index] },
-                    set: { regions[index] = $0 }
-                ), color: regionColor(for: index)) {
-                    withAnimation(.easeOut(duration: 0.2)) {
-                        regions.remove(at: index)
-                    }
-                }
+            ForEach(regions.indices, id: \.self) { index in
+                regionEditorRow(at: index)
             }
         }
         .padding(.horizontal)
+    }
+
+    @ViewBuilder
+    private func regionEditorRow(at index: Int) -> some View {
+        let color = regionColor(for: index)
+        RegionEditor(region: $regions[index], color: color, onDelete: {
+            withAnimation(.easeOut(duration: 0.2)) {
+                _ = regions.remove(at: index)
+            }
+        })
     }
 
     @ViewBuilder
@@ -234,7 +239,7 @@ struct AnnotationCanvas: View {
                 }
             }
             .contentShape(Rectangle())
-            .onTapGesture { location in
+            .onTapGesture(coordinateSpace: .local) { (location: CGPoint) in
                 guard regions.count < maxRegions else { return }
                 let nx = location.x / geometry.size.width
                 let ny = location.y / geometry.size.height

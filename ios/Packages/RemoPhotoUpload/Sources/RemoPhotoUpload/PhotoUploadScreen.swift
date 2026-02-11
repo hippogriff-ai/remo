@@ -94,15 +94,19 @@ public struct PhotoUploadScreen: View {
             }
         }
         .navigationTitle("Photos")
+        #if os(iOS)
         .navigationBarTitleDisplayMode(.inline)
+        #endif
         .onChange(of: selectedItems) { _, items in
             Task { await uploadSelectedPhotos(items) }
         }
+        #if os(iOS)
         .sheet(isPresented: $showCamera) {
             CameraView { imageData in
                 Task { await uploadPhoto(imageData, type: "room") }
             }
         }
+        #endif
     }
 
     private func uploadSelectedPhotos(_ items: [PhotosPickerItem]) async {
@@ -154,6 +158,7 @@ struct PhotoThumbnail: View {
     }
 }
 
+#if os(iOS)
 // MARK: - Camera View (UIImagePickerController bridge)
 
 struct CameraView: UIViewControllerRepresentable {
@@ -192,3 +197,4 @@ struct CameraView: UIViewControllerRepresentable {
         }
     }
 }
+#endif

@@ -9,8 +9,9 @@ let package = Package(
     ],
     dependencies: [
         .package(path: "../RemoModels"),
+        .package(path: "../RemoShoppingList"),
     ],
     targets: [
-        .target(name: "RemoDesignViews", dependencies: ["RemoModels"]),
+        .target(name: "RemoDesignViews", dependencies: ["RemoModels", "RemoShoppingList"]),
     ]
 )

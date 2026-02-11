@@ -1,34 +1,36 @@
 import Foundation
-import RemoModels
+import Observation
 
 /// Central observable state for a single design project.
 /// Views observe this; the poller updates it from WorkflowState responses.
 @Observable
-final class ProjectState {
-    var projectId: String?
-    var step: ProjectStep = .photoUpload
-    var generationStatus: GenerationStatus = .idle
+public final class ProjectState {
+    public var projectId: String?
+    public var step: ProjectStep = .photoUpload
+    public var generationStatus: GenerationStatus = .idle
 
     // Workflow data
-    var photos: [PhotoData] = []
-    var scanData: ScanData?
-    var designBrief: DesignBrief?
-    var generatedOptions: [DesignOption] = []
-    var selectedOption: Int?
-    var currentImage: String?
-    var revisionHistory: [RevisionRecord] = []
-    var iterationCount: Int = 0
-    var shoppingList: ShoppingListOutput?
-    var approved: Bool = false
-    var error: WorkflowError?
-    var chatHistoryKey: String?
+    public var photos: [PhotoData] = []
+    public var scanData: ScanData?
+    public var designBrief: DesignBrief?
+    public var generatedOptions: [DesignOption] = []
+    public var selectedOption: Int?
+    public var currentImage: String?
+    public var revisionHistory: [RevisionRecord] = []
+    public var iterationCount: Int = 0
+    public var shoppingList: ShoppingListOutput?
+    public var approved: Bool = false
+    public var error: WorkflowError?
+    public var chatHistoryKey: String?
 
     // Intake conversation
-    var chatMessages: [ChatMessage] = []
-    var currentIntakeOutput: IntakeChatOutput?
+    public var chatMessages: [ChatMessage] = []
+    public var currentIntakeOutput: IntakeChatOutput?
+
+    public init() {}
 
     /// Update from a WorkflowState response (polling result).
-    func apply(_ state: WorkflowState) {
+    public func apply(_ state: WorkflowState) {
         if let newStep = ProjectStep(rawValue: state.step) {
             self.step = newStep
         }
@@ -47,12 +49,12 @@ final class ProjectState {
     }
 
     /// Room photo count for enforcing the 2-photo minimum.
-    var roomPhotoCount: Int {
+    public var roomPhotoCount: Int {
         photos.filter { $0.photoType == "room" }.count
     }
 
     /// Inspiration photo count (max 3).
-    var inspirationPhotoCount: Int {
+    public var inspirationPhotoCount: Int {
         photos.filter { $0.photoType == "inspiration" }.count
     }
 }

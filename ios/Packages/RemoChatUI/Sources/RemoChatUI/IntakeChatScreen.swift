@@ -85,9 +85,11 @@ public struct IntakeChatScreen: View {
             }
         }
         .navigationTitle("Design Chat")
+        #if os(iOS)
         .navigationBarTitleDisplayMode(.inline)
+        #endif
         .toolbar {
-            ToolbarItem(placement: .topBarTrailing) {
+            ToolbarItem(placement: .primaryAction) {
                 Button("Skip") {
                     Task { await skipIntake() }
                 }
@@ -171,7 +173,7 @@ struct ChatBubble: View {
             Text(message.content)
                 .padding(.horizontal, 14)
                 .padding(.vertical, 10)
-                .background(isUser ? Color.accentColor : Color(.systemGray5))
+                .background(isUser ? Color.accentColor : Color.secondary.opacity(0.2))
                 .foregroundStyle(isUser ? .white : .primary)
                 .clipShape(RoundedRectangle(cornerRadius: 16))
             if !isUser { Spacer(minLength: 60) }
@@ -203,7 +205,7 @@ struct QuickReplyChips: View {
                     }
                     .padding(.horizontal, 12)
                     .padding(.vertical, 10)
-                    .background(Color(.systemGray6))
+                    .background(Color.secondary.opacity(0.12))
                     .clipShape(RoundedRectangle(cornerRadius: 12))
                 }
                 .buttonStyle(.plain)
@@ -240,7 +242,7 @@ struct SummaryCard: View {
             .frame(maxWidth: .infinity)
         }
         .padding()
-        .background(Color(.systemGray6))
+        .background(Color.secondary.opacity(0.12))
         .clipShape(RoundedRectangle(cornerRadius: 16))
     }
 }

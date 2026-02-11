@@ -29,7 +29,9 @@ public struct GeneratingScreen: View {
         }
         .padding()
         .navigationTitle("Generating")
+        #if os(iOS)
         .navigationBarTitleDisplayMode(.inline)
         .navigationBarBackButtonHidden()
+        #endif
     }
 }

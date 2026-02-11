@@ -63,7 +63,9 @@ public struct LiDARScanScreen: View {
         }
         .padding()
         .navigationTitle("Room Scan")
+        #if os(iOS)
         .navigationBarTitleDisplayMode(.inline)
+        #endif
         .alert("Skip Room Scan?", isPresented: $showSkipConfirmation) {
             Button("Skip", role: .destructive) {
                 Task { await skipScan() }

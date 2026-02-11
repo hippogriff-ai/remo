@@ -15,20 +15,8 @@ public struct ApprovalScreen: View {
 
     public var body: some View {
         VStack(spacing: 20) {
-            // Design image placeholder
-            RoundedRectangle(cornerRadius: 12)
-                .fill(Color.secondary.opacity(0.1))
+            DesignImageView(projectState.currentImage)
                 .aspectRatio(4/3, contentMode: .fit)
-                .overlay {
-                    VStack {
-                        Image(systemName: "checkmark.seal")
-                            .font(.system(size: 40))
-                            .foregroundStyle(.green)
-                        Text("Final Design")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
-                }
                 .padding(.horizontal)
 
             Text("Iteration \(projectState.iterationCount) of 5")
@@ -58,7 +46,9 @@ public struct ApprovalScreen: View {
             .padding(.bottom)
         }
         .navigationTitle("Review Design")
+        #if os(iOS)
         .navigationBarTitleDisplayMode(.inline)
+        #endif
     }
 
     private func approve() async {

@@ -22,7 +22,9 @@ public struct ShoppingListScreen: View {
             }
         }
         .navigationTitle("Shopping List")
+        #if os(iOS)
         .navigationBarTitleDisplayMode(.inline)
+        #endif
     }
 }
 
