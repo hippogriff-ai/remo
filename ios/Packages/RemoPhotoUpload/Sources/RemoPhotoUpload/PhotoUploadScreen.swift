@@ -11,7 +11,8 @@ public struct PhotoUploadScreen: View {
     @Bindable var projectState: ProjectState
     let client: any WorkflowClientProtocol
 
-    @State private var selectedItems: [PhotosPickerItem] = []
+    @State private var selectedRoomItems: [PhotosPickerItem] = []
+    @State private var selectedInspirationItems: [PhotosPickerItem] = []
     @State private var isUploading = false
     @State private var validationMessages: [String] = []
     @State private var showCamera = false
@@ -69,25 +70,45 @@ public struct PhotoUploadScreen: View {
                         .padding(.horizontal)
                 }
 
-                // Upload buttons
+                // Room photo buttons
                 VStack(spacing: 12) {
+                    #if os(iOS)
                     Button {
                         showCamera = true
                     } label: {
-                        Label("Take Photo", systemImage: "camera")
+                        Label("Take Room Photo", systemImage: "camera")
                             .frame(maxWidth: .infinity)
                     }
                     .buttonStyle(.bordered)
+                    #endif
 
-                    PhotosPicker(
-                        selection: $selectedItems,
-                        maxSelectionCount: 5 - projectState.photos.count,
-                        matching: .images
-                    ) {
-                        Label("Choose from Library", systemImage: "photo.on.rectangle")
-                            .frame(maxWidth: .infinity)
+                    let maxRoomPhotos = max(0, 2 - projectState.roomPhotoCount)
+                    if maxRoomPhotos > 0 {
+                        PhotosPicker(
+                            selection: $selectedRoomItems,
+                            maxSelectionCount: maxRoomPhotos,
+                            matching: .images
+                        ) {
+                            Label("Add Room Photos", systemImage: "photo.on.rectangle")
+                                .frame(maxWidth: .infinity)
+                        }
+                        .buttonStyle(.bordered)
                     }
-                    .buttonStyle(.bordered)
+
+                    // Inspiration photos (optional, max 3)
+                    let maxInspirationPhotos = max(0, 3 - projectState.inspirationPhotoCount)
+                    if maxInspirationPhotos > 0 {
+                        PhotosPicker(
+                            selection: $selectedInspirationItems,
+                            maxSelectionCount: maxInspirationPhotos,
+                            matching: .images
+                        ) {
+                            Label("Add Inspiration Photos", systemImage: "sparkles")
+                                .frame(maxWidth: .infinity)
+                        }
+                        .buttonStyle(.bordered)
+                        .tint(.purple)
+                    }
                 }
                 .padding(.horizontal)
                 .disabled(isUploading)
@@ -103,8 +124,11 @@ public struct PhotoUploadScreen: View {
         #if os(iOS)
         .navigationBarTitleDisplayMode(.inline)
         #endif
-        .onChange(of: selectedItems) { _, items in
-            Task { await uploadSelectedPhotos(items) }
+        .onChange(of: selectedRoomItems) { _, items in
+            Task { await uploadSelectedPhotos(items, type: "room") }
+        }
+        .onChange(of: selectedInspirationItems) { _, items in
+            Task { await uploadSelectedPhotos(items, type: "inspiration") }
         }
         #if os(iOS)
         .sheet(isPresented: $showCamera) {
@@ -115,9 +139,13 @@ public struct PhotoUploadScreen: View {
         #endif
     }
 
-    private func uploadSelectedPhotos(_ items: [PhotosPickerItem]) async {
+    private func uploadSelectedPhotos(_ items: [PhotosPickerItem], type: String) async {
         isUploading = true
-        defer { isUploading = false; selectedItems = [] }
+        defer {
+            isUploading = false
+            selectedRoomItems = []
+            selectedInspirationItems = []
+        }
 
         for item in items {
             do {
@@ -125,7 +153,7 @@ public struct PhotoUploadScreen: View {
                     validationMessages.append("Could not load selected photo.")
                     continue
                 }
-                await uploadPhoto(data, type: "room")
+                await uploadPhoto(data, type: type)
             } catch is CancellationError {
                 return
             } catch {

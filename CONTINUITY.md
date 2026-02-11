@@ -49,6 +49,7 @@ Build the T1 iOS app for Remo (AI room redesign). P1 Independent Build substanti
 - Done: Pinch-to-resize — MagnifyGesture on annotation circles (0.04-0.20 radius range)
 - Done: Photo delete — X button on photo thumbnails with haptic feedback and animation
 - Done: 10 snap guide unit tests (center snap, region alignment, threshold, exclusion)
+- Done: Inspiration photo upload — separate PhotosPicker for room vs inspiration photos with correct type tagging
 - Now: P2 annotation polish complete. All P1+P2 deliverables done except real API swap.
 - Next: P2 integration (swap mock for real API), P3 stabilization (resume flow, error edge cases, polish)
 
