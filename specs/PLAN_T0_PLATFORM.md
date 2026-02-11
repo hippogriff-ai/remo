@@ -167,15 +167,15 @@ remo/
 | # | Deliverable | Success Metric |
 |---|------------|----------------|
 | 1 | Temporal Cloud namespace operational | `tctl namespace describe remo-dev` succeeds; all teams can connect |
-| 2 | `docker-compose.yml` for local dev | `docker compose up` gives a working stack in <5 min |
-| 3 | All Pydantic contract models (`backend/models/contracts.py`) | All `*Input/*Output` models importable; validation tests pass |
-| 4 | Database schema (Alembic migration) | `alembic upgrade head` creates all tables; CASCADE verified |
-| 5 | R2 bucket + pre-signed URL generation | Upload/download test object succeeds |
-| 6 | FastAPI gateway (all endpoints, stub responses) | All 13 endpoints return correct status codes and response shapes |
-| 7 | `DesignProjectWorkflow` skeleton (signals, queries, mock activities) | Workflow transitions through all steps with test signals |
-| 8 | Mock API operational for iOS team | iOS app can create project → query state → send signals → see transitions |
+| 2 | `docker-compose.yml` for local dev | `docker compose up` gives a working stack in <5 min | **DONE** — scaffold + docker-compose + 5 tests |
+| 3 | All Pydantic contract models (`backend/models/contracts.py`) | All `*Input/*Output` models importable; validation tests pass | **DONE** — 37 models, 41 validation tests |
+| 4 | Database schema (Alembic migration) | `alembic upgrade head` creates all tables; CASCADE verified | **DONE** — 9 tables, 21 DB model tests, initial Alembic migration (001_initial_schema.py), 10 migration tests |
+| 5 | R2 bucket + pre-signed URL generation | Upload/download test object succeeds | **DONE** — r2.py client (upload, presigned URL, head, delete, prefix delete), 14 tests pass |
+| 6 | FastAPI gateway (all endpoints, stub responses) | All 13 endpoints return correct status codes and response shapes | **DONE** — 17 endpoints, 20 API tests, 87 total tests pass |
+| 7 | `DesignProjectWorkflow` skeleton (signals, queries, mock activities) | Workflow transitions through all steps with test signals | **DONE** — 12 signals, 1 query, 5 mock activities, 13 workflow tests, 100 total tests pass |
+| 8 | Mock API operational for iOS team | iOS app can create project → query state → send signals → see transitions | **DONE** — satisfied by P0 #6 (17 mock endpoints) + P0 #7 (workflow with all signals/queries); happy-path e2e test proves full flow |
 | 9 | Swift API models (mirrors Pydantic) | All models decode mock JSON responses without errors |
-| 10 | CI pipeline (ruff + mypy + pytest) | Green on every PR to main |
+| 10 | CI pipeline (ruff + mypy + pytest) | Green on every PR to main | **DONE** — `.github/workflows/ci.yml`, mypy config with per-module overrides for Temporal SDK false positives |
 
 **P0 EXIT GATES** (must all be true):
 - Item 3: Contracts frozen (hard freeze)
@@ -186,8 +186,8 @@ remo/
 
 | # | Deliverable | Success Metric |
 |---|------------|----------------|
-| 11 | Photo validation activity (blur + resolution + Claude Haiku 4.5) | Correctly rejects blurry/low-res/non-room images; passes valid ones |
-| 12 | LiDAR dimension parser | Parses RoomPlan JSON into RoomDimensions model |
+| 11 | Photo validation activity (blur + resolution + Claude Haiku 4.5) | Correctly rejects blurry/low-res/non-room images; passes valid ones | **DONE** — `activities/validation.py` (156 lines), 25 tests |
+| 12 | LiDAR dimension parser | Parses RoomPlan JSON into RoomDimensions model | **DONE** — `utils/lidar.py` (76 lines), 19 tests |
 
 ### P2: Integration (T0 Leads)
 

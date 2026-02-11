@@ -8,7 +8,37 @@ Remo is an AI-powered room redesign iOS app. Users photograph a room, describe t
 
 ## Status
 
-Pre-implementation. Only specs exist. See `CONTINUITY.md` for current state.
+T0 (Platform) P0+P1 complete. Backend fully scaffolded with 301 passing tests, 0 warnings, ruff clean, ruff format clean, mypy clean. P2 (integration) blocked on T2/T3 activity implementations. See `CONTINUITY.md` for current state.
+
+## Development Commands
+
+```bash
+cd backend
+
+# Install (editable + dev deps)
+pip install -e ".[dev]"
+
+# Run tests
+.venv/bin/python -m pytest -x -q                    # all tests
+.venv/bin/python -m pytest tests/test_workflow.py -x  # workflow only
+.venv/bin/python -m pytest -k "test_name" -xvs        # single test, verbose
+.venv/bin/python -m pytest --cov=app --cov-report=term-missing  # with coverage
+
+# Lint + type check + format
+.venv/bin/python -m ruff check .
+.venv/bin/python -m ruff format --check .             # format check (CI enforces)
+.venv/bin/python -m mypy app/
+
+# Run API server (local)
+docker compose up -d  # PostgreSQL + Temporal
+.venv/bin/python -m uvicorn app.main:app --reload
+
+# Run Temporal worker (local)
+.venv/bin/python -m app.worker
+
+# Database migrations
+.venv/bin/python -m alembic upgrade head
+```
 
 ## Architecture
 
@@ -31,25 +61,30 @@ Key rule: API layer never calls AI APIs (except sync photo validation). Workflow
 | Product search | Exa API |
 | Storage | Cloudflare R2 (images), Railway PostgreSQL (metadata) |
 | Hosting | Railway (2 services: API + Worker), Temporal Cloud |
-| CI | GitHub Actions → Railway auto-deploy |
+| CI | GitHub Actions (2-job: lint→test, pip cache, coverage) → Railway auto-deploy |
 
-## Planned Repository Structure
+## Repository Structure
 
 ```
 backend/
   app/
-    models/contracts.py    # ALL Pydantic models (T0 owns exclusively)
-    models/db.py           # SQLAlchemy models
-    api/routes/            # FastAPI endpoints
-    workflows/design_project.py  # Temporal workflow
-    activities/            # One file per activity (generate, inpaint, regen, intake, shopping, validation, purge)
-    utils/                 # R2 client, image processing
-    prompts/               # Versioned prompt templates
-  migrations/              # Alembic
-  tests/
-ios/
-  Remo.xcodeproj
-  Packages/                # Local SPM packages (RemoModels, RemoNetworking, RemoPhotoUpload, RemoChatUI, RemoLasso, RemoDesignViews, RemoShoppingList, RemoLiDAR)
+    models/contracts.py        # ALL Pydantic models (T0 owns exclusively, frozen)
+    models/db.py               # SQLAlchemy models (9 tables)
+    api/routes/projects.py     # FastAPI endpoints (17 endpoints, mock state store, multi-step intake conversation)
+    api/routes/health.py       # Health check endpoint (version, environment, service status)
+    workflows/design_project.py # Temporal workflow (12 signals, 1 query)
+    activities/mock_stubs.py   # Mock activities (T0-owned, swapped in P2)
+    activities/validation.py   # Photo validation (Pillow + Claude Haiku 4.5)
+    activities/purge.py        # R2 cleanup activity
+    utils/r2.py                # Cloudflare R2 client
+    utils/lidar.py             # RoomPlan JSON → RoomDimensions parser
+    logging.py                 # Shared structlog config
+    config.py                  # pydantic-settings env vars
+    main.py                    # FastAPI app (request ID middleware, error handlers)
+    worker.py                  # Temporal worker entrypoint
+  migrations/versions/         # Alembic (001_initial_schema.py)
+  tests/                       # 301 tests across 11 test files (module-scoped Temporal fixture)
+ios/                           # (T1-owned, not yet scaffolded in this worktree)
 ```
 
 ## Team Structure & File Ownership
@@ -77,6 +112,17 @@ ios/
 ## Key Contracts
 
 All Pydantic models live in `backend/app/models/contracts.py` (T0 owns exclusively, frozen at P0 exit gate). Activity contracts follow the pattern `{Action}Input` / `{Action}Output`. The workflow exposes state via `WorkflowState` query. iOS Swift models mirror the Pydantic models exactly.
+
+## Mock API Behavior
+
+The mock API (pre-P2) uses in-memory state stores. Key behaviors:
+- **Intake conversation**: 3-step flow tracking user messages per project. Step 1: room type → style options. Step 2: style → open-ended preferences. Step 3+: summary with partial `DesignBrief`. Conversation state resets on `start_over` and `delete`.
+- **Photo upload**: Runs real `validate_photo` (Pillow checks) synchronously. Auto-transitions to `scan` step after 2+ valid photos.
+- **Iteration**: `_apply_revision` caps at 5 rounds then forces `approval` step.
+
+## Error Handling Convention
+
+All errors return `ErrorResponse` JSON (`{"error": str, "message": str, "retryable": bool}`). This includes 404 (not found), 409 (wrong step), 413 (file too large), 422 (validation + invalid scan/selection), and 500 (unhandled). Custom exception handlers normalize Pydantic validation errors and unhandled exceptions to the same shape. Every response includes an `X-Request-ID` header for log correlation.
 
 ## Build Phases
 

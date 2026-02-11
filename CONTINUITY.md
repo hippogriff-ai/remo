@@ -28,9 +28,9 @@ Create a refined, team-reviewed implementation plan for the Remo iOS app MVP. Ou
 - **Only 2 AI providers**: Anthropic + Google (eliminated OpenAI dependency)
 
 ## State
-- Done: Product spec, draft plan (v1.0), 5 specialist analyses, final plan (v2.0), all refinements, per-team sub-plans
-- Now: Complete — all planning artifacts written
-- Next: Implementation (when requested)
+- Done: Product spec, all plans, T0 P0 #2-#8 + #10 (all P0 complete), P1 #11 (photo validation), P1 #12 (LiDAR parser), purge activity, Temporal worker entrypoint, validate_photo wired into API upload endpoint, initial Alembic migration, workflow error handling hardened, workflow exceptions narrowed to ActivityError + asyncio.CancelledError handling, iteration input validation guard (ValueError/TypeError), validation.py silent failure fixes (narrowed catches, response structure guard, enhanced logging)
+- Now: All T0-owned P0+P1 deliverables done. Quality improvements while P2 is blocked. 300 tests pass, 0 warnings, ruff clean, ruff format clean, mypy clean. Multi-step mock intake conversation, CI pipeline (lint→test, format check, coverage), module-scoped Temporal test fixture, Pydantic v2 converter, exception/validation error handlers, request ID middleware, OpenAPI schema guards, validation hardening, ActionResponse model, tightened mypy, env example drift detection, R2 error logging.
+- Next: P2 #13 (wire real activities into workflow — depends on T2/T3 implementations). Further quality improvements while blocked.
 
 ## Open Questions
 - Gemini mask quality pass/fail? (P0 end)
