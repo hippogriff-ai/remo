@@ -178,6 +178,24 @@ class TestParseRoomDimensionsErrors:
         result = parse_room_dimensions(data)
         assert result.walls == []
 
+    def test_malformed_wall_entries_raises(self) -> None:
+        """Non-dict items in walls list should raise LidarParseError (not 500)."""
+        data = {
+            "room": {"width": 4.0, "length": 5.0, "height": 2.5},
+            "walls": [42, "bad"],
+        }
+        with pytest.raises(LidarParseError, match="Invalid scan structure"):
+            parse_room_dimensions(data)
+
+    def test_malformed_opening_entries_raises(self) -> None:
+        """Non-dict items in openings list should raise LidarParseError (not 500)."""
+        data = {
+            "room": {"width": 4.0, "length": 5.0, "height": 2.5},
+            "openings": [42],
+        }
+        with pytest.raises(LidarParseError, match="Invalid scan structure"):
+            parse_room_dimensions(data)
+
     def test_openings_not_list_treated_as_empty(self) -> None:
         """Non-list openings should be treated as empty (graceful degradation)."""
         data = {

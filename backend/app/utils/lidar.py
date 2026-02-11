@@ -63,13 +63,16 @@ def parse_room_dimensions(raw: dict) -> RoomDimensions:
     if not isinstance(openings, list):
         openings = []
 
-    dimensions = RoomDimensions(
-        width_m=width,
-        length_m=length,
-        height_m=height,
-        walls=walls,
-        openings=openings,
-    )
+    try:
+        dimensions = RoomDimensions(
+            width_m=width,
+            length_m=length,
+            height_m=height,
+            walls=walls,
+            openings=openings,
+        )
+    except (ValueError, TypeError) as e:
+        raise LidarParseError(f"Invalid scan structure: {e}") from e
 
     logger.info(
         "lidar_parsed",

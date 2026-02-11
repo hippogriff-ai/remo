@@ -265,6 +265,32 @@ _FLAKY_SHOPPING_ACTIVITIES = [
 ]
 
 
+_flaky_inpaint_calls = 0
+
+
+@activity.defn(name="generate_inpaint")
+async def _flaky_inpaint(_input) -> GenerateInpaintOutput:
+    """Fails first 2 calls (exhausting RetryPolicy), succeeds after.
+
+    Used to test the retry→approve flow: first attempt fails (error surfaces),
+    user retries, second attempt succeeds (no error), user can then approve.
+    """
+    global _flaky_inpaint_calls
+    _flaky_inpaint_calls += 1
+    if _flaky_inpaint_calls <= 2:
+        raise RuntimeError("Temporary inpainting error")
+    return GenerateInpaintOutput(revised_image_url="https://r2.example.com/retry/inpaint.png")
+
+
+_FLAKY_INPAINT_ACTIVITIES = [
+    generate_designs,
+    _flaky_inpaint,
+    generate_regen,
+    generate_shopping_list,
+    purge_project_data,
+]
+
+
 # --- Capturing stub: records generation input for verification ---
 
 _captured_generation_input: GenerateDesignsInput | None = None
@@ -1941,6 +1967,41 @@ class TestApproval:
             assert state.approved is True
             assert state.shopping_list is not None
 
+    async def test_approve_ignored_during_active_error(self, workflow_env, tq):
+        """Verifies approve_design is rejected when an error is active.
+
+        If an iteration activity fails, the user sees an error state. They
+        must clear it (retry or start_over) before approving. Allowing
+        approval during an error would skip the retry wait and proceed
+        to shopping with potentially inconsistent state.
+        """
+        async with Worker(
+            workflow_env.client,
+            task_queue=tq,
+            workflows=[DesignProjectWorkflow],
+            activities=_FAILING_INPAINT_ACTIVITIES,
+        ):
+            handle = await _start_workflow(workflow_env, tq)
+            await _advance_to_iteration(handle)
+
+            # Submit a lasso edit that will fail (2 retry attempts)
+            await handle.signal(DesignProjectWorkflow.submit_lasso_edit, _lasso_regions())
+            # Wait for both retry attempts to exhaust + error to surface
+            await asyncio.sleep(3.0)
+
+            state = await handle.query(DesignProjectWorkflow.get_state)
+            assert state.error is not None, f"Expected error, got step={state.step}"
+            assert state.step == "iteration"
+
+            # Try to approve — should be ignored because error is active
+            await handle.signal(DesignProjectWorkflow.approve_design)
+            await asyncio.sleep(0.5)
+
+            state = await handle.query(DesignProjectWorkflow.get_state)
+            assert state.approved is False
+            assert state.error is not None  # still has error
+            assert state.step == "iteration"  # still stuck
+
 
 class TestCancellation:
     """Tests for project cancellation."""
@@ -2475,19 +2536,20 @@ class TestErrorRecovery:
             assert state.step == "iteration"
 
     async def test_iteration_retry_clears_error_and_accepts_approval(self, workflow_env, tq):
-        """Verifies approve + retry escapes an iteration error loop.
+        """Verifies retry → approve escapes an iteration error loop.
 
-        With a permanently failing activity, retry alone would re-enter the
-        error state immediately.  Sending approve *before* retry means the
-        while-loop condition ``not self.approved`` is already False when the
-        error wait unblocks, so the workflow exits iteration cleanly.
+        Uses a flaky inpaint stub that fails first (surfacing an error),
+        then succeeds on retry.  After retry succeeds the error is cleared,
+        so approve_design is accepted and the workflow proceeds to shopping.
         """
+        global _flaky_inpaint_calls
+        _flaky_inpaint_calls = 0
 
         async with Worker(
             workflow_env.client,
             task_queue=tq,
             workflows=[DesignProjectWorkflow],
-            activities=_FAILING_INPAINT_ACTIVITIES,
+            activities=_FLAKY_INPAINT_ACTIVITIES,
         ):
             handle = await _start_workflow(workflow_env, tq)
             await _advance_to_iteration(handle)
@@ -2499,10 +2561,18 @@ class TestErrorRecovery:
             assert state.error is not None
             assert state.step == "iteration"
 
-            # Approve first (sets flag), then retry to unblock the error wait.
-            # When the wait unblocks the while-loop sees approved=True and exits.
-            await handle.signal(DesignProjectWorkflow.approve_design)
+            # Retry clears the error; flaky stub succeeds on the next
+            # workflow-level attempt.  Once the activity succeeds, the
+            # iteration loop waits for the next action/approve/restart.
             await handle.signal(DesignProjectWorkflow.retry_failed_step)
+            await asyncio.sleep(2.0)
+
+            state = await handle.query(DesignProjectWorkflow.get_state)
+            assert state.error is None
+            assert state.iteration_count == 1
+
+            # No active error → approve is accepted.
+            await handle.signal(DesignProjectWorkflow.approve_design)
             await asyncio.sleep(2.0)
 
             state = await handle.query(DesignProjectWorkflow.get_state)

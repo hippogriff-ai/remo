@@ -355,6 +355,12 @@ class DesignProjectWorkflow:
 
     @workflow.signal
     async def approve_design(self) -> None:
+        if self.error is not None:
+            workflow.logger.warning(
+                "approve_design ignored: active error for project %s",
+                self._project_id,
+            )
+            return
         self.approved = True
 
     @workflow.signal
