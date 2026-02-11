@@ -84,7 +84,13 @@ def _part_to_dict(part: types.Part) -> dict[str, Any]:
 
     # Preserve thought signatures (critical for Gemini 3 Pro multi-turn)
     if hasattr(part, "thought_signature") and part.thought_signature:
-        result["thought_signature"] = part.thought_signature
+        sig = part.thought_signature
+        # Base64-encode bytes signatures for JSON serialization
+        if isinstance(sig, bytes):
+            result["thought_signature"] = base64.b64encode(sig).decode("ascii")
+            result["thought_signature_encoding"] = "base64"
+        else:
+            result["thought_signature"] = sig
 
     if not result:
         logger.error(
@@ -128,7 +134,11 @@ def _dict_to_part(data: dict[str, Any]) -> types.Part:
 
     # Restore thought signature if present
     if "thought_signature" in data:
-        part.thought_signature = data["thought_signature"]
+        sig = data["thought_signature"]
+        if data.get("thought_signature_encoding") == "base64":
+            part.thought_signature = base64.b64decode(sig)
+        else:
+            part.thought_signature = sig
 
     return part
 
@@ -221,7 +231,7 @@ def restore_from_r2(project_id: str) -> list[types.Content]:
 
     try:
         contents = deserialize_to_contents(serialized)
-    except ValueError as e:
+    except (ValueError, TypeError, KeyError) as e:
         logger.error("gemini_chat_deserialization_failed", project_id=project_id, error=str(e))
         raise ApplicationError(
             f"Chat history data invalid for {project_id}: {e}",

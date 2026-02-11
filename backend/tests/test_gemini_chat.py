@@ -76,6 +76,17 @@ class TestPartSerialization:
         restored = _dict_to_part(serialized)
         assert restored.thought_signature == "sig_abc123"
 
+    def test_bytes_thought_signature_roundtrip(self):
+        """Thought signatures that are bytes should be base64-encoded for JSON."""
+        part = _make_text_part("response")
+        part.thought_signature = b"\x89binary\x00sig"
+        serialized = _part_to_dict(part)
+        assert serialized["thought_signature_encoding"] == "base64"
+        # Verify it's valid base64 string
+        assert isinstance(serialized["thought_signature"], str)
+        restored = _dict_to_part(serialized)
+        assert restored.thought_signature == b"\x89binary\x00sig"
+
     def test_image_with_thought_signature(self):
         original = _make_image_part(10, 10, signature="img_sig_456")
         serialized = _part_to_dict(original)
