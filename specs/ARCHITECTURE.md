@@ -93,14 +93,6 @@ stateDiagram-v2
     shopping --> completed : generate_shopping_list succeeds
     completed --> [*] : 24h purge timer
 
-    note right of abandoned
-        Every _wait() call has a 48h
-        abandonment timeout. If any phase
-        stalls (no user action for 48h),
-        R2 purge runs, then workflow
-        enters "abandoned" state.
-    end note
-
     photos --> abandoned : 48h timeout + R2 purge
     scan --> abandoned : 48h timeout + R2 purge
     intake --> abandoned : 48h timeout + R2 purge
