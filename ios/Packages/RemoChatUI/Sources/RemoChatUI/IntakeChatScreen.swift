@@ -114,7 +114,11 @@ public struct IntakeChatScreen: View {
     }
 
     private func startConversation() async {
-        guard let projectId = projectState.projectId else { return }
+        guard let projectId = projectState.projectId else {
+            assertionFailure("startConversation() called without projectId")
+            errorMessage = "Project not initialized"
+            return
+        }
         do {
             let output = try await client.startIntake(projectId: projectId, mode: "full")
             projectState.chatMessages.append(ChatMessage(role: "assistant", content: output.agentMessage))
@@ -126,7 +130,11 @@ public struct IntakeChatScreen: View {
     }
 
     private func sendMessage(_ message: String) async {
-        guard let projectId = projectState.projectId else { return }
+        guard let projectId = projectState.projectId else {
+            assertionFailure("sendMessage() called without projectId")
+            errorMessage = "Project not initialized"
+            return
+        }
         let trimmed = message.trimmingCharacters(in: .whitespaces)
         guard !trimmed.isEmpty else { return }
 
@@ -145,7 +153,11 @@ public struct IntakeChatScreen: View {
     }
 
     private func confirmBrief(_ brief: DesignBrief) async {
-        guard let projectId = projectState.projectId else { return }
+        guard let projectId = projectState.projectId else {
+            assertionFailure("confirmBrief() called without projectId")
+            errorMessage = "Project not initialized"
+            return
+        }
         do {
             try await client.confirmIntake(projectId: projectId, brief: brief)
             let newState = try await client.getState(projectId: projectId)
@@ -156,7 +168,11 @@ public struct IntakeChatScreen: View {
     }
 
     private func skipIntake() async {
-        guard let projectId = projectState.projectId else { return }
+        guard let projectId = projectState.projectId else {
+            assertionFailure("skipIntake() called without projectId")
+            errorMessage = "Project not initialized"
+            return
+        }
         do {
             try await client.skipIntake(projectId: projectId)
             let newState = try await client.getState(projectId: projectId)

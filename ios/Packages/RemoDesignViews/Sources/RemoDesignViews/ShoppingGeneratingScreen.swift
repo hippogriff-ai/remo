@@ -44,7 +44,11 @@ public struct ShoppingGeneratingScreen: View {
     }
 
     private func startPolling() {
-        guard let projectId = projectState.projectId else { return }
+        guard let projectId = projectState.projectId else {
+            assertionFailure("startPolling() called without projectId")
+            projectState.error = WorkflowError(message: "Project not initialized", retryable: false)
+            return
+        }
         pollingTask = Task {
             let poller = PollingManager(client: client)
             do {

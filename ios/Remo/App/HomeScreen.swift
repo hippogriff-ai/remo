@@ -3,29 +3,40 @@ import RemoModels
 import RemoNetworking
 
 /// Landing screen: shows pending projects and a "New Project" button.
+/// Persists project IDs to UserDefaults so resume works across app restarts.
 struct HomeScreen: View {
     let client: any WorkflowClientProtocol
 
     @State private var projects: [(id: String, state: ProjectState)] = []
     @State private var isCreating = false
+    @State private var isLoading = true
     @State private var errorMessage: String?
     @State private var navigationPath = NavigationPath()
 
+    private static let projectIdsKey = "remo_project_ids"
+
     var body: some View {
         NavigationStack(path: $navigationPath) {
-            List {
-                if projects.isEmpty {
+            Group {
+                if isLoading {
+                    ProgressView("Loading projects...")
+                } else if projects.isEmpty {
                     ContentUnavailableView(
                         "No Projects Yet",
                         systemImage: "house.fill",
                         description: Text("Tap the button below to redesign your first room.")
                     )
                 } else {
-                    ForEach(projects, id: \.id) { project in
-                        Button {
-                            navigationPath.append(project.id)
-                        } label: {
-                            ProjectRow(projectState: project.state)
+                    List {
+                        ForEach(projects, id: \.id) { project in
+                            Button {
+                                navigationPath.append(project.id)
+                            } label: {
+                                ProjectRow(projectState: project.state)
+                            }
+                        }
+                        .onDelete { indexSet in
+                            deleteProjects(at: indexSet)
                         }
                     }
                 }
@@ -34,6 +45,12 @@ struct HomeScreen: View {
             .navigationDestination(for: String.self) { projectId in
                 if let project = projects.first(where: { $0.id == projectId }) {
                     ProjectFlowScreen(projectState: project.state, client: client)
+                } else {
+                    ContentUnavailableView(
+                        "Project Not Found",
+                        systemImage: "exclamationmark.triangle",
+                        description: Text("This project may have been deleted.")
+                    )
                 }
             }
             .alert("Error", isPresented: .init(get: { errorMessage != nil }, set: { if !$0 { errorMessage = nil } })) {
@@ -53,8 +70,48 @@ struct HomeScreen: View {
                 }
             }
             .task {
-                await refreshProjectStates()
+                await loadAndRefreshProjects()
             }
+        }
+    }
+
+    private func loadAndRefreshProjects() async {
+        // Restore persisted project IDs
+        let savedIds = UserDefaults.standard.stringArray(forKey: Self.projectIdsKey) ?? []
+        if !savedIds.isEmpty {
+            projects = savedIds.map { id in
+                let state = ProjectState()
+                state.projectId = id
+                return (id: id, state: state)
+            }
+        }
+        isLoading = false
+
+        // Refresh state from backend, removing purged projects
+        var validIndices: [Int] = []
+        for i in projects.indices {
+            do {
+                let state = try await client.getState(projectId: projects[i].id)
+                projects[i].state.apply(state)
+                validIndices.append(i)
+            } catch is CancellationError {
+                return
+            } catch let error as APIError {
+                if case .httpError(let code, _) = error, code == 404 {
+                    // Project was purged on the server — will be removed
+                } else {
+                    // Network error — keep the project, show stale state
+                    validIndices.append(i)
+                }
+            } catch {
+                validIndices.append(i)
+            }
+        }
+        // Remove purged projects
+        let purgedIds = Set(projects.indices).subtracting(validIndices)
+        if !purgedIds.isEmpty {
+            projects = validIndices.map { projects[$0] }
+            persistProjectIds()
         }
     }
 
@@ -75,23 +132,27 @@ struct HomeScreen: View {
             let state = ProjectState()
             state.projectId = projectId
             projects.append((id: projectId, state: state))
+            persistProjectIds()
             navigationPath.append(projectId)
         } catch {
             errorMessage = error.localizedDescription
         }
     }
 
-    private func refreshProjectStates() async {
-        for i in projects.indices {
-            do {
-                let state = try await client.getState(projectId: projects[i].id)
-                projects[i].state.apply(state)
-            } catch is CancellationError {
-                return
-            } catch {
-                // Project may have been purged — leave stale state
+    private func deleteProjects(at offsets: IndexSet) {
+        for index in offsets {
+            let projectId = projects[index].id
+            Task {
+                try? await client.deleteProject(projectId: projectId)
             }
         }
+        projects.remove(atOffsets: offsets)
+        persistProjectIds()
+    }
+
+    private func persistProjectIds() {
+        let ids = projects.map(\.id)
+        UserDefaults.standard.set(ids, forKey: Self.projectIdsKey)
     }
 
     private func checkLiDARAvailability() -> Bool {

@@ -27,7 +27,10 @@ struct ProjectFlowScreen: View {
             if let error = projectState.error {
                 ErrorOverlay(error: error) {
                     Task {
-                        guard let projectId = projectState.projectId else { return }
+                        guard let projectId = projectState.projectId else {
+                            assertionFailure("retry called without projectId")
+                            return
+                        }
                         do {
                             try await client.retryFailedStep(projectId: projectId)
                             let state = try await client.getState(projectId: projectId)

@@ -3,23 +3,43 @@ import RemoModels
 
 /// Polls GET /projects/{id} at a configurable interval.
 /// Cancel-safe: stops when the Task is cancelled (view disappears).
+/// Retries transient errors up to `maxRetries` with exponential backoff.
 public actor PollingManager {
     private let client: any WorkflowClientProtocol
     private let interval: Duration
+    private let maxRetries: Int
 
-    public init(client: any WorkflowClientProtocol, interval: Duration = .seconds(2)) {
+    public init(client: any WorkflowClientProtocol, interval: Duration = .seconds(2), maxRetries: Int = 3) {
         self.client = client
         self.interval = interval
+        self.maxRetries = maxRetries
     }
 
     /// Polls until the step changes from `currentStep` or the task is cancelled.
     /// Returns the new WorkflowState when a transition is detected.
     public func pollUntilStepChanges(projectId: String, currentStep: String) async throws -> WorkflowState {
+        var consecutiveErrors = 0
         while !Task.isCancelled {
             try await Task.sleep(for: interval)
-            let state = try await client.getState(projectId: projectId)
-            if state.step != currentStep || state.error != nil {
-                return state
+            do {
+                let state = try await client.getState(projectId: projectId)
+                consecutiveErrors = 0
+                if state.step != currentStep || state.error != nil {
+                    return state
+                }
+            } catch is CancellationError {
+                throw CancellationError()
+            } catch let error as APIError where error.isRetryable {
+                consecutiveErrors += 1
+                if consecutiveErrors > maxRetries {
+                    throw error
+                }
+                // Exponential backoff: 2s, 4s, 8s
+                let backoff = Duration.seconds(pow(2.0, Double(consecutiveErrors)))
+                try await Task.sleep(for: backoff)
+            } catch {
+                // Non-retryable error — fail immediately
+                throw error
             }
         }
         throw CancellationError()

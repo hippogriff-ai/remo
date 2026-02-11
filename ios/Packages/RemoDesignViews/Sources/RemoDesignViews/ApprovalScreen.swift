@@ -59,7 +59,11 @@ public struct ApprovalScreen: View {
     }
 
     private func approve() async {
-        guard let projectId = projectState.projectId else { return }
+        guard let projectId = projectState.projectId else {
+            assertionFailure("approve() called without projectId")
+            errorMessage = "Project not initialized"
+            return
+        }
         isApproving = true
         defer { isApproving = false }
         do {

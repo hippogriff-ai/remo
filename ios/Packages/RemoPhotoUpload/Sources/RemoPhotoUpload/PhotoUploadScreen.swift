@@ -132,9 +132,14 @@ public struct PhotoUploadScreen: View {
         }
         #if os(iOS)
         .sheet(isPresented: $showCamera) {
-            CameraView { imageData in
-                Task { await uploadPhoto(imageData, type: "room") }
-            }
+            CameraView(
+                onCapture: { imageData in
+                    Task { await uploadPhoto(imageData, type: "room") }
+                },
+                onError: { message in
+                    validationMessages = [message]
+                }
+            )
         }
         #endif
     }
@@ -163,7 +168,11 @@ public struct PhotoUploadScreen: View {
     }
 
     private func uploadPhoto(_ data: Data, type: String) async {
-        guard let projectId = projectState.projectId else { return }
+        guard let projectId = projectState.projectId else {
+            assertionFailure("uploadPhoto() called without projectId")
+            validationMessages = ["Project not initialized"]
+            return
+        }
         do {
             let response = try await client.uploadPhoto(projectId: projectId, imageData: data, photoType: type)
             if !response.validation.passed {
@@ -237,6 +246,7 @@ struct PhotoThumbnail: View {
 
 struct CameraView: UIViewControllerRepresentable {
     let onCapture: (Data) -> Void
+    var onError: ((String) -> Void)?
 
     func makeUIViewController(context: Context) -> UIImagePickerController {
         let picker = UIImagePickerController()
@@ -247,13 +257,15 @@ struct CameraView: UIViewControllerRepresentable {
 
     func updateUIViewController(_ uiViewController: UIImagePickerController, context: Context) {}
 
-    func makeCoordinator() -> Coordinator { Coordinator(onCapture: onCapture) }
+    func makeCoordinator() -> Coordinator { Coordinator(onCapture: onCapture, onError: onError) }
 
     class Coordinator: NSObject, UIImagePickerControllerDelegate, UINavigationControllerDelegate {
         let onCapture: (Data) -> Void
+        let onError: ((String) -> Void)?
 
-        init(onCapture: @escaping (Data) -> Void) {
+        init(onCapture: @escaping (Data) -> Void, onError: ((String) -> Void)?) {
             self.onCapture = onCapture
+            self.onError = onError
         }
 
         func imagePickerController(
@@ -261,8 +273,14 @@ struct CameraView: UIViewControllerRepresentable {
             didFinishPickingMediaWithInfo info: [UIImagePickerController.InfoKey: Any]
         ) {
             picker.dismiss(animated: true)
-            guard let image = info[.originalImage] as? UIImage,
-                  let data = image.jpegData(compressionQuality: 0.85) else { return }
+            guard let image = info[.originalImage] as? UIImage else {
+                onError?("Could not read the captured photo.")
+                return
+            }
+            guard let data = image.jpegData(compressionQuality: 0.85) else {
+                onError?("Failed to convert photo to JPEG format.")
+                return
+            }
             onCapture(data)
         }
 

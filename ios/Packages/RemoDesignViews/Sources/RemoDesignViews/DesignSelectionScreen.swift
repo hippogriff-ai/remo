@@ -90,7 +90,18 @@ public struct DesignSelectionScreen: View {
     }
 
     private func selectDesign() async {
-        guard let index = selectedIndex, let projectId = projectState.projectId else { return }
+        guard let index = selectedIndex, let projectId = projectState.projectId else {
+            if projectState.projectId == nil {
+                assertionFailure("selectDesign() called without projectId")
+                errorMessage = "Project not initialized"
+            }
+            return
+        }
+        guard index < projectState.generatedOptions.count else {
+            errorMessage = "Selected design is no longer available"
+            selectedIndex = nil
+            return
+        }
         isSelecting = true
         defer { isSelecting = false }
         do {
@@ -103,7 +114,11 @@ public struct DesignSelectionScreen: View {
     }
 
     private func startOver() async {
-        guard let projectId = projectState.projectId else { return }
+        guard let projectId = projectState.projectId else {
+            assertionFailure("startOver() called without projectId")
+            errorMessage = "Project not initialized"
+            return
+        }
         do {
             try await client.startOver(projectId: projectId)
             let newState = try await client.getState(projectId: projectId)

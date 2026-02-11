@@ -84,7 +84,11 @@ public struct LiDARScanScreen: View {
     }
 
     private func startScan() async {
-        guard let projectId = projectState.projectId else { return }
+        guard let projectId = projectState.projectId else {
+            assertionFailure("startScan() called without projectId")
+            errorMessage = "Project not initialized"
+            return
+        }
         isScanning = true
         defer { isScanning = false }
 
@@ -102,7 +106,11 @@ public struct LiDARScanScreen: View {
     }
 
     private func skipScan() async {
-        guard let projectId = projectState.projectId else { return }
+        guard let projectId = projectState.projectId else {
+            assertionFailure("skipScan() called without projectId")
+            errorMessage = "Project not initialized"
+            return
+        }
         do {
             try await client.skipScan(projectId: projectId)
             let newState = try await client.getState(projectId: projectId)

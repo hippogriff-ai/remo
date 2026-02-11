@@ -51,12 +51,21 @@ Build the T1 iOS app for Remo (AI room redesign). P1 Independent Build substanti
 - Done: 10 snap guide unit tests (center snap, region alignment, threshold, exclusion)
 - Done: Inspiration photo upload — separate PhotosPicker for room vs inspiration photos with correct type tagging
 - Done: Test coverage review gaps addressed — AnyCodable edge cases, RoomDimensions wall data, forward compatibility, DesignBrief round-trip, ProjectState.apply all fields, APIError.isRetryable (9 tests), 5-iteration cap boundary, error type assertions, not-found assertions
-- Now: P2 annotation polish complete. All P1+P2 deliverables done except real API swap. 73 tests.
-- Next: P2 integration (swap mock for real API), P3 stabilization (resume flow, error edge cases, polish)
+- Done: Silent failure hunt fixes — all 15 `guard projectId else { return }` now surface errors via assertionFailure + user-facing message
+- Done: CameraView error surfacing — split guard for image extraction vs JPEG conversion, onError callback wired to validationMessages
+- Done: PollingManager retry — transient errors retried up to 3× with exponential backoff (2s/4s/8s) before failing
+- Done: RealWorkflowClient force-unwrap removal — `Data("string".utf8)` replaces `"string".data(using: .utf8)!`
+- Done: DesignSelectionScreen bounds check — validates selectedIndex < generatedOptions.count before API call
+- Done: HomeScreen missing project — shows ContentUnavailableView instead of blank screen
+- Done: Resume flow — project IDs persisted to UserDefaults, restored on app launch, 404'd projects auto-removed
+- Done: Project delete — swipe-to-delete on HomeScreen project rows (calls deleteProject + removes from persistence)
+- Done: Loading state — HomeScreen shows ProgressView while loading projects on startup
+- Done: Removed stale PollingManager.swift redirect from app shell
+- Now: All P1+P2+P3 deliverables done except real API swap. 73 tests, 0 warnings, 8/8 packages build.
+- Next: P2 integration (swap mock for real API), final polish
 
 ## Open Questions
 - RoomPlan data format: JSON on-device vs USDZ? (P0 end question, deferred)
-- Annotation circle sizing: pinch vs drag handle? (test both in prototype)
 
 ## Working Set
 - ios/Packages/RemoModels/ (contract mirrors, protocol, ProjectState, tests)

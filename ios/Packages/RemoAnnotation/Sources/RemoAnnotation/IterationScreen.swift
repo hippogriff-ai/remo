@@ -156,7 +156,11 @@ public struct IterationScreen: View {
     }
 
     private func submit() async {
-        guard let projectId = projectState.projectId else { return }
+        guard let projectId = projectState.projectId else {
+            assertionFailure("submit() called without projectId")
+            errorMessage = "Project not initialized"
+            return
+        }
         isSubmitting = true
         defer { isSubmitting = false }
 
@@ -182,7 +186,11 @@ public struct IterationScreen: View {
     }
 
     private func approve() async {
-        guard let projectId = projectState.projectId else { return }
+        guard let projectId = projectState.projectId else {
+            assertionFailure("approve() called without projectId")
+            errorMessage = "Project not initialized"
+            return
+        }
         do {
             try await client.approveDesign(projectId: projectId)
             let newState = try await client.getState(projectId: projectId)
