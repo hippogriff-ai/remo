@@ -34,8 +34,11 @@ public actor PollingManager {
                 if consecutiveErrors > maxRetries {
                     throw error
                 }
-                // Exponential backoff: 2s, 4s, 8s
-                let backoff = Duration.seconds(pow(2.0, Double(consecutiveErrors)))
+                // Exponential backoff based on poll interval: interval×2, interval×4, interval×8
+                let multiplier = pow(2.0, Double(consecutiveErrors))
+                let backoffNanos = Double(interval.components.seconds) * 1_000_000_000
+                    + Double(interval.components.attoseconds) / 1_000_000_000
+                let backoff = Duration.nanoseconds(Int64(backoffNanos * multiplier))
                 try await Task.sleep(for: backoff)
             } catch {
                 // Non-retryable error — fail immediately
