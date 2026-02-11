@@ -1,5 +1,6 @@
 import SwiftUI
 import RemoModels
+import RemoNetworking
 
 /// Loading screen shown while designs are being generated.
 public struct GeneratingScreen: View {
@@ -33,5 +34,11 @@ public struct GeneratingScreen: View {
         .navigationBarTitleDisplayMode(.inline)
         .navigationBarBackButtonHidden()
         #endif
+    }
+}
+
+#Preview {
+    NavigationStack {
+        GeneratingScreen(projectState: .preview(step: .generation))
     }
 }

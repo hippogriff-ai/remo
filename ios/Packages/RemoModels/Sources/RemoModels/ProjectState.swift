@@ -29,6 +29,55 @@ public final class ProjectState {
 
     public init() {}
 
+    /// Convenience for previews and tests — create a state at a given step with sample data.
+    public static func preview(step: ProjectStep = .photoUpload, projectId: String = "preview-1") -> ProjectState {
+        let state = ProjectState()
+        state.projectId = projectId
+        state.step = step
+        switch step {
+        case .photoUpload:
+            break
+        case .scan:
+            state.photos = [
+                PhotoData(photoId: "r1", storageKey: "photos/room_0.jpg", photoType: "room", note: nil),
+                PhotoData(photoId: "r2", storageKey: "photos/room_1.jpg", photoType: "room", note: nil),
+            ]
+        case .intake:
+            state.photos = [
+                PhotoData(photoId: "r1", storageKey: "photos/room_0.jpg", photoType: "room", note: nil),
+                PhotoData(photoId: "r2", storageKey: "photos/room_1.jpg", photoType: "room", note: nil),
+            ]
+        case .generation:
+            break
+        case .selection:
+            state.generatedOptions = [
+                DesignOption(imageUrl: "https://placehold.co/800x600/e8d5b7/333?text=Modern+Minimalist", caption: "Modern Minimalist"),
+                DesignOption(imageUrl: "https://placehold.co/800x600/b7d5e8/333?text=Warm+Contemporary", caption: "Warm Contemporary"),
+            ]
+        case .iteration:
+            state.currentImage = "https://placehold.co/800x600/e8d5b7/333?text=Current+Design"
+            state.iterationCount = 1
+        case .approval:
+            state.currentImage = "https://placehold.co/800x600/e8d5b7/333?text=Final+Design"
+            state.iterationCount = 2
+        case .shopping:
+            break
+        case .completed:
+            state.currentImage = "https://placehold.co/800x600/e8d5b7/333?text=Completed+Design"
+            state.iterationCount = 2
+            state.revisionHistory = [
+                RevisionRecord(revisionNumber: 1, type: "annotation", baseImageUrl: "https://example.com/base.png", revisedImageUrl: "https://example.com/rev1.png", instructions: ["Replace lamp with modern floor lamp"]),
+            ]
+            state.shoppingList = ShoppingListOutput(items: [
+                ProductMatch(categoryGroup: "Furniture", productName: "Accent Chair", retailer: "West Elm", priceCents: 24999, productUrl: "https://example.com/chair", imageUrl: nil, confidenceScore: 0.92, whyMatched: "Modern minimalist style", fitStatus: "fits", fitDetail: "Fits through doorway", dimensions: "32\"W x 28\"D x 31\"H"),
+                ProductMatch(categoryGroup: "Lighting", productName: "Floor Lamp", retailer: "CB2", priceCents: 8999, productUrl: "https://example.com/lamp", imageUrl: nil, confidenceScore: 0.85, whyMatched: "Warm ambient lighting", fitStatus: nil, fitDetail: nil, dimensions: nil),
+            ], unmatched: [
+                UnmatchedItem(category: "Rug", searchKeywords: "modern geometric rug 5x7", googleShoppingUrl: "https://www.google.com/search?tbm=shop&q=modern+geometric+rug+5x7"),
+            ], totalEstimatedCostCents: 33998)
+        }
+        return state
+    }
+
     /// Update from a WorkflowState response (polling result).
     public func apply(_ state: WorkflowState) {
         if let newStep = ProjectStep(rawValue: state.step) {

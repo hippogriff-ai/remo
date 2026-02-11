@@ -1,5 +1,6 @@
 import SwiftUI
 import RemoModels
+import RemoNetworking
 
 /// LiDAR scan screen: device capability check, scan flow, skip option.
 public struct LiDARScanScreen: View {
@@ -8,6 +9,7 @@ public struct LiDARScanScreen: View {
 
     @State private var isScanning = false
     @State private var showSkipConfirmation = false
+    @State private var errorMessage: String?
 
     public init(projectState: ProjectState, client: any WorkflowClientProtocol) {
         self.projectState = projectState
@@ -66,6 +68,11 @@ public struct LiDARScanScreen: View {
         #if os(iOS)
         .navigationBarTitleDisplayMode(.inline)
         #endif
+        .alert("Error", isPresented: .init(get: { errorMessage != nil }, set: { if !$0 { errorMessage = nil } })) {
+            Button("OK") { errorMessage = nil }
+        } message: {
+            Text(errorMessage ?? "")
+        }
         .alert("Skip Room Scan?", isPresented: $showSkipConfirmation) {
             Button("Skip", role: .destructive) {
                 Task { await skipScan() }
@@ -90,7 +97,7 @@ public struct LiDARScanScreen: View {
             let newState = try await client.getState(projectId: projectId)
             projectState.apply(newState)
         } catch {
-            // TODO: error handling
+            errorMessage = error.localizedDescription
         }
     }
 
@@ -101,7 +108,13 @@ public struct LiDARScanScreen: View {
             let newState = try await client.getState(projectId: projectId)
             projectState.apply(newState)
         } catch {
-            // TODO: error handling
+            errorMessage = error.localizedDescription
         }
+    }
+}
+
+#Preview {
+    NavigationStack {
+        LiDARScanScreen(projectState: .preview(step: .scan), client: MockWorkflowClient(delay: .zero))
     }
 }

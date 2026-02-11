@@ -1,5 +1,6 @@
 import SwiftUI
 import RemoModels
+import RemoNetworking
 import RemoShoppingList
 
 /// Final output screen: save to photos, share, view shopping list, start new project.
@@ -122,5 +123,11 @@ struct RevisionHistoryView: View {
         #if os(iOS)
         .navigationBarTitleDisplayMode(.inline)
         #endif
+    }
+}
+
+#Preview {
+    NavigationStack {
+        OutputScreen(projectState: .preview(step: .completed), client: MockWorkflowClient(delay: .zero))
     }
 }

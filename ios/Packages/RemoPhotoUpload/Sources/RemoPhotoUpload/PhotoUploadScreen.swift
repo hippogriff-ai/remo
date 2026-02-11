@@ -1,6 +1,7 @@
 import SwiftUI
 import PhotosUI
 import RemoModels
+import RemoNetworking
 
 /// Photo upload screen: camera + gallery picker, validation feedback, 2-room-photo minimum.
 public struct PhotoUploadScreen: View {
@@ -155,6 +156,14 @@ struct PhotoThumbnail: View {
                 }
                 .foregroundStyle(.secondary)
             }
+    }
+}
+
+// MARK: - Preview
+
+#Preview {
+    NavigationStack {
+        PhotoUploadScreen(projectState: .preview(step: .photoUpload), client: MockWorkflowClient(delay: .zero))
     }
 }
 

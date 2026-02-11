@@ -1,5 +1,6 @@
 import SwiftUI
 import RemoModels
+import RemoNetworking
 
 /// Swipeable design comparison: 2 options, side-by-side toggle, selection highlighting.
 public struct DesignSelectionScreen: View {
@@ -9,6 +10,7 @@ public struct DesignSelectionScreen: View {
     @State private var selectedIndex: Int?
     @State private var showSideBySide = false
     @State private var isSelecting = false
+    @State private var errorMessage: String?
 
     public init(projectState: ProjectState, client: any WorkflowClientProtocol) {
         self.projectState = projectState
@@ -53,6 +55,11 @@ public struct DesignSelectionScreen: View {
         #if os(iOS)
         .navigationBarTitleDisplayMode(.inline)
         #endif
+        .alert("Error", isPresented: .init(get: { errorMessage != nil }, set: { if !$0 { errorMessage = nil } })) {
+            Button("OK") { errorMessage = nil }
+        } message: {
+            Text(errorMessage ?? "")
+        }
     }
 
     @ViewBuilder
@@ -91,7 +98,7 @@ public struct DesignSelectionScreen: View {
             let newState = try await client.getState(projectId: projectId)
             projectState.apply(newState)
         } catch {
-            // TODO: error handling
+            errorMessage = error.localizedDescription
         }
     }
 
@@ -102,7 +109,7 @@ public struct DesignSelectionScreen: View {
             let newState = try await client.getState(projectId: projectId)
             projectState.apply(newState)
         } catch {
-            // TODO: error handling
+            errorMessage = error.localizedDescription
         }
     }
 }
@@ -137,5 +144,11 @@ struct DesignCard: View {
                 .font(.subheadline.bold())
         }
         .onTapGesture { onTap() }
+    }
+}
+
+#Preview {
+    NavigationStack {
+        DesignSelectionScreen(projectState: .preview(step: .selection), client: MockWorkflowClient(delay: .zero))
     }
 }

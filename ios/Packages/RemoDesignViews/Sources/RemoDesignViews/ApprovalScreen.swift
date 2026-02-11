@@ -1,5 +1,6 @@
 import SwiftUI
 import RemoModels
+import RemoNetworking
 
 /// Design approval screen: review final design and approve for shopping list generation.
 public struct ApprovalScreen: View {
@@ -7,6 +8,7 @@ public struct ApprovalScreen: View {
     let client: any WorkflowClientProtocol
 
     @State private var isApproving = false
+    @State private var errorMessage: String?
 
     public init(projectState: ProjectState, client: any WorkflowClientProtocol) {
         self.projectState = projectState
@@ -49,6 +51,11 @@ public struct ApprovalScreen: View {
         #if os(iOS)
         .navigationBarTitleDisplayMode(.inline)
         #endif
+        .alert("Error", isPresented: .init(get: { errorMessage != nil }, set: { if !$0 { errorMessage = nil } })) {
+            Button("OK") { errorMessage = nil }
+        } message: {
+            Text(errorMessage ?? "")
+        }
     }
 
     private func approve() async {
@@ -60,7 +67,13 @@ public struct ApprovalScreen: View {
             let newState = try await client.getState(projectId: projectId)
             projectState.apply(newState)
         } catch {
-            // TODO: error handling
+            errorMessage = error.localizedDescription
         }
+    }
+}
+
+#Preview {
+    NavigationStack {
+        ApprovalScreen(projectState: .preview(step: .approval), client: MockWorkflowClient(delay: .zero))
     }
 }

@@ -1,5 +1,6 @@
 import SwiftUI
 import RemoModels
+import RemoNetworking
 
 /// Iteration screen: annotation-based editing + text feedback.
 /// Users can place numbered circles on the design and provide instructions,
@@ -12,6 +13,7 @@ public struct IterationScreen: View {
     @State private var regions: [AnnotationRegion] = []
     @State private var textFeedback = ""
     @State private var isSubmitting = false
+    @State private var errorMessage: String?
 
     enum IterationMode: String, CaseIterable {
         case annotation = "Mark Areas"
@@ -82,6 +84,11 @@ public struct IterationScreen: View {
         #if os(iOS)
         .navigationBarTitleDisplayMode(.inline)
         #endif
+        .alert("Error", isPresented: .init(get: { errorMessage != nil }, set: { if !$0 { errorMessage = nil } })) {
+            Button("OK") { errorMessage = nil }
+        } message: {
+            Text(errorMessage ?? "")
+        }
     }
 
     private var canSubmit: Bool {
@@ -142,7 +149,7 @@ public struct IterationScreen: View {
             regions = []
             textFeedback = ""
         } catch {
-            // TODO: error handling
+            errorMessage = error.localizedDescription
         }
     }
 
@@ -153,12 +160,20 @@ public struct IterationScreen: View {
             let newState = try await client.getState(projectId: projectId)
             projectState.apply(newState)
         } catch {
-            // TODO: error handling
+            errorMessage = error.localizedDescription
         }
     }
 
     private func regionColor(for index: Int) -> Color {
         [Color.red, .blue, .green][index % 3]
+    }
+}
+
+// MARK: - Preview
+
+#Preview {
+    NavigationStack {
+        IterationScreen(projectState: .preview(step: .iteration), client: MockWorkflowClient(delay: .zero))
     }
 }
 

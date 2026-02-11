@@ -1,5 +1,6 @@
 import SwiftUI
 import RemoModels
+import RemoNetworking
 
 /// Chat interface for the intake conversation.
 /// Bubble-style messages, quick-reply chips, free-text input, progress indicator.
@@ -10,6 +11,7 @@ public struct IntakeChatScreen: View {
     @State private var inputText = ""
     @State private var isSending = false
     @State private var hasStarted = false
+    @State private var errorMessage: String?
 
     public init(projectState: ProjectState, client: any WorkflowClientProtocol) {
         self.projectState = projectState
@@ -99,6 +101,11 @@ public struct IntakeChatScreen: View {
         .task {
             if !hasStarted { await startConversation() }
         }
+        .alert("Error", isPresented: .init(get: { errorMessage != nil }, set: { if !$0 { errorMessage = nil } })) {
+            Button("OK") { errorMessage = nil }
+        } message: {
+            Text(errorMessage ?? "")
+        }
     }
 
     private var shouldShowTextInput: Bool {
@@ -114,7 +121,7 @@ public struct IntakeChatScreen: View {
             projectState.currentIntakeOutput = output
             hasStarted = true
         } catch {
-            // TODO: error handling
+            errorMessage = error.localizedDescription
         }
     }
 
@@ -133,7 +140,7 @@ public struct IntakeChatScreen: View {
             projectState.chatMessages.append(ChatMessage(role: "assistant", content: output.agentMessage))
             projectState.currentIntakeOutput = output
         } catch {
-            // TODO: error handling
+            errorMessage = error.localizedDescription
         }
     }
 
@@ -144,7 +151,7 @@ public struct IntakeChatScreen: View {
             let newState = try await client.getState(projectId: projectId)
             projectState.apply(newState)
         } catch {
-            // TODO: error handling
+            errorMessage = error.localizedDescription
         }
     }
 
@@ -155,7 +162,7 @@ public struct IntakeChatScreen: View {
             let newState = try await client.getState(projectId: projectId)
             projectState.apply(newState)
         } catch {
-            // TODO: error handling
+            errorMessage = error.localizedDescription
         }
     }
 }
@@ -211,6 +218,14 @@ struct QuickReplyChips: View {
                 .buttonStyle(.plain)
             }
         }
+    }
+}
+
+// MARK: - Preview
+
+#Preview {
+    NavigationStack {
+        IntakeChatScreen(projectState: .preview(step: .intake), client: MockWorkflowClient(delay: .zero))
     }
 }
 

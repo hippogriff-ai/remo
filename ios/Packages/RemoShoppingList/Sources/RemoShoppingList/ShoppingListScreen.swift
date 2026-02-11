@@ -1,5 +1,6 @@
 import SwiftUI
 import RemoModels
+import RemoNetworking
 
 /// Shopping list: products grouped by category, confidence badges, fit status, buy links.
 public struct ShoppingListScreen: View {
@@ -212,5 +213,11 @@ struct UnmatchedCard: View {
             }
         }
         .padding(.vertical, 4)
+    }
+}
+
+#Preview {
+    NavigationStack {
+        ShoppingListScreen(projectState: .preview(step: .completed))
     }
 }
