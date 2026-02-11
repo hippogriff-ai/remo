@@ -199,8 +199,9 @@ async def upload_photo(
             photo_type=photo_type,
         )
         state.photos.append(photo)
-        # Auto-transition to scan after minimum photos (mirrors workflow behavior)
-        if len(state.photos) >= 2 and state.step == "photos":
+        # Auto-transition to scan after minimum room photos (mirrors workflow behavior)
+        room_count = sum(1 for p in state.photos if p.photo_type == "room")
+        if room_count >= 2 and state.step == "photos":
             state.step = "scan"
 
     logger.info(

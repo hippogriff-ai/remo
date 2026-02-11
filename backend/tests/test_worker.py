@@ -11,8 +11,8 @@ from app.activities.mock_stubs import (
     edit_design,
     generate_designs,
     generate_shopping_list,
-    purge_project_data,
 )
+from app.activities.purge import purge_project_data
 from app.worker import ACTIVITIES, WORKFLOWS, create_temporal_client, run_worker
 from app.workflows.design_project import DesignProjectWorkflow
 
@@ -20,8 +20,8 @@ from app.workflows.design_project import DesignProjectWorkflow
 class TestActivityRegistration:
     """Verify that the correct activities are registered with the worker."""
 
-    def test_all_mock_activities_registered(self) -> None:
-        """All 4 mock activity stubs should be in the ACTIVITIES list."""
+    def test_all_activities_registered(self) -> None:
+        """All 4 activities (3 mock + 1 real purge) should be in the ACTIVITIES list."""
         assert len(ACTIVITIES) == 4
 
     def test_generate_designs_registered(self) -> None:

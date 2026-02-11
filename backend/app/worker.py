@@ -20,8 +20,8 @@ from app.activities.mock_stubs import (
     edit_design,
     generate_designs,
     generate_shopping_list,
-    purge_project_data,
 )
+from app.activities.purge import purge_project_data
 from app.config import settings
 from app.logging import configure_logging
 from app.workflows.design_project import DesignProjectWorkflow

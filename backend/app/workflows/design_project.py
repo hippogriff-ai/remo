@@ -21,8 +21,8 @@ with workflow.unsafe.imports_passed_through():
         edit_design,
         generate_designs,
         generate_shopping_list,
-        purge_project_data,
     )
+    from app.activities.purge import purge_project_data
     from app.models.contracts import (
         AnnotationRegion,
         DesignBrief,
@@ -94,8 +94,8 @@ class DesignProjectWorkflow:
             raise
 
     async def _run_phases(self) -> None:
-        # --- Phase: Photos (need >= 2) ---
-        await self._wait(lambda: len(self.photos) >= 2)
+        # --- Phase: Photos (need >= 2 room photos) ---
+        await self._wait(lambda: sum(1 for p in self.photos if p.photo_type == "room") >= 2)
 
         # --- Phase: Scan ---
         self.step = "scan"

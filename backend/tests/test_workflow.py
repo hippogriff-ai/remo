@@ -514,7 +514,10 @@ class TestPhotoPhase:
             assert len(state.photos) == 2
 
     async def test_mixed_photo_types_stored_correctly(self, workflow_env, tq):
-        """Verifies room and inspiration photos are stored with correct types."""
+        """Verifies room and inspiration photos are stored with correct types.
+
+        Requires 2 room photos to advance; inspiration photos are optional.
+        """
 
         async with Worker(
             workflow_env.client,
@@ -523,9 +526,14 @@ class TestPhotoPhase:
             activities=ALL_ACTIVITIES,
         ):
             handle = await _start_workflow(workflow_env, tq)
-            room = PhotoData(
+            room1 = PhotoData(
                 photo_id="room-1",
-                storage_key="photos/room.jpg",
+                storage_key="photos/room1.jpg",
+                photo_type="room",
+            )
+            room2 = PhotoData(
+                photo_id="room-2",
+                storage_key="photos/room2.jpg",
                 photo_type="room",
             )
             inspo = PhotoData(
@@ -533,16 +541,17 @@ class TestPhotoPhase:
                 storage_key="photos/inspo.jpg",
                 photo_type="inspiration",
             )
-            await handle.signal(DesignProjectWorkflow.add_photo, room)
+            await handle.signal(DesignProjectWorkflow.add_photo, room1)
             await handle.signal(DesignProjectWorkflow.add_photo, inspo)
+            await handle.signal(DesignProjectWorkflow.add_photo, room2)
             await asyncio.sleep(0.5)
 
             state = await handle.query(DesignProjectWorkflow.get_state)
             assert state.step == "scan"
-            assert len(state.photos) == 2
+            assert len(state.photos) == 3
             room_photos = [p for p in state.photos if p.photo_type == "room"]
             inspo_photos = [p for p in state.photos if p.photo_type == "inspiration"]
-            assert len(room_photos) == 1
+            assert len(room_photos) == 2
             assert len(inspo_photos) == 1
 
     async def test_late_photo_accepted_after_scan_step(self, workflow_env, tq):
@@ -723,9 +732,14 @@ class TestGenerationInput:
         ):
             handle = await _start_workflow(workflow_env, tq)
 
-            room = PhotoData(
+            room1 = PhotoData(
                 photo_id="room-1",
                 storage_key="photos/room_0.jpg",
+                photo_type="room",
+            )
+            room2 = PhotoData(
+                photo_id="room-2",
+                storage_key="photos/room_1.jpg",
                 photo_type="room",
             )
             inspo = PhotoData(
@@ -733,7 +747,8 @@ class TestGenerationInput:
                 storage_key="photos/inspo_0.jpg",
                 photo_type="inspiration",
             )
-            await handle.signal(DesignProjectWorkflow.add_photo, room)
+            await handle.signal(DesignProjectWorkflow.add_photo, room1)
+            await handle.signal(DesignProjectWorkflow.add_photo, room2)
             await handle.signal(DesignProjectWorkflow.add_photo, inspo)
             await asyncio.sleep(0.5)
             await handle.signal(DesignProjectWorkflow.skip_scan)
@@ -745,7 +760,10 @@ class TestGenerationInput:
             assert state.step == "selection"
 
             assert _captured_generation_input is not None
-            assert _captured_generation_input.room_photo_urls == ["photos/room_0.jpg"]
+            assert _captured_generation_input.room_photo_urls == [
+                "photos/room_0.jpg",
+                "photos/room_1.jpg",
+            ]
             assert _captured_generation_input.inspiration_photo_urls == ["photos/inspo_0.jpg"]
             # Skipped intake → no brief, fallback to empty inspiration_notes
             assert _captured_generation_input.design_brief is None
@@ -875,10 +893,15 @@ class TestShoppingInput:
         ):
             handle = await _start_workflow(workflow_env, tq)
 
-            # Photos
-            room = PhotoData(
+            # Photos (need 2 room to advance)
+            room1 = PhotoData(
                 photo_id="room-1",
                 storage_key="photos/room_0.jpg",
+                photo_type="room",
+            )
+            room2 = PhotoData(
+                photo_id="room-2",
+                storage_key="photos/room_1.jpg",
                 photo_type="room",
             )
             inspo = PhotoData(
@@ -886,7 +909,8 @@ class TestShoppingInput:
                 storage_key="photos/inspo_0.jpg",
                 photo_type="inspiration",
             )
-            await handle.signal(DesignProjectWorkflow.add_photo, room)
+            await handle.signal(DesignProjectWorkflow.add_photo, room1)
+            await handle.signal(DesignProjectWorkflow.add_photo, room2)
             await handle.signal(DesignProjectWorkflow.add_photo, inspo)
             await asyncio.sleep(0.5)
 
@@ -922,7 +946,10 @@ class TestShoppingInput:
             # Current image should be the last revision (not the original selection)
             assert _captured_shopping_input.design_image_url == state.current_image
             # Only room photos, not inspiration
-            assert _captured_shopping_input.original_room_photo_urls == ["photos/room_0.jpg"]
+            assert _captured_shopping_input.original_room_photo_urls == [
+                "photos/room_0.jpg",
+                "photos/room_1.jpg",
+            ]
             # Brief forwarded
             assert _captured_shopping_input.design_brief is not None
             assert _captured_shopping_input.design_brief.room_type == "living room"
@@ -1041,10 +1068,15 @@ class TestEditInput:
             activities=_CAPTURING_EDIT_ACTIVITIES,
         ):
             handle = await _start_workflow(workflow_env, tq)
-            # Add room + inspiration photos
-            room = PhotoData(
+            # Add room + inspiration photos (need 2 room to advance)
+            room1 = PhotoData(
                 photo_id="room-r1",
                 storage_key="photos/room_r1.jpg",
+                photo_type="room",
+            )
+            room2 = PhotoData(
+                photo_id="room-r2",
+                storage_key="photos/room_r2.jpg",
                 photo_type="room",
             )
             inspo = PhotoData(
@@ -1052,7 +1084,8 @@ class TestEditInput:
                 storage_key="photos/inspo_r1.jpg",
                 photo_type="inspiration",
             )
-            await handle.signal(DesignProjectWorkflow.add_photo, room)
+            await handle.signal(DesignProjectWorkflow.add_photo, room1)
+            await handle.signal(DesignProjectWorkflow.add_photo, room2)
             await handle.signal(DesignProjectWorkflow.add_photo, inspo)
             await asyncio.sleep(0.5)
 
@@ -1090,7 +1123,10 @@ class TestEditInput:
 
             assert _captured_edit_input is not None
             # Room photos forwarded (not inspiration)
-            assert _captured_edit_input.room_photo_urls == ["photos/room_r1.jpg"]
+            assert _captured_edit_input.room_photo_urls == [
+                "photos/room_r1.jpg",
+                "photos/room_r2.jpg",
+            ]
             # Brief forwarded
             assert _captured_edit_input.design_brief is not None
             assert _captured_edit_input.design_brief.room_type == "office"
@@ -1260,10 +1296,15 @@ class TestStartOver:
         ):
             handle = await _start_workflow(workflow_env, tq)
 
-            # Upload photos (room + inspiration)
-            room_photo = PhotoData(
+            # Upload photos (2 room + 1 inspiration)
+            room_photo1 = PhotoData(
                 photo_id="room-001",
                 storage_key="projects/test/room.jpg",
+                photo_type="room",
+            )
+            room_photo2 = PhotoData(
+                photo_id="room-002",
+                storage_key="projects/test/room2.jpg",
                 photo_type="room",
             )
             inspo_photo = PhotoData(
@@ -1271,7 +1312,8 @@ class TestStartOver:
                 storage_key="projects/test/inspo.jpg",
                 photo_type="inspiration",
             )
-            await handle.signal(DesignProjectWorkflow.add_photo, room_photo)
+            await handle.signal(DesignProjectWorkflow.add_photo, room_photo1)
+            await handle.signal(DesignProjectWorkflow.add_photo, room_photo2)
             await handle.signal(DesignProjectWorkflow.add_photo, inspo_photo)
             await asyncio.sleep(0.5)
 
@@ -1293,7 +1335,7 @@ class TestStartOver:
 
             state = await handle.query(DesignProjectWorkflow.get_state)
             assert state.step == "selection"
-            assert len(state.photos) == 2
+            assert len(state.photos) == 3
             assert state.scan_data is not None
 
             # Start over
@@ -1304,11 +1346,13 @@ class TestStartOver:
             assert state.step == "intake"
 
             # Photos preserved
-            assert len(state.photos) == 2
+            assert len(state.photos) == 3
             assert state.photos[0].photo_id == "room-001"
-            assert state.photos[1].photo_id == "inspo-001"
+            assert state.photos[1].photo_id == "room-002"
+            assert state.photos[2].photo_id == "inspo-001"
             assert state.photos[0].photo_type == "room"
-            assert state.photos[1].photo_type == "inspiration"
+            assert state.photos[1].photo_type == "room"
+            assert state.photos[2].photo_type == "inspiration"
 
             # Scan data preserved
             assert state.scan_data is not None
