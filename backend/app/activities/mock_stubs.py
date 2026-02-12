@@ -5,6 +5,8 @@ end-to-end without real AI APIs. T2/T3 will build real implementations
 in their owned files; these stubs get swapped out during P2 integration.
 """
 
+from uuid import uuid4
+
 from temporalio import activity
 
 from app.models.contracts import (
@@ -32,7 +34,7 @@ async def generate_designs(input: GenerateDesignsInput) -> GenerateDesignsOutput
 @activity.defn
 async def edit_design(input: EditDesignInput) -> EditDesignOutput:
     return EditDesignOutput(
-        revised_image_url="https://r2.example.com/mock/edit.png",
+        revised_image_url=f"https://r2.example.com/mock/edit_{uuid4().hex[:8]}.png",
         chat_history_key=f"chat/{input.project_id}/history.json",
     )
 

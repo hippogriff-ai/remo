@@ -10,6 +10,15 @@ Validates that every model:
 import pytest
 from pydantic import ValidationError
 
+from app.activities.mock_stubs import (
+    edit_design as mock_edit_design,
+)
+from app.activities.mock_stubs import (
+    generate_designs as mock_generate_designs,
+)
+from app.activities.mock_stubs import (
+    generate_shopping_list as mock_generate_shopping_list,
+)
 from app.models.contracts import (
     AnnotationEditRequest,
     AnnotationRegion,
@@ -20,18 +29,24 @@ from app.models.contracts import (
     EditDesignInput,
     EditDesignOutput,
     ErrorResponse,
+    GenerateDesignsInput,
     GenerateDesignsOutput,
+    GenerateShoppingListInput,
     GenerateShoppingListOutput,
     InspirationNote,
     IntakeChatInput,
+    IntakeChatOutput,
     PhotoData,
     PhotoUploadResponse,
     ProductMatch,
+    QuickReplyOption,
     RevisionRecord,
     RoomDimensions,
+    ScanData,
     SelectOptionRequest,
     StyleProfile,
     TextFeedbackRequest,
+    UnmatchedItem,
     ValidatePhotoInput,
     ValidatePhotoOutput,
     WorkflowError,
@@ -82,6 +97,7 @@ class TestDesignBrief:
         """Only room_type required."""
         b = DesignBrief(room_type="living room")
         assert b.occupants is None
+        assert b.lifestyle is None
         assert b.pain_points == []
 
     def test_full(self):
@@ -89,6 +105,7 @@ class TestDesignBrief:
         b = DesignBrief(
             room_type="bedroom",
             occupants="couple",
+            lifestyle="Morning yoga, weekend hosting",
             pain_points=["too dark"],
             keep_items=["bed frame"],
             style_profile=StyleProfile(lighting="warm"),
@@ -96,7 +113,33 @@ class TestDesignBrief:
             inspiration_notes=[InspirationNote(photo_index=0, note="moody lighting")],
         )
         assert b.style_profile.lighting == "warm"
+        assert b.lifestyle == "Morning yoga, weekend hosting"
         assert len(b.inspiration_notes) == 1
+
+    def test_lifestyle_none_is_backwards_compatible(self):
+        """DesignBrief(lifestyle=None) is valid — INT-6 backwards compatibility.
+
+        Covers INT-6 TDD criterion: DesignBrief(lifestyle=None) is valid.
+        """
+        b = DesignBrief(room_type="office")
+        assert b.lifestyle is None
+        d = b.model_dump()
+        b2 = DesignBrief.model_validate(d)
+        assert b2.lifestyle is None
+
+    def test_lifestyle_serializes_correctly(self):
+        """DesignBrief with lifestyle serializes and deserializes.
+
+        Covers INT-6 TDD criterion: serializes/deserializes correctly.
+        """
+        b = DesignBrief(
+            room_type="living room",
+            lifestyle="Morning yoga, weekend hosting",
+        )
+        d = b.model_dump()
+        assert d["lifestyle"] == "Morning yoga, weekend hosting"
+        b2 = DesignBrief.model_validate(d)
+        assert b2.lifestyle == "Morning yoga, weekend hosting"
 
 
 class TestRoomDimensions:
@@ -518,6 +561,103 @@ class TestWorkflowState:
         assert restored.revision_history[0].instructions == ["Replace the sofa"]
         assert restored.chat_history_key == "proj-1/chat/abc123"
 
+    def test_completed_state_all_fields(self):
+        """Completed state with all fields populated — what iOS polls at end of flow.
+
+        Exercises every WorkflowState field including scan_data, shopping_list,
+        and approved=True, which the basic round-trip test doesn't cover.
+        """
+        s = WorkflowState(
+            step="completed",
+            photos=[
+                PhotoData(
+                    photo_id="p1",
+                    storage_key="projects/1/photos/room_0.jpg",
+                    photo_type="room",
+                ),
+                PhotoData(
+                    photo_id="p2",
+                    storage_key="projects/1/photos/inspo_0.jpg",
+                    photo_type="inspiration",
+                    note="Love the warm lighting",
+                ),
+            ],
+            scan_data=ScanData(
+                storage_key="projects/1/scan.json",
+                room_dimensions=RoomDimensions(width_m=4.5, length_m=6.0, height_m=2.7),
+            ),
+            design_brief=DesignBrief(
+                room_type="living room",
+                pain_points=["too dark"],
+                keep_items=["bookshelf"],
+                style_profile=StyleProfile(lighting="warm"),
+                inspiration_notes=[InspirationNote(photo_index=0, note="Love the warm lighting")],
+            ),
+            generated_options=[
+                DesignOption(image_url="https://r2/opt0.png", caption="Modern"),
+                DesignOption(image_url="https://r2/opt1.png", caption="Warm"),
+            ],
+            selected_option=1,
+            current_image="https://r2/rev2.png",
+            revision_history=[
+                RevisionRecord(
+                    revision_number=1,
+                    type="annotation",
+                    base_image_url="https://r2/opt1.png",
+                    revised_image_url="https://r2/rev1.png",
+                    instructions=["Replace the lamp"],
+                ),
+                RevisionRecord(
+                    revision_number=2,
+                    type="feedback",
+                    base_image_url="https://r2/rev1.png",
+                    revised_image_url="https://r2/rev2.png",
+                ),
+            ],
+            iteration_count=2,
+            shopping_list=GenerateShoppingListOutput(
+                items=[
+                    ProductMatch(
+                        category_group="Furniture",
+                        product_name="Accent Chair",
+                        retailer="Store A",
+                        price_cents=24999,
+                        product_url="https://example.com/chair",
+                        confidence_score=0.92,
+                        why_matched="Matches style",
+                    )
+                ],
+                unmatched=[
+                    UnmatchedItem(
+                        category="Rug",
+                        search_keywords="modern area rug 5x7",
+                        google_shopping_url="https://google.com/search?q=rug",
+                    )
+                ],
+                total_estimated_cost_cents=24999,
+            ),
+            approved=True,
+            error=None,
+            chat_history_key="proj-1/chat/final",
+        )
+        json_str = s.model_dump_json()
+        restored = WorkflowState.model_validate_json(json_str)
+        assert restored.step == "completed"
+        assert restored.approved is True
+        assert len(restored.photos) == 2
+        assert restored.photos[1].note == "Love the warm lighting"
+        assert restored.scan_data is not None
+        assert restored.scan_data.room_dimensions.width_m == 4.5
+        assert restored.design_brief.inspiration_notes[0].note == "Love the warm lighting"
+        assert restored.shopping_list is not None
+        assert restored.shopping_list.items[0].product_name == "Accent Chair"
+        assert len(restored.shopping_list.unmatched) == 1
+        assert restored.shopping_list.total_estimated_cost_cents == 24999
+        assert restored.selected_option == 1
+        assert restored.iteration_count == 2
+        assert len(restored.revision_history) == 2
+        assert restored.error is None
+
 
 class TestAPIModels:
     """API request/response models."""
@@ -568,6 +708,384 @@ class TestAPIModels:
             ),
         )
         assert r.validation.passed is True
+
+
+class TestActivityInputRoundTrip:
+    """JSON round-trip tests for all activity Input models.
+
+    Critical for P2 integration: Temporal's pydantic data converter serializes
+    activity inputs to JSON and deserializes on the worker. If a model doesn't
+    survive round-trip, the activity will receive corrupted data at runtime.
+    Each test uses fully-populated realistic data to catch nested model issues.
+    """
+
+    def test_generate_designs_input_round_trip(self):
+        """GenerateDesignsInput with all fields survives JSON round-trip."""
+        inp = GenerateDesignsInput(
+            room_photo_urls=["photos/room_0.jpg", "photos/room_1.jpg"],
+            inspiration_photo_urls=["photos/inspo_0.jpg"],
+            inspiration_notes=[
+                InspirationNote(
+                    photo_index=0,
+                    note="Love the warm lighting",
+                    agent_clarification="User prefers amber tones",
+                ),
+            ],
+            design_brief=DesignBrief(
+                room_type="living room",
+                occupants="couple with dog",
+                lifestyle="Morning yoga, weekend hosting",
+                pain_points=["too dark", "cluttered"],
+                keep_items=["bookshelf"],
+                style_profile=StyleProfile(
+                    lighting="warm",
+                    colors=["navy", "cream"],
+                    textures=["velvet", "linen"],
+                    clutter_level="minimal",
+                    mood="cozy",
+                ),
+                constraints=["budget $5000"],
+                inspiration_notes=[
+                    InspirationNote(photo_index=0, note="moody lighting"),
+                ],
+            ),
+            room_dimensions=RoomDimensions(
+                width_m=4.5,
+                length_m=6.0,
+                height_m=2.7,
+                walls=[{"id": "wall_0", "width": 4.5, "height": 2.7}],
+                openings=[{"type": "door", "width": 0.9}],
+            ),
+        )
+        restored = GenerateDesignsInput.model_validate_json(inp.model_dump_json())
+        assert restored.room_photo_urls == inp.room_photo_urls
+        assert restored.inspiration_photo_urls == inp.inspiration_photo_urls
+        assert len(restored.inspiration_notes) == 1
+        assert restored.inspiration_notes[0].agent_clarification == "User prefers amber tones"
+        assert restored.design_brief.lifestyle == "Morning yoga, weekend hosting"
+        assert restored.design_brief.style_profile.mood == "cozy"
+        assert restored.room_dimensions.width_m == 4.5
+        assert len(restored.room_dimensions.walls) == 1
+
+    def test_edit_design_input_annotation_round_trip(self):
+        """EditDesignInput with annotations survives JSON round-trip."""
+        inp = EditDesignInput(
+            project_id="proj-abc",
+            base_image_url="https://r2.example.com/base.png",
+            room_photo_urls=["photos/room_0.jpg"],
+            inspiration_photo_urls=["photos/inspo_0.jpg"],
+            design_brief=DesignBrief(room_type="office"),
+            annotations=[
+                AnnotationRegion(
+                    region_id=1,
+                    center_x=0.3,
+                    center_y=0.7,
+                    radius=0.15,
+                    instruction="Replace the desk lamp with a standing lamp",
+                ),
+                AnnotationRegion(
+                    region_id=2,
+                    center_x=0.8,
+                    center_y=0.2,
+                    radius=0.1,
+                    instruction="Remove the wall clock entirely",
+                ),
+            ],
+            chat_history_key="chat/proj-abc/history.json",
+        )
+        restored = EditDesignInput.model_validate_json(inp.model_dump_json())
+        assert restored.project_id == "proj-abc"
+        assert len(restored.annotations) == 2
+        assert restored.annotations[0].center_x == 0.3
+        assert restored.annotations[1].region_id == 2
+        assert restored.inspiration_photo_urls == ["photos/inspo_0.jpg"]
+        assert restored.chat_history_key == "chat/proj-abc/history.json"
+
+    def test_edit_design_input_feedback_round_trip(self):
+        """EditDesignInput with text feedback survives JSON round-trip."""
+        inp = EditDesignInput(
+            project_id="proj-def",
+            base_image_url="https://r2.example.com/rev1.png",
+            room_photo_urls=["photos/room_0.jpg", "photos/room_1.jpg"],
+            feedback="Make the room brighter with warmer lighting throughout",
+        )
+        restored = EditDesignInput.model_validate_json(inp.model_dump_json())
+        assert restored.feedback == inp.feedback
+        assert restored.annotations == []
+        assert restored.design_brief is None
+
+    def test_generate_shopping_list_input_round_trip(self):
+        """GenerateShoppingListInput with revision history survives JSON round-trip."""
+        inp = GenerateShoppingListInput(
+            design_image_url="https://r2.example.com/final.png",
+            original_room_photo_urls=["photos/room_0.jpg", "photos/room_1.jpg"],
+            design_brief=DesignBrief(
+                room_type="bedroom",
+                pain_points=["poor lighting"],
+                keep_items=["bed frame"],
+            ),
+            revision_history=[
+                RevisionRecord(
+                    revision_number=1,
+                    type="annotation",
+                    base_image_url="https://r2.example.com/opt0.png",
+                    revised_image_url="https://r2.example.com/rev1.png",
+                    instructions=["Replace the lamp", "Add plants"],
+                ),
+                RevisionRecord(
+                    revision_number=2,
+                    type="feedback",
+                    base_image_url="https://r2.example.com/rev1.png",
+                    revised_image_url="https://r2.example.com/rev2.png",
+                    instructions=["Make it warmer"],
+                ),
+            ],
+            room_dimensions=RoomDimensions(width_m=3.5, length_m=4.0, height_m=2.5),
+        )
+        restored = GenerateShoppingListInput.model_validate_json(inp.model_dump_json())
+        assert restored.design_image_url == inp.design_image_url
+        assert len(restored.revision_history) == 2
+        assert restored.revision_history[0].instructions == ["Replace the lamp", "Add plants"]
+        assert restored.revision_history[1].type == "feedback"
+        assert restored.room_dimensions.height_m == 2.5
+
+    def test_intake_chat_input_round_trip(self):
+        """IntakeChatInput with conversation history survives JSON round-trip."""
+        inp = IntakeChatInput(
+            mode="full",
+            project_context={
+                "room_photos": ["photos/room_0.jpg"],
+                "inspiration_photos": ["photos/inspo_0.jpg"],
+                "inspiration_notes": [{"photo_index": 0, "note": "warm tones"}],
+                "previous_brief": {"room_type": "living room", "occupants": "family"},
+            },
+            conversation_history=[
+                ChatMessage(role="assistant", content="What room is this?"),
+                ChatMessage(role="user", content="It's my living room"),
+                ChatMessage(role="assistant", content="What style do you like?"),
+                ChatMessage(role="user", content="Modern minimalist"),
+            ],
+            user_message="I also want it to feel cozy",
+        )
+        restored = IntakeChatInput.model_validate_json(inp.model_dump_json())
+        assert restored.mode == "full"
+        assert len(restored.conversation_history) == 4
+        assert restored.conversation_history[1].content == "It's my living room"
+        assert restored.project_context["previous_brief"]["room_type"] == "living room"
+        assert restored.user_message == "I also want it to feel cozy"
+
+
+class TestActivityOutputRoundTrip:
+    """JSON round-trip tests for all activity Output models.
+
+    Verifies that activity outputs (produced by T2/T3 activities) survive
+    serialization through Temporal's data converter back to the workflow.
+    """
+
+    def test_generate_designs_output_round_trip(self):
+        """GenerateDesignsOutput with 2 options round-trips correctly."""
+        out = GenerateDesignsOutput(
+            options=[
+                DesignOption(
+                    image_url="https://r2.example.com/opt0.png",
+                    caption="Warm minimalist — linen sofa, walnut coffee table",
+                ),
+                DesignOption(
+                    image_url="https://r2.example.com/opt1.png",
+                    caption="Scandi modern — light oak, white textiles",
+                ),
+            ]
+        )
+        restored = GenerateDesignsOutput.model_validate_json(out.model_dump_json())
+        assert len(restored.options) == 2
+        assert "walnut" in restored.options[0].caption
+        assert restored.options[1].image_url == "https://r2.example.com/opt1.png"
+
+    def test_edit_design_output_round_trip(self):
+        """EditDesignOutput round-trips correctly."""
+        out = EditDesignOutput(
+            revised_image_url="https://r2.example.com/rev3.png",
+            chat_history_key="chat/proj-abc/history.json",
+        )
+        restored = EditDesignOutput.model_validate_json(out.model_dump_json())
+        assert restored.revised_image_url == out.revised_image_url
+        assert restored.chat_history_key == out.chat_history_key
+
+    def test_generate_shopping_list_output_round_trip(self):
+        """GenerateShoppingListOutput with items and unmatched round-trips correctly."""
+        out = GenerateShoppingListOutput(
+            items=[
+                ProductMatch(
+                    category_group="Furniture",
+                    product_name="IKEA KIVIK Sofa",
+                    retailer="IKEA",
+                    price_cents=79900,
+                    product_url="https://ikea.com/kivik",
+                    image_url="https://ikea.com/kivik.jpg",
+                    confidence_score=0.92,
+                    why_matched="Similar L-shaped sectional in grey fabric",
+                    fit_status="fits",
+                    fit_detail="Fits within room width",
+                    dimensions='98"W x 37"D x 32"H',
+                ),
+                ProductMatch(
+                    category_group="Lighting",
+                    product_name="West Elm Tripod Lamp",
+                    retailer="West Elm",
+                    price_cents=19900,
+                    product_url="https://westelm.com/tripod",
+                    confidence_score=0.78,
+                    why_matched="Matches warm ambient lighting preference",
+                ),
+            ],
+            unmatched=[
+                UnmatchedItem(
+                    category="Area Rug",
+                    search_keywords="modern geometric rug 5x7 navy",
+                    google_shopping_url="https://google.com/search?tbm=shop&q=rug",
+                ),
+            ],
+            total_estimated_cost_cents=99800,
+        )
+        restored = GenerateShoppingListOutput.model_validate_json(out.model_dump_json())
+        assert len(restored.items) == 2
+        assert restored.items[0].dimensions == '98"W x 37"D x 32"H'
+        assert restored.items[1].image_url is None
+        assert len(restored.unmatched) == 1
+        assert restored.unmatched[0].category == "Area Rug"
+        assert restored.total_estimated_cost_cents == 99800
+
+    def test_intake_chat_output_round_trip(self):
+        """IntakeChatOutput with all fields populated round-trips correctly."""
+        out = IntakeChatOutput(
+            agent_message="Great choice! What activities do you do in this room?",
+            options=[
+                QuickReplyOption(number=1, label="Relaxing", value="relaxing"),
+                QuickReplyOption(number=2, label="Working", value="working"),
+                QuickReplyOption(number=3, label="Entertaining", value="entertaining"),
+            ],
+            is_open_ended=False,
+            progress="2/4 domains covered",
+            is_summary=False,
+            partial_brief=DesignBrief(
+                room_type="living room",
+                style_profile=StyleProfile(lighting="warm", mood="cozy"),
+            ),
+        )
+        restored = IntakeChatOutput.model_validate_json(out.model_dump_json())
+        assert restored.agent_message == out.agent_message
+        assert len(restored.options) == 3
+        assert restored.options[2].value == "entertaining"
+        assert restored.progress == "2/4 domains covered"
+        assert restored.partial_brief.style_profile.mood == "cozy"
+
+    def test_intake_chat_output_summary_round_trip(self):
+        """IntakeChatOutput summary (is_summary=True) round-trips correctly."""
+        out = IntakeChatOutput(
+            agent_message="Here's your design brief summary...",
+            is_summary=True,
+            partial_brief=DesignBrief(
+                room_type="bedroom",
+                occupants="couple",
+                lifestyle="Morning meditation, reading",
+                pain_points=["too dark", "cluttered nightstands"],
+                keep_items=["king bed", "dresser"],
+                style_profile=StyleProfile(
+                    lighting="warm",
+                    colors=["sage", "cream", "walnut"],
+                    textures=["linen", "wood"],
+                    clutter_level="minimal",
+                    mood="serene",
+                ),
+                constraints=["budget $3000"],
+                inspiration_notes=[
+                    InspirationNote(photo_index=0, note="Love the headboard"),
+                ],
+            ),
+        )
+        restored = IntakeChatOutput.model_validate_json(out.model_dump_json())
+        assert restored.is_summary is True
+        assert restored.options is None
+        assert restored.partial_brief.lifestyle == "Morning meditation, reading"
+        assert len(restored.partial_brief.style_profile.colors) == 3
+
+
+class TestMockStubOutputConformance:
+    """Verify mock stubs produce outputs that satisfy all contract constraints.
+
+    The mock stubs in mock_stubs.py are used by the Temporal worker during
+    development. Their outputs must be valid contract models — otherwise
+    the workflow tests pass with invalid data and break when real activities
+    are wired.
+
+    Note: No intake chat mock exists in mock_stubs.py — T3 owns the real
+    implementation and the mock API uses canned responses instead. The
+    IntakeChatOutput round-trip is covered in TestActivityOutputRoundTrip.
+    """
+
+    @pytest.mark.asyncio
+    async def test_mock_generate_designs_output(self):
+        """Mock generate_designs returns valid GenerateDesignsOutput (2 options)."""
+        inp = GenerateDesignsInput(
+            room_photo_urls=["photos/room_0.jpg", "photos/room_1.jpg"],
+        )
+        out = await mock_generate_designs(inp)
+        assert isinstance(out, GenerateDesignsOutput)
+        assert len(out.options) == 2
+        # Verify specific mock URLs (not just non-empty)
+        assert "r2.example.com/mock/option_0.png" in out.options[0].image_url
+        assert "r2.example.com/mock/option_1.png" in out.options[1].image_url
+        assert out.options[0].caption == "Mock A"
+        assert out.options[1].caption == "Mock B"
+        # Round-trip through JSON
+        restored = GenerateDesignsOutput.model_validate_json(out.model_dump_json())
+        assert len(restored.options) == 2
+        assert restored.options[0].image_url == out.options[0].image_url
+
+    @pytest.mark.asyncio
+    async def test_mock_edit_design_output(self):
+        """Mock edit_design returns valid EditDesignOutput with project-scoped key."""
+        inp = EditDesignInput(
+            project_id="test-proj",
+            base_image_url="https://r2.example.com/base.png",
+            room_photo_urls=["photos/room_0.jpg"],
+            feedback="Make it brighter",
+        )
+        out = await mock_edit_design(inp)
+        assert isinstance(out, EditDesignOutput)
+        # Verify mock returns unique URL with expected prefix
+        assert out.revised_image_url.startswith("https://r2.example.com/mock/edit_")
+        assert out.revised_image_url.endswith(".png")
+        assert out.chat_history_key == "chat/test-proj/history.json"
+        # Two calls produce different URLs (unique per invocation)
+        out2 = await mock_edit_design(inp)
+        assert out2.revised_image_url != out.revised_image_url
+        # Round-trip
+        restored = EditDesignOutput.model_validate_json(out.model_dump_json())
+        assert restored.revised_image_url == out.revised_image_url
+        assert restored.chat_history_key == out.chat_history_key
+
+    @pytest.mark.asyncio
+    async def test_mock_generate_shopping_list_output(self):
+        """Mock generate_shopping_list returns valid GenerateShoppingListOutput."""
+        inp = GenerateShoppingListInput(
+            design_image_url="https://r2.example.com/final.png",
+            original_room_photo_urls=["photos/room_0.jpg"],
+        )
+        out = await mock_generate_shopping_list(inp)
+        assert isinstance(out, GenerateShoppingListOutput)
+        assert out.total_estimated_cost_cents == 9999
+        assert len(out.items) == 1
+        # Verify the mock item has specific known values
+        item = out.items[0]
+        assert item.category_group == "Furniture"
+        assert item.product_name == "Mock Chair"
+        assert item.price_cents == 9999
+        assert item.confidence_score == 0.9
+        # Round-trip
+        restored = GenerateShoppingListOutput.model_validate_json(out.model_dump_json())
+        assert restored.total_estimated_cost_cents == 9999
+        assert restored.items[0].product_name == "Mock Chair"
 
 
 class TestAllModelsImportable:

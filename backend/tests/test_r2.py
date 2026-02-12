@@ -179,6 +179,7 @@ class TestDeletePrefix:
                 ]
             },
         ]
+        mock_s3.delete_objects.return_value = {"Deleted": [{"Key": "k"}]}
 
         r2.delete_prefix("projects/abc/")
 
@@ -211,10 +212,37 @@ class TestDeletePrefix:
             {"Contents": [{"Key": "projects/abc/photos/room_0.jpg"}]},
             {"Contents": [{"Key": "projects/abc/generated/option_0.png"}]},
         ]
+        mock_s3.delete_objects.return_value = {"Deleted": [{"Key": "k"}]}
 
         r2.delete_prefix("projects/abc/")
 
         assert mock_s3.delete_objects.call_count == 2
+
+    def test_partial_failure_logs_warning(self, mock_s3):
+        """Verifies delete_prefix warns when some objects fail to delete."""
+        paginator = MagicMock()
+        mock_s3.get_paginator.return_value = paginator
+        paginator.paginate.return_value = [
+            {
+                "Contents": [
+                    {"Key": "projects/abc/photos/room_0.jpg"},
+                    {"Key": "projects/abc/photos/room_1.jpg"},
+                ]
+            },
+        ]
+        mock_s3.delete_objects.return_value = {
+            "Deleted": [{"Key": "projects/abc/photos/room_0.jpg"}],
+            "Errors": [{"Key": "projects/abc/photos/room_1.jpg", "Code": "AccessDenied"}],
+        }
+
+        with patch.object(r2, "logger") as mock_logger:
+            r2.delete_prefix("projects/abc/")
+
+        mock_logger.warning.assert_called_once()
+        call_args = mock_logger.warning.call_args
+        assert call_args[0][0] == "r2_delete_partial_failure"
+        assert call_args[1]["prefix"] == "projects/abc/"
+        assert len(call_args[1]["errors"]) == 1
 
 
 class TestClientSingleton:

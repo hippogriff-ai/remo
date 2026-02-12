@@ -2,7 +2,7 @@
 
 Workflow ID = project_id. Owns all state transitions.
 Signals drive user actions; queries expose state for polling.
-Activities are mock stubs in P0, replaced with real AI in P2.
+Activities are real AI services (T2 image gen, T3 AI agents).
 """
 
 from __future__ import annotations
@@ -16,13 +16,14 @@ from temporalio import workflow
 from temporalio.common import RetryPolicy
 from temporalio.exceptions import ActivityError
 
+# Activity imports are Temporal function references for execute_activity().
+# The actual implementation is determined by which activities the Worker registers
+# (mock_stubs for local dev, real modules for production — see worker.py).
 with workflow.unsafe.imports_passed_through():
-    from app.activities.mock_stubs import (
-        edit_design,
-        generate_designs,
-        generate_shopping_list,
-    )
+    from app.activities.edit import edit_design
+    from app.activities.generate import generate_designs
     from app.activities.purge import purge_project_data
+    from app.activities.shopping import generate_shopping_list
     from app.models.contracts import (
         AnnotationRegion,
         DesignBrief,
@@ -30,6 +31,7 @@ with workflow.unsafe.imports_passed_through():
         EditDesignInput,
         GenerateDesignsInput,
         GenerateShoppingListInput,
+        InspirationNote,
         PhotoData,
         RevisionRecord,
         ScanData,
@@ -38,7 +40,12 @@ with workflow.unsafe.imports_passed_through():
     )
 
 
-_ACTIVITY_RETRY = RetryPolicy(maximum_attempts=2)
+# Retry policies per activity type — tune counts when real activities are wired.
+_GENERATION_RETRY = RetryPolicy(maximum_attempts=2)
+_EDIT_RETRY = RetryPolicy(maximum_attempts=2)
+_SHOPPING_RETRY = RetryPolicy(maximum_attempts=2)
+_PURGE_RETRY = RetryPolicy(maximum_attempts=2)
+
 _ABANDONMENT_TIMEOUT = timedelta(hours=48)
 
 
@@ -114,7 +121,7 @@ class DesignProjectWorkflow:
                     generate_designs,
                     self._generation_input(),
                     start_to_close_timeout=timedelta(minutes=3),
-                    retry_policy=_ACTIVITY_RETRY,
+                    retry_policy=_GENERATION_RETRY,
                 )
                 if self._restart_requested:
                     continue
@@ -156,7 +163,7 @@ class DesignProjectWorkflow:
                         edit_design,
                         self._edit_input(action_type, payload),
                         start_to_close_timeout=timedelta(minutes=3),
-                        retry_policy=_ACTIVITY_RETRY,
+                        retry_policy=_EDIT_RETRY,
                     )
                     # If start_over was signaled while the activity was
                     # in-flight, state has been cleared — discard the stale
@@ -227,7 +234,7 @@ class DesignProjectWorkflow:
                     generate_shopping_list,
                     self._shopping_input(),
                     start_to_close_timeout=timedelta(minutes=5),
-                    retry_policy=_ACTIVITY_RETRY,
+                    retry_policy=_SHOPPING_RETRY,
                 )
                 self.error = None
             except ActivityError as exc:
@@ -269,7 +276,7 @@ class DesignProjectWorkflow:
                 purge_project_data,
                 self._project_id,
                 start_to_close_timeout=timedelta(minutes=5),
-                retry_policy=_ACTIVITY_RETRY,
+                retry_policy=_PURGE_RETRY,
             )
         except BaseException as exc:
             workflow.logger.error(
@@ -284,6 +291,17 @@ class DesignProjectWorkflow:
     @workflow.signal
     async def add_photo(self, photo: PhotoData) -> None:
         self.photos.append(photo)
+
+    @workflow.signal
+    async def remove_photo(self, photo_id: str) -> None:
+        before = len(self.photos)
+        self.photos = [p for p in self.photos if p.photo_id != photo_id]
+        if len(self.photos) == before:
+            workflow.logger.warning(
+                "remove_photo: photo_id %s not found for project %s",
+                photo_id,
+                self._project_id,
+            )
 
     @workflow.signal
     async def complete_scan(self, scan: ScanData) -> None:
@@ -303,6 +321,13 @@ class DesignProjectWorkflow:
 
     @workflow.signal
     async def select_option(self, index: int) -> None:
+        if self.step != "selection":
+            workflow.logger.warning(
+                "select_option ignored: step is '%s' (expected 'selection') for project %s",
+                self.step,
+                self._project_id,
+            )
+            return
         if 0 <= index < len(self.generated_options):
             self.selected_option = index
         else:
@@ -353,6 +378,13 @@ class DesignProjectWorkflow:
 
     @workflow.signal
     async def approve_design(self) -> None:
+        if self.step not in ("iteration", "approval"):
+            workflow.logger.warning(
+                "approve_design ignored: step is '%s' for project %s",
+                self.step,
+                self._project_id,
+            )
+            return
         if self.error is not None:
             workflow.logger.warning(
                 "approve_design ignored: active error for project %s",
@@ -392,12 +424,22 @@ class DesignProjectWorkflow:
     # --- Input builders ---
 
     def _generation_input(self) -> GenerateDesignsInput:
+        inspiration_photos = [p for p in self.photos if p.photo_type == "inspiration"]
+        # Prefer agent-assembled notes from the design brief; fall back to
+        # raw photo notes (e.g. when intake is skipped but user attached notes
+        # to inspiration photos via PHOTO-7).
+        if self.design_brief and self.design_brief.inspiration_notes:
+            notes = self.design_brief.inspiration_notes
+        else:
+            notes = [
+                InspirationNote(photo_index=i, note=p.note)
+                for i, p in enumerate(inspiration_photos)
+                if p.note
+            ]
         return GenerateDesignsInput(
             room_photo_urls=[p.storage_key for p in self.photos if p.photo_type == "room"],
-            inspiration_photo_urls=[
-                p.storage_key for p in self.photos if p.photo_type == "inspiration"
-            ],
-            inspiration_notes=(self.design_brief.inspiration_notes if self.design_brief else []),
+            inspiration_photo_urls=[p.storage_key for p in inspiration_photos],
+            inspiration_notes=notes,
             design_brief=self.design_brief,
             room_dimensions=self.scan_data.room_dimensions if self.scan_data else None,
         )

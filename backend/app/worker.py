@@ -16,11 +16,6 @@ from temporalio.client import Client
 from temporalio.contrib.pydantic import pydantic_data_converter
 from temporalio.worker import Worker
 
-from app.activities.mock_stubs import (
-    edit_design,
-    generate_designs,
-    generate_shopping_list,
-)
 from app.activities.purge import purge_project_data
 from app.config import settings
 from app.logging import configure_logging
@@ -28,16 +23,30 @@ from app.workflows.design_project import DesignProjectWorkflow
 
 logger = structlog.get_logger()
 
-# Activities registered with the worker. During P2 integration,
-# mock stubs are replaced with real implementations from T2/T3.
-_MOCK_ACTIVITY_MODULE = "app.activities.mock_stubs"
 
-ACTIVITIES = [
-    generate_designs,
-    edit_design,
-    generate_shopping_list,
-    purge_project_data,
-]
+def _load_activities() -> list:
+    """Load mock or real activity implementations based on config."""
+    if settings.use_mock_activities:
+        from app.activities.mock_stubs import (
+            edit_design,
+            generate_designs,
+            generate_shopping_list,
+        )
+    else:
+        try:
+            from app.activities.edit import edit_design
+            from app.activities.generate import generate_designs
+            from app.activities.shopping import generate_shopping_list
+        except ImportError as exc:
+            raise ImportError(
+                f"Failed to import real activity modules (USE_MOCK_ACTIVITIES=false): {exc}. "
+                "Set USE_MOCK_ACTIVITIES=true for mock stubs."
+            ) from exc
+
+    return [generate_designs, edit_design, generate_shopping_list, purge_project_data]
+
+
+ACTIVITIES = _load_activities()
 
 WORKFLOWS = [DesignProjectWorkflow]
 
@@ -88,16 +97,11 @@ async def run_worker() -> None:
         activities=ACTIVITIES,  # type: ignore[arg-type]
     )
 
-    # Warn if mock stubs are registered in a non-development environment
-    mock_activities = [
-        a for a in ACTIVITIES if getattr(a, "__module__", "") == _MOCK_ACTIVITY_MODULE
-    ]
-    if mock_activities and settings.environment != "development":
+    if settings.use_mock_activities and settings.environment != "development":
         logger.warning(
             "worker_using_mock_stubs",
             environment=settings.environment,
-            mock_count=len(mock_activities),
-            hint="Replace with real T2/T3 activity implementations",
+            hint="Set USE_MOCK_ACTIVITIES=false for real AI activities",
         )
 
     logger.info(
@@ -119,6 +123,7 @@ def main() -> None:
     except KeyboardInterrupt:
         pass
     except Exception:
+        logger.exception("worker_fatal_error")
         sys.exit(1)
 
 

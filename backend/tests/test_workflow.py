@@ -390,6 +390,26 @@ _SLOW_EDIT_ACTIVITIES = [
 ]
 
 
+@activity.defn(name="generate_designs")
+async def _slow_generate(_input: GenerateDesignsInput) -> GenerateDesignsOutput:
+    """Slow generate_designs that gives time for signals to arrive during execution."""
+    await asyncio.sleep(2)
+    return GenerateDesignsOutput(
+        options=[
+            DesignOption(image_url="https://r2.example.com/slow/option_0.png", caption="Slow A"),
+            DesignOption(image_url="https://r2.example.com/slow/option_1.png", caption="Slow B"),
+        ]
+    )
+
+
+_SLOW_GENERATE_ACTIVITIES = [
+    _slow_generate,
+    edit_design,
+    generate_shopping_list,
+    purge_project_data,
+]
+
+
 # --- Failing purge stub: simulates R2 outage during purge ---
 
 
@@ -591,6 +611,91 @@ class TestPhotoPhase:
             state = await handle.query(DesignProjectWorkflow.get_state)
             assert len(state.photos) == 3
             assert state.photos[2].photo_id == "late-001"
+
+
+class TestRemovePhoto:
+    """Tests for the remove_photo signal — INT-3."""
+
+    async def test_remove_photo_signal(self, workflow_env, tq):
+        """Sending remove_photo signal removes the photo from workflow state.
+
+        Covers INT-3 TDD criterion: Workflow signal removes photo from state.
+        """
+        async with Worker(
+            workflow_env.client,
+            task_queue=tq,
+            workflows=[DesignProjectWorkflow],
+            activities=ALL_ACTIVITIES,
+        ):
+            handle = await _start_workflow(workflow_env, tq)
+            await handle.signal(DesignProjectWorkflow.add_photo, _photo(0))
+            await asyncio.sleep(0.3)
+
+            state = await handle.query(DesignProjectWorkflow.get_state)
+            assert len(state.photos) == 1
+
+            await handle.signal(DesignProjectWorkflow.remove_photo, state.photos[0].photo_id)
+            await asyncio.sleep(0.3)
+
+            state = await handle.query(DesignProjectWorkflow.get_state)
+            assert len(state.photos) == 0
+
+    async def test_remove_photo_preserves_others(self, workflow_env, tq):
+        """Removing one photo preserves other photos in state."""
+        async with Worker(
+            workflow_env.client,
+            task_queue=tq,
+            workflows=[DesignProjectWorkflow],
+            activities=ALL_ACTIVITIES,
+        ):
+            handle = await _start_workflow(workflow_env, tq)
+            photo_a = PhotoData(
+                photo_id="keep-a",
+                storage_key="photos/a.jpg",
+                photo_type="room",
+            )
+            photo_b = PhotoData(
+                photo_id="remove-b",
+                storage_key="photos/b.jpg",
+                photo_type="room",
+            )
+            photo_c = PhotoData(
+                photo_id="keep-c",
+                storage_key="photos/c.jpg",
+                photo_type="inspiration",
+            )
+            await handle.signal(DesignProjectWorkflow.add_photo, photo_a)
+            await handle.signal(DesignProjectWorkflow.add_photo, photo_b)
+            await handle.signal(DesignProjectWorkflow.add_photo, photo_c)
+            await asyncio.sleep(0.3)
+
+            await handle.signal(DesignProjectWorkflow.remove_photo, "remove-b")
+            await asyncio.sleep(0.3)
+
+            state = await handle.query(DesignProjectWorkflow.get_state)
+            assert len(state.photos) == 2
+            ids = [p.photo_id for p in state.photos]
+            assert "keep-a" in ids
+            assert "keep-c" in ids
+            assert "remove-b" not in ids
+
+    async def test_remove_nonexistent_photo_is_noop(self, workflow_env, tq):
+        """Removing a nonexistent photo_id is a safe no-op in the workflow."""
+        async with Worker(
+            workflow_env.client,
+            task_queue=tq,
+            workflows=[DesignProjectWorkflow],
+            activities=ALL_ACTIVITIES,
+        ):
+            handle = await _start_workflow(workflow_env, tq)
+            await handle.signal(DesignProjectWorkflow.add_photo, _photo(0))
+            await asyncio.sleep(0.3)
+
+            await handle.signal(DesignProjectWorkflow.remove_photo, "nonexistent-id")
+            await asyncio.sleep(0.3)
+
+            state = await handle.query(DesignProjectWorkflow.get_state)
+            assert len(state.photos) == 1
 
 
 class TestScanPhase:
@@ -867,6 +972,68 @@ class TestGenerationInput:
             assert _captured_generation_input is not None
             assert _captured_generation_input.room_dimensions is None
 
+    async def test_photo_notes_fallback_when_intake_skipped(self, workflow_env, tq):
+        """IMP-7: Photo notes are passed to generation when intake is skipped.
+
+        When the user uploads inspiration photos with notes but skips intake,
+        the design brief is None. The workflow should fall back to extracting
+        InspirationNote objects from PhotoData.note so the generation activity
+        still gets the user's style preferences.
+        """
+        global _captured_generation_input
+        _captured_generation_input = None
+
+        async with Worker(
+            workflow_env.client,
+            task_queue=tq,
+            workflows=[DesignProjectWorkflow],
+            activities=_CAPTURING_GEN_ACTIVITIES,
+        ):
+            handle = await _start_workflow(workflow_env, tq)
+
+            room1 = PhotoData(
+                photo_id="room-1",
+                storage_key="photos/room_0.jpg",
+                photo_type="room",
+            )
+            room2 = PhotoData(
+                photo_id="room-2",
+                storage_key="photos/room_1.jpg",
+                photo_type="room",
+            )
+            inspo_with_note = PhotoData(
+                photo_id="inspo-1",
+                storage_key="photos/inspo_0.jpg",
+                photo_type="inspiration",
+                note="Love the warm lighting",
+            )
+            inspo_no_note = PhotoData(
+                photo_id="inspo-2",
+                storage_key="photos/inspo_1.jpg",
+                photo_type="inspiration",
+            )
+            await handle.signal(DesignProjectWorkflow.add_photo, room1)
+            await handle.signal(DesignProjectWorkflow.add_photo, room2)
+            await handle.signal(DesignProjectWorkflow.add_photo, inspo_with_note)
+            await handle.signal(DesignProjectWorkflow.add_photo, inspo_no_note)
+            await asyncio.sleep(0.5)
+            await handle.signal(DesignProjectWorkflow.skip_scan)
+            await asyncio.sleep(0.3)
+            await handle.signal(DesignProjectWorkflow.skip_intake)
+            await asyncio.sleep(1.0)
+
+            state = await handle.query(DesignProjectWorkflow.get_state)
+            assert state.step == "selection"
+
+            assert _captured_generation_input is not None
+            assert _captured_generation_input.design_brief is None
+            # Only the photo with a note should produce an InspirationNote
+            assert len(_captured_generation_input.inspiration_notes) == 1
+            assert _captured_generation_input.inspiration_notes[0].photo_index == 0
+            assert _captured_generation_input.inspiration_notes[0].note == "Love the warm lighting"
+            # Both inspiration photos should still be in the URL list
+            assert len(_captured_generation_input.inspiration_photo_urls) == 2
+
 
 class TestShoppingInput:
     """Tests verifying the workflow correctly builds shopping list activity input."""
@@ -957,6 +1124,14 @@ class TestShoppingInput:
             assert len(_captured_shopping_input.revision_history) == 2
             assert _captured_shopping_input.revision_history[0].type == "annotation"
             assert _captured_shopping_input.revision_history[1].type == "annotation"
+            # Instructions must contain the original signal payload strings
+            # (T3's shopping agent uses these to understand what was changed)
+            assert _captured_shopping_input.revision_history[0].instructions == [
+                "Replace the couch with a modern sectional"
+            ]
+            assert _captured_shopping_input.revision_history[1].instructions == [
+                "Replace the couch with a modern sectional"
+            ]
             # Room dimensions forwarded
             assert _captured_shopping_input.room_dimensions is not None
             assert _captured_shopping_input.room_dimensions.width_m == 3.5
@@ -1043,8 +1218,14 @@ class TestEditInput:
             await asyncio.sleep(1.0)
 
             assert _captured_edit_input is not None
+            # project_id forwarded from workflow (critical for T2 to scope edits)
+            assert _captured_edit_input.project_id != ""
             # base_image_url is the selected option's image
             assert _captured_edit_input.base_image_url != ""
+            # Room photos forwarded (T2 uses for context)
+            assert len(_captured_edit_input.room_photo_urls) == 2
+            # No inspiration photos in this test (advance helper uses room-only)
+            assert _captured_edit_input.inspiration_photo_urls == []
             # Annotations forwarded as AnnotationRegion objects
             assert len(_captured_edit_input.annotations) == 1
             assert _captured_edit_input.annotations[0].region_id == 1
@@ -1122,11 +1303,15 @@ class TestEditInput:
             await asyncio.sleep(1.0)
 
             assert _captured_edit_input is not None
+            # project_id forwarded from workflow
+            assert _captured_edit_input.project_id != ""
             # Room photos forwarded (not inspiration)
             assert _captured_edit_input.room_photo_urls == [
                 "photos/room_r1.jpg",
                 "photos/room_r2.jpg",
             ]
+            # Inspiration photos forwarded separately (T2 uses for style reference)
+            assert _captured_edit_input.inspiration_photo_urls == ["photos/inspo_r1.jpg"]
             # Brief forwarded
             assert _captured_edit_input.design_brief is not None
             assert _captured_edit_input.design_brief.room_type == "office"
@@ -1641,6 +1826,49 @@ class TestStartOver:
             assert state.revision_history == []
             assert state.current_image is None
 
+    async def test_start_over_during_inflight_generation_discards_result(self, workflow_env, tq):
+        """Verifies stale generation results are discarded after start_over.
+
+        Most likely real user scenario: Gemini generation takes 30-60s in production.
+        If the user signals start_over mid-generation, the workflow must discard the
+        stale result and restart the cycle cleanly. Tests the `if self._restart_requested:
+        continue` check after `execute_activity(generate_designs, ...)`.
+        """
+        async with Worker(
+            workflow_env.client,
+            task_queue=tq,
+            workflows=[DesignProjectWorkflow],
+            activities=_SLOW_GENERATE_ACTIVITIES,
+        ):
+            handle = await _start_workflow(workflow_env, tq)
+
+            # Skip to intake, then skip intake to trigger generation
+            await handle.signal(DesignProjectWorkflow.add_photo, _photo(0))
+            await handle.signal(DesignProjectWorkflow.add_photo, _photo(1))
+            await asyncio.sleep(0.5)
+            await handle.signal(DesignProjectWorkflow.skip_scan)
+            await asyncio.sleep(0.3)
+            await handle.signal(DesignProjectWorkflow.skip_intake)
+            # slow_generate takes 2s — give it time to start but not finish
+            await asyncio.sleep(0.3)
+
+            state = await handle.query(DesignProjectWorkflow.get_state)
+            assert state.step == "generation"
+
+            # Fire start_over while generation is in-flight
+            await handle.signal(DesignProjectWorkflow.start_over)
+
+            # Wait for activity to complete and restart cycle to process
+            await asyncio.sleep(3.0)
+
+            state = await handle.query(DesignProjectWorkflow.get_state)
+            assert state.step == "intake"
+            # Stale generation result must NOT have been applied
+            assert state.generated_options == []
+            assert state.selected_option is None
+            assert state.design_brief is None
+            assert state.error is None
+
 
 class TestSelectionValidation:
     """Tests for selection signal validation."""
@@ -1685,6 +1913,39 @@ class TestSelectionValidation:
 
             state = await handle.query(DesignProjectWorkflow.get_state)
             assert state.step == "iteration"
+            assert state.error is None
+
+    async def test_select_option_ignored_during_iteration(self, workflow_env, tq):
+        """IMP-30: select_option signal during iteration is silently ignored.
+
+        The mock API guards select_option with _check_step(state, "selection").
+        The workflow must mirror this — a late signal should not corrupt
+        selected_option or set an error.
+        """
+
+        async with Worker(
+            workflow_env.client,
+            task_queue=tq,
+            workflows=[DesignProjectWorkflow],
+            activities=ALL_ACTIVITIES,
+        ):
+            handle = await _start_workflow(workflow_env, tq)
+            await _advance_to_iteration(handle)
+
+            state = await handle.query(DesignProjectWorkflow.get_state)
+            assert state.step == "iteration"
+            assert state.selected_option == 0
+            original_image = state.current_image
+
+            # Send a late select_option signal with a different index
+            await handle.signal(DesignProjectWorkflow.select_option, 1)
+            await asyncio.sleep(0.3)
+
+            state = await handle.query(DesignProjectWorkflow.get_state)
+            # selected_option and current_image must not change
+            assert state.selected_option == 0
+            assert state.current_image == original_image
+            # No error should be set — the signal is simply ignored
             assert state.error is None
 
 
@@ -1862,6 +2123,12 @@ class TestIterationPhase:
             # Each revision number is sequential
             nums = [r.revision_number for r in state.revision_history]
             assert nums == [1, 2, 3, 4]
+            # Instructions extracted correctly for both action types
+            # (T3's shopping agent uses these to understand changes)
+            assert state.revision_history[0].instructions == [
+                "Replace the couch with a modern sectional"
+            ]
+            assert state.revision_history[2].instructions == ["Make it warmer"]
 
     async def test_revision_chain_integrity(self, workflow_env, tq):
         """Verifies revision_history forms a proper image chain.
@@ -2008,6 +2275,81 @@ class TestApproval:
             assert state.approved is False
             assert state.error is not None  # still has error
             assert state.step == "iteration"  # still stuck
+
+    async def test_approve_ignored_during_generation(self, workflow_env, tq):
+        """IMP-31: approve_design during generation step is silently ignored.
+
+        Without the step guard, a premature approve would set self.approved=True,
+        and the iteration loop (`while count < 5 and not self.approved`) would
+        exit immediately — skipping iteration entirely and going straight to
+        shopping. The step guard ensures approve only takes effect during
+        iteration or approval steps.
+        """
+
+        async with Worker(
+            workflow_env.client,
+            task_queue=tq,
+            workflows=[DesignProjectWorkflow],
+            activities=ALL_ACTIVITIES,
+        ):
+            handle = await _start_workflow(workflow_env, tq)
+            await handle.signal(DesignProjectWorkflow.add_photo, _photo(0))
+            await handle.signal(DesignProjectWorkflow.add_photo, _photo(1))
+            await asyncio.sleep(0.5)
+            await handle.signal(DesignProjectWorkflow.skip_scan)
+            await asyncio.sleep(0.3)
+            await handle.signal(DesignProjectWorkflow.skip_intake)
+
+            # Generation is now in progress — send premature approve
+            await handle.signal(DesignProjectWorkflow.approve_design)
+            await asyncio.sleep(1.0)
+
+            state = await handle.query(DesignProjectWorkflow.get_state)
+            # Should be in selection (generation completed, approve was ignored)
+            assert state.step == "selection"
+            assert state.approved is False
+            assert len(state.generated_options) == 2
+
+    async def test_approve_ignored_during_selection(self, workflow_env, tq):
+        """IMP-31: approve_design during selection step is silently ignored.
+
+        User must select a design option before approving. A premature approve
+        during selection would skip the iteration phase.
+        """
+
+        async with Worker(
+            workflow_env.client,
+            task_queue=tq,
+            workflows=[DesignProjectWorkflow],
+            activities=ALL_ACTIVITIES,
+        ):
+            handle = await _start_workflow(workflow_env, tq)
+            await handle.signal(DesignProjectWorkflow.add_photo, _photo(0))
+            await handle.signal(DesignProjectWorkflow.add_photo, _photo(1))
+            await asyncio.sleep(0.5)
+            await handle.signal(DesignProjectWorkflow.skip_scan)
+            await asyncio.sleep(0.3)
+            await handle.signal(DesignProjectWorkflow.skip_intake)
+            await asyncio.sleep(1.0)
+
+            state = await handle.query(DesignProjectWorkflow.get_state)
+            assert state.step == "selection"
+
+            # Premature approve during selection
+            await handle.signal(DesignProjectWorkflow.approve_design)
+            await asyncio.sleep(0.3)
+
+            state = await handle.query(DesignProjectWorkflow.get_state)
+            assert state.step == "selection"  # Still waiting for option selection
+            assert state.approved is False
+
+            # Normal flow still works — select then approve from iteration
+            await handle.signal(DesignProjectWorkflow.select_option, 0)
+            await asyncio.sleep(0.5)
+
+            state = await handle.query(DesignProjectWorkflow.get_state)
+            assert state.step == "iteration"
+            assert state.approved is False  # Premature approve was truly ignored
 
 
 class TestCancellation:
@@ -2193,6 +2535,38 @@ class TestCancellation:
 
             state = await handle.query(DesignProjectWorkflow.get_state)
             assert state.step == "iteration"
+            assert state.error is not None
+
+            # Cancel instead of retrying
+            await handle.signal(DesignProjectWorkflow.cancel_project)
+            result = await handle.result()
+            assert result is None
+
+            state = await handle.query(DesignProjectWorkflow.get_state)
+            assert state.step == "abandoned"
+
+    async def test_cancel_during_shopping_error_abandons(self, workflow_env, tq):
+        """Verifies cancel_project escapes the shopping error wait.
+
+        When shopping list generation fails and the user is stuck with a
+        retryable error, cancel_project should abandon the workflow.
+        Completes the cancellation symmetry: generation error, iteration
+        error, and now shopping error all tested.
+        """
+
+        async with Worker(
+            workflow_env.client,
+            task_queue=tq,
+            workflows=[DesignProjectWorkflow],
+            activities=_FAILING_SHOPPING_ACTIVITIES,
+        ):
+            handle = await _start_workflow(workflow_env, tq)
+            await _advance_to_iteration(handle)
+            await handle.signal(DesignProjectWorkflow.approve_design)
+            await asyncio.sleep(2.0)
+
+            state = await handle.query(DesignProjectWorkflow.get_state)
+            assert state.step == "shopping"
             assert state.error is not None
 
             # Cancel instead of retrying
@@ -2585,6 +2959,53 @@ class TestErrorRecovery:
             state = await handle.query(DesignProjectWorkflow.get_state)
             assert state.approved is True
             assert state.step == "completed"
+
+    async def test_queued_action_during_error_runs_after_retry(self, workflow_env, tq):
+        """Verifies action ordering when user submits edits during an active error.
+
+        Real user pattern: submit annotation edit → it fails → while error is
+        showing, user submits text feedback → retries → the original annotation
+        processes first (re-queued at index 0), then the queued feedback processes.
+        This validates the _action_queue.insert(0, ...) re-queuing semantics.
+        """
+        global _flaky_edit_calls
+        _flaky_edit_calls = 0
+
+        async with Worker(
+            workflow_env.client,
+            task_queue=tq,
+            workflows=[DesignProjectWorkflow],
+            activities=_FLAKY_EDIT_ACTIVITIES,
+        ):
+            handle = await _start_workflow(workflow_env, tq)
+            await _advance_to_iteration(handle)
+
+            # Submit annotation edit — flaky stub fails (calls 1-2 exhausted by Temporal)
+            await handle.signal(DesignProjectWorkflow.submit_annotation_edit, _annotations())
+            await asyncio.sleep(2.0)
+
+            state = await handle.query(DesignProjectWorkflow.get_state)
+            assert state.error is not None
+            assert state.iteration_count == 0
+
+            # While error is active, user submits feedback (queued at index 1)
+            await handle.signal(
+                DesignProjectWorkflow.submit_text_feedback,
+                "Make it warmer and more inviting",
+            )
+
+            # Retry — clears error, workflow processes re-queued annotation first
+            await handle.signal(DesignProjectWorkflow.retry_failed_step)
+            await asyncio.sleep(2.0)
+
+            # Both actions should have processed: annotation (call 3) + feedback (call 4)
+            state = await handle.query(DesignProjectWorkflow.get_state)
+            assert state.error is None
+            assert state.iteration_count == 2
+            assert len(state.revision_history) == 2
+            # Original failed annotation was re-queued first, so it processes first
+            assert state.revision_history[0].type == "annotation"
+            assert state.revision_history[1].type == "feedback"
 
     async def test_shopping_error_is_retryable(self, workflow_env, tq):
         """Verifies shopping failure sets a retryable error with user-facing message."""

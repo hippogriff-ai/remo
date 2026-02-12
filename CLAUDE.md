@@ -8,7 +8,7 @@ Remo is an AI-powered room redesign iOS app. Users photograph a room, describe t
 
 ## Status
 
-T0 (Platform) P0+P1 complete. Backend fully scaffolded with 301 passing tests, 0 warnings, ruff clean, ruff format clean, mypy clean. P2 (integration) blocked on T2/T3 activity implementations. See `CONTINUITY.md` for current state.
+T0 (Platform) P0+P1 complete, P2 integration in progress. Backend has 807 passing tests, 0 warnings, ruff clean, ruff format clean, mypy clean. Real T2/T3 activities are wired into the workflow (INT-1 through INT-4, INT-6, GAP-5 done). Quality sweep complete (IMP-3 through IMP-33). See `CONTINUITY.md` for current state.
 
 ## Development Commands
 
@@ -92,7 +92,7 @@ backend/
   app/
     models/contracts.py        # ALL Pydantic models (T0 owns exclusively, frozen)
     models/db.py               # SQLAlchemy models (9 tables)
-    api/routes/projects.py     # FastAPI endpoints (17 endpoints, mock state store, multi-step intake conversation)
+    api/routes/projects.py     # FastAPI endpoints (17 endpoints, mock state store, multi-step intake conversation, real intake agent wiring)
     api/routes/health.py       # Health check endpoint (version, environment, service status)
     workflows/design_project.py # Temporal workflow (12 signals, 1 query)
     activities/mock_stubs.py   # Mock activities (T0-owned, swapped in P2)
@@ -105,7 +105,7 @@ backend/
     main.py                    # FastAPI app (request ID middleware, error handlers)
     worker.py                  # Temporal worker entrypoint
   migrations/versions/         # Alembic (001_initial_schema.py)
-  tests/                       # 301 tests across 11 test files (module-scoped Temporal fixture)
+  tests/                       # 792 tests across 11 test files (module-scoped Temporal fixture)
 ios/                           # (T1-owned, not yet scaffolded in this worktree)
 ```
 

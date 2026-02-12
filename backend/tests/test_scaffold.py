@@ -1,6 +1,6 @@
 """Tests verifying the project scaffold is correctly set up."""
 
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
@@ -23,6 +23,173 @@ class TestHealthEndpoint:
         assert "temporal" in body
         assert "r2" in body
 
+    @pytest.mark.asyncio
+    async def test_health_services_disconnected_by_default(self, client):
+        """Without running services, all checks report 'disconnected'."""
+        resp = await client.get("/health")
+        body = resp.json()
+        assert body["status"] == "ok"
+        assert body["postgres"] == "disconnected"
+        assert body["temporal"] == "disconnected"
+        assert body["r2"] == "disconnected"
+
+    @pytest.mark.asyncio
+    async def test_health_all_connected(self, client):
+        """When all services are up, health reports all 'connected'."""
+        with (
+            patch(
+                "app.api.routes.health._check_postgres",
+                new_callable=AsyncMock,
+                return_value="connected",
+            ),
+            patch(
+                "app.api.routes.health._check_temporal",
+                new_callable=AsyncMock,
+                return_value="connected",
+            ),
+            patch(
+                "app.api.routes.health._check_r2",
+                new_callable=AsyncMock,
+                return_value="connected",
+            ),
+        ):
+            resp = await client.get("/health")
+        body = resp.json()
+        assert body["status"] == "ok"
+        assert body["postgres"] == "connected"
+        assert body["temporal"] == "connected"
+        assert body["r2"] == "connected"
+
+    @pytest.mark.asyncio
+    async def test_health_partial_connected(self, client):
+        """One service down, others up — reports mixed status."""
+        with (
+            patch(
+                "app.api.routes.health._check_postgres",
+                new_callable=AsyncMock,
+                return_value="disconnected",
+            ),
+            patch(
+                "app.api.routes.health._check_temporal",
+                new_callable=AsyncMock,
+                return_value="connected",
+            ),
+            patch(
+                "app.api.routes.health._check_r2",
+                new_callable=AsyncMock,
+                return_value="connected",
+            ),
+        ):
+            resp = await client.get("/health")
+        body = resp.json()
+        assert body["status"] == "ok"
+        assert body["postgres"] == "disconnected"
+        assert body["temporal"] == "connected"
+        assert body["r2"] == "connected"
+
+
+class TestHealthCheckFunctions:
+    """Unit tests for health check probe functions (not the endpoint).
+
+    The TestHealthEndpoint tests above mock at the function boundary
+    (_check_postgres → "connected"), verifying only the endpoint's gather()
+    and response shape. These tests call the probe functions directly with
+    mocked dependencies to cover the internal logic: connection setup,
+    query, cleanup, and error branches.
+    """
+
+    @pytest.mark.asyncio
+    async def test_check_postgres_connected(self):
+        """_check_postgres returns 'connected' when DB responds to SELECT 1."""
+        mock_conn = AsyncMock()
+        mock_conn.fetchval = AsyncMock(return_value=1)
+        mock_conn.close = AsyncMock()
+
+        # asyncpg is imported lazily inside _check_postgres, so patch at module level
+        with patch("asyncpg.connect", new_callable=AsyncMock) as mock_connect:
+            mock_connect.return_value = mock_conn
+            from app.api.routes.health import _check_postgres
+
+            result = await _check_postgres()
+        assert result == "connected"
+        mock_conn.fetchval.assert_awaited_once_with("SELECT 1")
+        mock_conn.close.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_check_postgres_close_runs_on_failure(self):
+        """_check_postgres still closes connection when fetchval raises."""
+        mock_conn = AsyncMock()
+        mock_conn.fetchval = AsyncMock(side_effect=RuntimeError("query failed"))
+        mock_conn.close = AsyncMock()
+
+        with patch("asyncpg.connect", new_callable=AsyncMock) as mock_connect:
+            mock_connect.return_value = mock_conn
+            from app.api.routes.health import _check_postgres
+
+            result = await _check_postgres()
+        assert result == "disconnected"
+        mock_conn.close.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_check_temporal_connected_no_api_key(self):
+        """_check_temporal returns 'connected' when Temporal responds (no TLS)."""
+        mock_client = AsyncMock()
+        mock_client.service_client.check_health = AsyncMock()
+
+        # Client is imported lazily inside _check_temporal
+        with (
+            patch("app.api.routes.health.settings") as mock_settings,
+            patch("temporalio.client.Client.connect", new_callable=AsyncMock) as mock_connect,
+        ):
+            mock_settings.temporal_api_key = None
+            mock_settings.temporal_address = "localhost:7233"
+            mock_settings.temporal_namespace = "default"
+            mock_connect.return_value = mock_client
+            from app.api.routes.health import _check_temporal
+
+            result = await _check_temporal()
+        assert result == "connected"
+        mock_client.service_client.check_health.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_check_temporal_connected_with_api_key(self):
+        """_check_temporal returns 'connected' when using TLS + API key."""
+        mock_client = AsyncMock()
+        mock_client.service_client.check_health = AsyncMock()
+
+        with (
+            patch("app.api.routes.health.settings") as mock_settings,
+            patch("temporalio.client.Client.connect", new_callable=AsyncMock) as mock_connect,
+        ):
+            mock_settings.temporal_api_key = "test-api-key-123"
+            mock_settings.temporal_address = "cloud.temporal.io:7233"
+            mock_settings.temporal_namespace = "prod"
+            mock_connect.return_value = mock_client
+            from app.api.routes.health import _check_temporal
+
+            result = await _check_temporal()
+        assert result == "connected"
+        # Verify TLS path was used (api_key present → tls=True)
+        call_kwargs = mock_connect.call_args.kwargs
+        assert call_kwargs["tls"] is True
+        assert call_kwargs["api_key"] == "test-api-key-123"
+
+    @pytest.mark.asyncio
+    async def test_check_r2_connected(self):
+        """_check_r2 returns 'connected' when head_bucket succeeds."""
+        mock_s3 = AsyncMock()
+        mock_s3.head_bucket = lambda **kwargs: None
+
+        with (
+            patch("app.utils.r2._get_client", return_value=mock_s3),
+            patch("app.api.routes.health.settings") as mock_settings,
+        ):
+            mock_settings.r2_bucket_name = "test-bucket"
+            from app.api.routes.health import _check_r2
+
+            result = await _check_r2()
+        assert result == "connected"
+
 
 class TestRequestIdMiddleware:
     """Verify request ID middleware adds correlation IDs."""
@@ -42,6 +209,48 @@ class TestRequestIdMiddleware:
         """Client-provided X-Request-ID is echoed back."""
         custom_id = "client-trace-12345"
         resp = await client.get("/health", headers={"X-Request-ID": custom_id})
+        assert resp.headers["X-Request-ID"] == custom_id
+
+    @pytest.mark.asyncio
+    async def test_request_id_on_404_response(self, client):
+        """IMP-32: 404 error responses include X-Request-ID for log correlation."""
+        resp = await client.get("/api/v1/projects/nonexistent-id")
+        assert resp.status_code == 404
+        assert "X-Request-ID" in resp.headers
+
+    @pytest.mark.asyncio
+    async def test_request_id_on_409_response(self, client):
+        """IMP-32: 409 error responses include X-Request-ID for log correlation."""
+        from app.api.routes.projects import _mock_states
+        from app.models.contracts import WorkflowState
+
+        pid = "test-409-rid"
+        _mock_states[pid] = WorkflowState(step="photos")
+        resp = await client.post(f"/api/v1/projects/{pid}/approve")
+        assert resp.status_code == 409
+        assert "X-Request-ID" in resp.headers
+        del _mock_states[pid]
+
+    @pytest.mark.asyncio
+    async def test_request_id_on_422_response(self, client):
+        """IMP-32: 422 validation error responses include X-Request-ID."""
+        resp = await client.post("/api/v1/projects", json={})
+        assert resp.status_code == 422
+        assert "X-Request-ID" in resp.headers
+
+    @pytest.mark.asyncio
+    async def test_client_request_id_echoed_on_error(self, client):
+        """IMP-32: Client-provided X-Request-ID is echoed on error responses.
+
+        iOS sends request IDs for error tracking. Without echo on errors,
+        iOS can't match the error response to the log entry.
+        """
+        custom_id = "ios-error-trace-abc123"
+        resp = await client.get(
+            "/api/v1/projects/nonexistent-id",
+            headers={"X-Request-ID": custom_id},
+        )
+        assert resp.status_code == 404
         assert resp.headers["X-Request-ID"] == custom_id
 
 
@@ -67,6 +276,8 @@ class TestExceptionHandler:
         assert er.error == "internal_error"
         assert er.retryable is True
         assert er.message != ""
+        # IMP-32: even 500 errors include X-Request-ID for log correlation
+        assert "X-Request-ID" in resp.headers
 
 
 class TestValidationErrorHandler:
@@ -104,7 +315,7 @@ class TestOpenAPISchema:
     """
 
     def test_all_project_endpoints_in_schema(self):
-        """All 15 project endpoints + 1 health endpoint appear in the OpenAPI schema."""
+        """All 16 project endpoints + 1 health endpoint appear in the OpenAPI schema."""
         from app.main import app
 
         schema = app.openapi()
@@ -115,6 +326,7 @@ class TestOpenAPISchema:
             "/api/v1/projects",
             "/api/v1/projects/{project_id}",
             "/api/v1/projects/{project_id}/photos",
+            "/api/v1/projects/{project_id}/photos/{photo_id}",
             "/api/v1/projects/{project_id}/scan",
             "/api/v1/projects/{project_id}/scan/skip",
             "/api/v1/projects/{project_id}/intake/start",
@@ -154,6 +366,42 @@ class TestOpenAPISchema:
         }
         missing = required_models - schema_names
         assert not missing, f"Missing models in OpenAPI schema: {missing}"
+
+    def test_http_methods_match_spec(self):
+        """IMP-33: HTTP methods match iOS expectations for each endpoint.
+
+        T1 iOS code generator derives Swift method signatures from the OpenAPI
+        schema's HTTP methods. A POST accidentally registered as GET (or vice
+        versa) would generate non-functional Swift code.
+        """
+        from app.main import app
+
+        schema = app.openapi()
+        paths = schema["paths"]
+
+        expected_methods = {
+            "/health": {"get"},
+            "/api/v1/projects": {"post"},
+            "/api/v1/projects/{project_id}": {"get", "delete"},
+            "/api/v1/projects/{project_id}/photos": {"post"},
+            "/api/v1/projects/{project_id}/photos/{photo_id}": {"delete"},
+            "/api/v1/projects/{project_id}/scan": {"post"},
+            "/api/v1/projects/{project_id}/scan/skip": {"post"},
+            "/api/v1/projects/{project_id}/intake/start": {"post"},
+            "/api/v1/projects/{project_id}/intake/message": {"post"},
+            "/api/v1/projects/{project_id}/intake/confirm": {"post"},
+            "/api/v1/projects/{project_id}/intake/skip": {"post"},
+            "/api/v1/projects/{project_id}/select": {"post"},
+            "/api/v1/projects/{project_id}/start-over": {"post"},
+            "/api/v1/projects/{project_id}/iterate/annotate": {"post"},
+            "/api/v1/projects/{project_id}/iterate/feedback": {"post"},
+            "/api/v1/projects/{project_id}/approve": {"post"},
+            "/api/v1/projects/{project_id}/retry": {"post"},
+        }
+
+        for path, methods in expected_methods.items():
+            actual = set(paths[path].keys()) - {"parameters"}
+            assert actual == methods, f"{path}: expected {methods}, got {actual}"
 
 
 class TestEnvExample:
