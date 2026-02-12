@@ -106,7 +106,7 @@ public struct IterationScreen: View {
     private var canSubmit: Bool {
         switch mode {
         case .annotation:
-            return !regions.isEmpty && regions.allSatisfy { $0.instruction.count >= 10 }
+            return regions.contains { $0.instruction.count >= 10 }
         case .text:
             return !textFeedback.trimmingCharacters(in: .whitespaces).isEmpty
         }

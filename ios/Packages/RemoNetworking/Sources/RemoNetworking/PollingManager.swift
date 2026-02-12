@@ -32,6 +32,9 @@ public actor PollingManager {
                 }
             } catch is CancellationError {
                 throw CancellationError()
+            } catch let error as APIError where error.isCancellation {
+                // URLSession cancellation wrapped as APIError — treat as cancellation
+                throw CancellationError()
             } catch let error as APIError where error.isRetryable {
                 consecutiveErrors += 1
                 if consecutiveErrors > maxRetries {

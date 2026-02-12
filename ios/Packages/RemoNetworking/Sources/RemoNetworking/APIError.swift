@@ -21,6 +21,17 @@ public enum APIError: LocalizedError {
         }
     }
 
+    public var isCancellation: Bool {
+        switch self {
+        case .networkError(let urlError):
+            return urlError.code == .cancelled
+        case .unknown(let error):
+            return error is CancellationError
+        default:
+            return false
+        }
+    }
+
     public var isRetryable: Bool {
         switch self {
         case .networkError(let urlError):
