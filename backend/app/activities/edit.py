@@ -179,8 +179,10 @@ async def _bootstrap_chat(
         _download_images(input.inspiration_photo_urls),
     )
 
-    # Cap images to model limit (base_image always included, room photos prioritized)
-    max_ref_images = MAX_INPUT_IMAGES - 1  # reserve 1 slot for base_image
+    # Cap images to model limit: reserve slots for base_image (always) +
+    # annotated image (when annotations present in turn 2)
+    reserved = 2 if input.annotations else 1
+    max_ref_images = MAX_INPUT_IMAGES - reserved
     total_ref = len(room_images) + len(inspiration_images)
     if total_ref > max_ref_images:
         max_inspiration = max_ref_images - len(room_images)
