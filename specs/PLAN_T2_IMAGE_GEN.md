@@ -139,6 +139,14 @@ T2 owns **ALL image generation and editing** — initial design generation and a
 |---|------------|----------------|
 | 8 | Quality test suite | 5+ test cases per activity with scored results; 70%+ meet quality bar; annotation edits preserve non-edited regions |
 
+#### T0 Integration Notes (from T2 PR #4 review)
+
+These items surfaced during T2's PR review and must be addressed by T0 when wiring real activities in P2:
+
+1. **Presigned URL expiry**: T2 activities return presigned URLs (1h expiry) as `image_url` in `DesignOption` and `EditDesignOutput`. If a user returns after expiry, subsequent edits/downloads will 403. **T0 should either**: (a) store R2 storage keys in workflow state and mint fresh presigned URLs in the API layer when serving responses, or (b) extend the presigned URL expiry to match R2 lifecycle (120h).
+
+2. **Workflow must pass presigned URLs, not storage keys**: T2 activities expect `room_photo_urls`, `inspiration_photo_urls`, and `base_image_url` to be absolute HTTP URLs (presigned). The workflow must convert `PhotoData.storage_key` values to presigned URLs before calling `generate_designs` or `edit_design`.
+
 ---
 
 ## 5. Dependencies
