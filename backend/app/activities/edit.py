@@ -30,6 +30,7 @@ from app.models.contracts import (
     EditDesignOutput,
 )
 from app.utils.gemini_chat import (
+    MAX_INPUT_IMAGES,
     continue_chat,
     create_chat,
     extract_image,
@@ -177,6 +178,23 @@ async def _bootstrap_chat(
         _download_images(input.room_photo_urls),
         _download_images(input.inspiration_photo_urls),
     )
+
+    # Cap images to model limit (base_image always included, room photos prioritized)
+    max_ref_images = MAX_INPUT_IMAGES - 1  # reserve 1 slot for base_image
+    total_ref = len(room_images) + len(inspiration_images)
+    if total_ref > max_ref_images:
+        max_inspiration = max_ref_images - len(room_images)
+        if max_inspiration <= 0:
+            room_images = room_images[:max_ref_images]
+            inspiration_images = []
+        else:
+            inspiration_images = inspiration_images[:max_inspiration]
+        logger.warning(
+            "bootstrap_images_truncated",
+            original_count=total_ref + 1,
+            room_kept=len(room_images),
+            inspiration_kept=len(inspiration_images),
+        )
 
     # Create chat (sync SDK call in thread pool)
     chat = await asyncio.to_thread(create_chat, client)

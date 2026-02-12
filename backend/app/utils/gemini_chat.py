@@ -106,6 +106,8 @@ def deserialize_to_contents(serialized: list[dict[str, Any]]) -> list[types.Cont
     """Reconstruct Content objects from serialized history."""
     contents = []
     for turn in serialized:
+        if not isinstance(turn, dict):
+            raise ValueError(f"Expected turn to be a dict, got {type(turn).__name__}")
         if "role" not in turn or "parts" not in turn:
             msg = f"Invalid turn: requires 'role' and 'parts', got {list(turn.keys())}"
             raise ValueError(msg)
