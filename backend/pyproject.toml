@@ -16,6 +16,7 @@ dependencies = [
     "boto3>=1.36,<2",
     "structlog>=25.1,<26",
     "pillow>=11,<12",
+    "google-genai>=1,<2",
     "anthropic>=0.44,<1",
     "python-multipart>=0.0.20",
 ]
@@ -46,6 +47,9 @@ select = ["E", "F", "I", "N", "UP", "B", "SIM", "TCH"]
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
+markers = [
+    "integration: marks tests that require real API keys and external services",
+]
 filterwarnings = [
     "ignore:Module pydantic_core.*was imported after initial workflow load:UserWarning",
     "ignore:.*is marked with '@pytest.mark.asyncio' but it is not an async function:pytest.PytestWarning",
