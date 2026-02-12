@@ -25,6 +25,7 @@ from app.config import settings
 logger = structlog.get_logger()
 
 GEMINI_MODEL = "gemini-3-pro-image-preview"
+MAX_INPUT_IMAGES = 14  # Gemini Pro image model limit
 
 IMAGE_CONFIG = types.GenerateContentConfig(
     response_modalities=["TEXT", "IMAGE"],
@@ -258,6 +259,59 @@ def cleanup(project_id: str) -> None:
     logger.info("gemini_chat_cleaned", project_id=project_id)
 
 
+def _count_image_parts(contents: list[types.Content]) -> int:
+    """Count inline image parts across all content turns."""
+    count = 0
+    for content in contents:
+        if content.parts:
+            for part in content.parts:
+                if part.inline_data is not None:
+                    count += 1
+    return count
+
+
+def _prune_history_images(
+    history: list[types.Content],
+    max_images: int,
+) -> list[types.Content]:
+    """Strip image parts from intermediate history turns to stay under the model limit.
+
+    Keeps the first 2 turns (context setup) and the most recent 2 turns intact.
+    Strips inline_data from middle turns, replacing with a text placeholder.
+    """
+    if _count_image_parts(history) <= max_images:
+        return history
+
+    # Protected: first 2 turns (context) + last 2 turns (most recent exchange)
+    protected_start = min(2, len(history))
+    protected_end = min(2, len(history) - protected_start)
+    prunable_start = protected_start
+    prunable_end = len(history) - protected_end
+
+    pruned = list(history[:protected_start])
+    for turn in history[prunable_start:prunable_end]:
+        new_parts = []
+        had_images = False
+        for part in turn.parts or []:
+            if part.inline_data is not None:
+                had_images = True
+            else:
+                new_parts.append(part)
+        if had_images and not any(p.text == "[image removed for context limit]" for p in new_parts):
+            new_parts.append(types.Part(text="[image removed for context limit]"))
+        pruned.append(types.Content(role=turn.role, parts=new_parts))
+    pruned.extend(history[prunable_end:])
+
+    remaining = _count_image_parts(pruned)
+    logger.info(
+        "history_images_pruned",
+        original_images=_count_image_parts(history),
+        remaining_images=remaining,
+        history_turns=len(history),
+    )
+    return pruned
+
+
 def continue_chat(
     history: list[types.Content],
     new_message: list[types.Part | str | Image.Image],
@@ -276,6 +330,7 @@ def continue_chat(
 
     # Build new user turn from the message parts
     user_parts = []
+    new_image_count = 0
     for item in new_message:
         if isinstance(item, str):
             user_parts.append(types.Part(text=item))
@@ -283,12 +338,19 @@ def continue_chat(
             buf = io.BytesIO()
             item.save(buf, format="PNG")
             user_parts.append(types.Part.from_bytes(data=buf.getvalue(), mime_type="image/png"))
+            new_image_count += 1
         elif isinstance(item, types.Part):
             user_parts.append(item)
+            if item.inline_data is not None:
+                new_image_count += 1
         else:
             raise ValueError(f"Unexpected message part type: {type(item).__name__}")
 
-    contents = list(history) + [types.Content(role="user", parts=user_parts)]
+    # Prune history images if total would exceed model limit
+    max_history_images = MAX_INPUT_IMAGES - new_image_count
+    pruned_history = _prune_history_images(history, max_history_images)
+
+    contents = pruned_history + [types.Content(role="user", parts=user_parts)]
 
     return client.models.generate_content(
         model=GEMINI_MODEL,

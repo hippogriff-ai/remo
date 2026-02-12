@@ -31,6 +31,7 @@ from app.models.contracts import (
 from app.utils.gemini_chat import (
     GEMINI_MODEL,
     IMAGE_CONFIG,
+    MAX_INPUT_IMAGES,
     extract_image,
     extract_text,
     get_client,
@@ -278,6 +279,22 @@ async def generate_designs(input: GenerateDesignsInput) -> GenerateDesignsOutput
             raise ApplicationError(
                 "No room photos provided",
                 non_retryable=True,
+            )
+
+        # Cap total images to model limit (room photos take priority)
+        total_images = len(room_images) + len(inspiration_images)
+        if total_images > MAX_INPUT_IMAGES:
+            max_inspiration = MAX_INPUT_IMAGES - len(room_images)
+            if max_inspiration <= 0:
+                room_images = room_images[:MAX_INPUT_IMAGES]
+                inspiration_images = []
+            else:
+                inspiration_images = inspiration_images[:max_inspiration]
+            logger.warning(
+                "input_images_truncated",
+                original_count=total_images,
+                room_kept=len(room_images),
+                inspiration_kept=len(inspiration_images),
             )
 
         # Build prompt

@@ -606,3 +606,39 @@ class TestGenerateSingleOptionWithInspiration:
             contents = call_args[1]["contents"]
             # Should be: room image + inspiration image + text prompt = 3 items
             assert len(contents) == 3
+
+
+class TestImageCountTruncation:
+    """Tests for input image truncation to model limit."""
+
+    @pytest.mark.asyncio
+    async def test_truncates_inspiration_when_over_limit(self):
+        from app.activities.generate import generate_designs
+
+        inp = GenerateDesignsInput(
+            room_photo_urls=["projects/test-proj/room_photos/room.jpg"],
+            inspiration_photo_urls=[f"https://example.com/inspo{i}.jpg" for i in range(15)],
+        )
+
+        with (
+            patch(
+                "app.activities.generate._download_images",
+                new_callable=AsyncMock,
+                side_effect=lambda urls: [_make_test_image() for _ in urls],
+            ),
+            patch(
+                "app.activities.generate._generate_single_option",
+                new_callable=AsyncMock,
+                return_value=_make_test_image(),
+            ) as mock_gen,
+            patch(
+                "app.activities.generate._upload_image",
+                return_value="https://r2.example.com/result.png",
+            ),
+        ):
+            result = await generate_designs(inp)
+            assert len(result.options) == 2
+            # _generate_single_option should receive truncated inspiration list
+            call_args = mock_gen.call_args_list[0]
+            inspiration_received = call_args[0][2]  # third positional arg
+            assert len(inspiration_received) <= 14

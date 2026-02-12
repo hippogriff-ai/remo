@@ -488,6 +488,90 @@ class TestContinueChatWithParts:
         assert user_turn.parts[0].text == "already a part"
 
 
+class TestImageCountAndPruning:
+    """Tests for _count_image_parts and _prune_history_images."""
+
+    def test_count_image_parts(self):
+        from app.utils.gemini_chat import _count_image_parts
+
+        history = [
+            _make_content("user", [_make_image_part(), _make_text_part("hello")]),
+            _make_content("model", [_make_image_part(), _make_text_part("response")]),
+            _make_content("user", [_make_image_part()]),
+        ]
+        assert _count_image_parts(history) == 3
+
+    def test_count_image_parts_empty(self):
+        from app.utils.gemini_chat import _count_image_parts
+
+        assert _count_image_parts([]) == 0
+
+    def test_prune_no_op_when_under_limit(self):
+        from app.utils.gemini_chat import _prune_history_images
+
+        history = [
+            _make_content("user", [_make_image_part(), _make_text_part("ctx")]),
+            _make_content("model", [_make_text_part("ok")]),
+        ]
+        result = _prune_history_images(history, max_images=5)
+        assert len(result) == len(history)
+
+    def test_prune_strips_middle_turn_images(self):
+        from app.utils.gemini_chat import _count_image_parts, _prune_history_images
+
+        # 6 turns: 2 context + 2 middle + 2 recent, each with an image
+        history = [
+            _make_content("user", [_make_image_part(), _make_text_part("ctx1")]),
+            _make_content("model", [_make_image_part(), _make_text_part("ctx2")]),
+            _make_content("user", [_make_image_part(), _make_text_part("edit1")]),
+            _make_content("model", [_make_image_part(), _make_text_part("result1")]),
+            _make_content("user", [_make_image_part(), _make_text_part("edit2")]),
+            _make_content("model", [_make_image_part(), _make_text_part("result2")]),
+        ]
+        assert _count_image_parts(history) == 6
+
+        result = _prune_history_images(history, max_images=4)
+        # Middle turns (indices 2,3) should have images stripped
+        assert _count_image_parts(result) == 4
+        # All 6 turns preserved
+        assert len(result) == 6
+
+    def test_prune_adds_placeholder_text(self):
+        from app.utils.gemini_chat import _prune_history_images
+
+        history = [
+            _make_content("user", [_make_image_part()]),
+            _make_content("model", [_make_text_part("ok")]),
+            _make_content("user", [_make_image_part()]),  # middle: will be pruned
+            _make_content("model", [_make_image_part()]),  # middle: will be pruned
+            _make_content("user", [_make_text_part("latest")]),
+            _make_content("model", [_make_text_part("done")]),
+        ]
+        result = _prune_history_images(history, max_images=1)
+        # Check that pruned middle turns have placeholder
+        middle_turn = result[2]
+        texts = [p.text for p in middle_turn.parts if p.text]
+        assert "[image removed for context limit]" in texts
+
+    def test_continue_chat_prunes_when_over_limit(self):
+        from app.utils.gemini_chat import MAX_INPUT_IMAGES, continue_chat
+
+        # Build history with MAX_INPUT_IMAGES images
+        history = []
+        for i in range(MAX_INPUT_IMAGES):
+            history.append(_make_content("user" if i % 2 == 0 else "model", [_make_image_part()]))
+
+        mock_client = MagicMock()
+        mock_client.models.generate_content.return_value = MagicMock()
+
+        # Send a new message with 1 image — should trigger pruning
+        img = Image.new("RGB", (10, 10), "blue")
+        continue_chat(history, [img, "edit this"], mock_client)
+
+        # Should have been called (pruning doesn't prevent the call)
+        mock_client.models.generate_content.assert_called_once()
+
+
 class TestExtractImageEdgeCases:
     """Edge case tests for extract_image."""
 
