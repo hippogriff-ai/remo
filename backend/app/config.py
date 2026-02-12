@@ -28,6 +28,7 @@ class Settings(BaseSettings):
     environment: str = "development"
     log_level: str = "INFO"
     presigned_url_expiry_seconds: int = 3600
+    use_mock_activities: bool = True
 
 
 settings = Settings()

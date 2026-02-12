@@ -5,7 +5,9 @@ Real mode (P2): forwards signals/queries to Temporal.
 """
 
 import asyncio
+import time
 import uuid
+from dataclasses import dataclass, field
 from typing import Literal
 
 import structlog
@@ -13,15 +15,18 @@ from fastapi import APIRouter, UploadFile
 from fastapi.responses import JSONResponse
 
 from app.activities.validation import validate_photo
+from app.config import settings
 from app.models.contracts import (
     ActionResponse,
     AnnotationEditRequest,
+    ChatMessage,
     CreateProjectRequest,
     CreateProjectResponse,
     DesignBrief,
     DesignOption,
     ErrorResponse,
     GenerateShoppingListOutput,
+    IntakeChatInput,
     IntakeChatOutput,
     IntakeConfirmRequest,
     IntakeMessageRequest,
@@ -48,11 +53,43 @@ MAX_PHOTO_BYTES = 20 * 1024 * 1024  # 20 MB
 
 # In-memory mock state store (replaced by Temporal in P2)
 _mock_states: dict[str, WorkflowState] = {}
-_mock_intake_messages: dict[str, list[str]] = {}  # project_id -> user messages
+
+
+@dataclass
+class _IntakeSession:
+    """Per-project intake conversation state."""
+
+    mode: Literal["quick", "full", "open"]
+    history: list[ChatMessage] = field(default_factory=list)
+    last_partial_brief: DesignBrief | None = None
+
+
+_intake_sessions: dict[str, _IntakeSession] = {}
+
+# Mock generation: stores (ready_at, options) per project for simulated delay
+_mock_pending_generation: dict[str, tuple[float, list[DesignOption]]] = {}
+MOCK_GENERATION_DELAY: float = 2.0  # seconds; set to 0.0 in tests
+
+
+def _maybe_complete_generation(project_id: str, state: WorkflowState) -> None:
+    """Auto-complete generation if the simulated delay has elapsed."""
+    if state.step != "generation":
+        return
+    pending = _mock_pending_generation.get(project_id)
+    if pending is None:
+        return
+    ready_at, options = pending
+    if time.monotonic() >= ready_at:
+        state.generated_options = options
+        state.step = "selection"
+        del _mock_pending_generation[project_id]
 
 
 def _get_state(project_id: str) -> WorkflowState | None:
-    return _mock_states.get(project_id)
+    state = _mock_states.get(project_id)
+    if state is not None:
+        _maybe_complete_generation(project_id, state)
+    return state
 
 
 def _error(status: int, code: str, message: str, *, retryable: bool = False) -> JSONResponse:
@@ -151,7 +188,8 @@ async def delete_project(project_id: str):
     if project_id not in _mock_states:
         return _error(404, *_NOT_FOUND)
     del _mock_states[project_id]
-    _mock_intake_messages.pop(project_id, None)
+    _intake_sessions.pop(project_id, None)
+    _mock_pending_generation.pop(project_id, None)
     logger.info("project_deleted", project_id=project_id)
 
 
@@ -214,6 +252,32 @@ async def upload_photo(
         size_bytes=len(image_data),
     )
     return PhotoUploadResponse(photo_id=photo_id, validation=validation)
+
+
+# --- Photo delete ---
+
+
+@router.delete(
+    "/projects/{project_id}/photos/{photo_id}",
+    status_code=204,
+    responses={404: {"model": ErrorResponse}, 409: {"model": ErrorResponse}},
+)
+async def delete_photo(project_id: str, photo_id: str):
+    """Remove a photo from the project."""
+    state = _get_state(project_id)
+    if err := _check_step(state, ("photos", "scan"), "delete photo"):
+        return err
+    assert state is not None
+    for i, photo in enumerate(state.photos):
+        if photo.photo_id == photo_id:
+            state.photos.pop(i)
+            # Reverse auto-transition if room count drops below threshold
+            room_count = sum(1 for p in state.photos if p.photo_type == "room")
+            if room_count < 2 and state.step == "scan":
+                state.step = "photos"
+            logger.info("photo_deleted", project_id=project_id, photo_id=photo_id)
+            return  # 204 implicit
+    return _error(404, "photo_not_found", f"Photo {photo_id} not found")
 
 
 # --- Scan ---
@@ -280,12 +344,16 @@ async def skip_scan(project_id: str):
     responses={404: {"model": ErrorResponse}, 409: {"model": ErrorResponse}},
 )
 async def start_intake(project_id: str, body: IntakeStartRequest):
-    """Begin intake conversation with selected mode."""
+    """Begin intake conversation with selected mode.
+
+    Returns a static welcome message and initializes conversation tracking.
+    The first real agent call happens on send_intake_message.
+    """
     state = _get_state(project_id)
     if err := _check_step(state, "intake", "start intake"):
         return err
     assert state is not None
-    _mock_intake_messages[project_id] = []
+    _intake_sessions[project_id] = _IntakeSession(mode=body.mode)
     return IntakeChatOutput(
         agent_message="Welcome! Let's design your perfect room. "
         "What type of room are we working with?",
@@ -301,27 +369,41 @@ async def start_intake(project_id: str, body: IntakeStartRequest):
 @router.post(
     "/projects/{project_id}/intake/message",
     response_model=IntakeChatOutput,
-    responses={404: {"model": ErrorResponse}, 409: {"model": ErrorResponse}},
+    responses={
+        404: {"model": ErrorResponse},
+        409: {"model": ErrorResponse},
+        500: {"model": ErrorResponse},
+    },
 )
 async def send_intake_message(project_id: str, body: IntakeMessageRequest):
     """Send user message to intake agent.
 
-    Mock conversation cycles through 3 steps:
-    1. Style preference (quick replies)
-    2. Specific requests (open-ended text)
-    3. Summary with partial brief
+    When use_mock_activities=False, calls T3's _run_intake_core with the
+    project context and accumulated conversation history.
+    When use_mock_activities=True, returns canned mock responses.
     """
     state = _get_state(project_id)
     if err := _check_step(state, "intake", "send intake message"):
         return err
     assert state is not None
-    messages = _mock_intake_messages.setdefault(project_id, [])
-    messages.append(body.message)
-    step = len(messages)
+
+    if not settings.use_mock_activities:
+        return await _real_intake_message(project_id, state, body.message)
+
+    return _mock_intake_message(project_id, body.message)
+
+
+def _mock_intake_message(project_id: str, message: str) -> IntakeChatOutput | JSONResponse:
+    """Canned 3-step mock conversation for iOS development."""
+    session = _intake_sessions.get(project_id)
+    if session is None:
+        return _error(409, "wrong_step", "Call start_intake first")
+    session.history.append(ChatMessage(role="user", content=message))
+    step = len([m for m in session.history if m.role == "user"])
 
     if step == 1:
-        return IntakeChatOutput(
-            agent_message=f"Great, a {body.message}! What design style are you drawn to?",
+        reply = IntakeChatOutput(
+            agent_message=f"Great, a {message}! What design style are you drawn to?",
             options=[
                 QuickReplyOption(number=1, label="Modern Minimalist", value="modern"),
                 QuickReplyOption(number=2, label="Warm & Cozy", value="warm"),
@@ -330,8 +412,8 @@ async def send_intake_message(project_id: str, body: IntakeMessageRequest):
             ],
             progress="Question 2 of 3",
         )
-    if step == 2:
-        return IntakeChatOutput(
+    elif step == 2:
+        reply = IntakeChatOutput(
             agent_message=(
                 "Love that style! Anything specific you'd like to change "
                 "or keep in the room? For example: 'replace the couch' "
@@ -340,20 +422,67 @@ async def send_intake_message(project_id: str, body: IntakeMessageRequest):
             is_open_ended=True,
             progress="Question 3 of 3",
         )
-    # Step 3+: summary
-    room_type = messages[0] if messages else "living room"
-    style = messages[1] if len(messages) > 1 else "modern"
-    detail = messages[2] if len(messages) > 2 else body.message
-    return IntakeChatOutput(
-        agent_message=(
-            f"Here's what I've gathered: a {room_type} with "
-            f'{style} style. You mentioned: "{detail}". '
-            "Does this look right?"
-        ),
-        is_summary=True,
-        partial_brief=DesignBrief(room_type=room_type),
-        progress="Summary",
+    else:
+        user_msgs = [m.content for m in session.history if m.role == "user"]
+        room_type = user_msgs[0] if user_msgs else "living room"
+        style = user_msgs[1] if len(user_msgs) > 1 else "modern"
+        detail = user_msgs[2] if len(user_msgs) > 2 else message
+        reply = IntakeChatOutput(
+            agent_message=(
+                f"Here's what I've gathered: a {room_type} with "
+                f'{style} style. You mentioned: "{detail}". '
+                "Does this look right?"
+            ),
+            is_summary=True,
+            partial_brief=DesignBrief(room_type=room_type),
+            progress="Summary",
+        )
+    session.history.append(ChatMessage(role="assistant", content=reply.agent_message))
+    return reply
+
+
+async def _real_intake_message(
+    project_id: str, state: WorkflowState, message: str
+) -> IntakeChatOutput | JSONResponse:
+    """Call T3's intake agent with project context and conversation history."""
+    from app.activities.intake import _run_intake_core
+
+    session = _intake_sessions.get(project_id)
+    if session is None:
+        return _error(409, "wrong_step", "Call start_intake first")
+
+    # photo_index must match the index within inspiration_photos (not all photos),
+    # since T3's build_messages enumerates inspiration_photo_urls with its own index.
+    inspiration_photos = [p for p in state.photos if p.photo_type == "inspiration"]
+    project_context: dict = {
+        "room_photos": [p.storage_key for p in state.photos if p.photo_type == "room"],
+        "inspiration_photos": [p.storage_key for p in inspiration_photos],
+        "inspiration_notes": [
+            {"photo_index": i, "note": p.note} for i, p in enumerate(inspiration_photos) if p.note
+        ],
+    }
+    if session.last_partial_brief is not None:
+        project_context["previous_brief"] = session.last_partial_brief.model_dump()
+
+    intake_input = IntakeChatInput(
+        mode=session.mode,
+        project_context=project_context,
+        conversation_history=session.history,
+        user_message=message,
     )
+
+    try:
+        result = await _run_intake_core(intake_input)
+    except Exception:
+        logger.exception("intake_agent_error", project_id=project_id)
+        return _error(500, "intake_error", "The design assistant encountered an error")
+
+    session.history.append(ChatMessage(role="user", content=message))
+    session.history.append(ChatMessage(role="assistant", content=result.agent_message))
+    if result.partial_brief is not None:
+        session.last_partial_brief = result.partial_brief
+
+    return result
 
 
 @router.post(
@@ -368,8 +497,11 @@ async def confirm_intake(project_id: str, body: IntakeConfirmRequest):
         return err
     assert state is not None
     state.design_brief = body.brief
-    state.generated_options = _mock_options(project_id, "Modern Minimalist", "Warm Contemporary")
-    state.step = "selection"
+    state.step = "generation"
+    _mock_pending_generation[project_id] = (
+        time.monotonic() + MOCK_GENERATION_DELAY,
+        _mock_options(project_id, "Modern Minimalist", "Warm Contemporary"),
+    )
     return ActionResponse()
 
 
@@ -384,8 +516,11 @@ async def skip_intake(project_id: str):
     if err := _check_step(state, "intake", "skip intake"):
         return err
     assert state is not None
-    state.generated_options = _mock_options(project_id, "Design Option A", "Design Option B")
-    state.step = "selection"
+    state.step = "generation"
+    _mock_pending_generation[project_id] = (
+        time.monotonic() + MOCK_GENERATION_DELAY,
+        _mock_options(project_id, "Design Option A", "Design Option B"),
+    )
     return ActionResponse()
 
 
@@ -435,7 +570,8 @@ async def start_over(project_id: str):
     state.error = None
     state.chat_history_key = None
     state.step = "intake"
-    _mock_intake_messages.pop(project_id, None)
+    _intake_sessions.pop(project_id, None)
+    _mock_pending_generation.pop(project_id, None)
     return ActionResponse()
 
 

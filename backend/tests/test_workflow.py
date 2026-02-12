@@ -593,6 +593,91 @@ class TestPhotoPhase:
             assert state.photos[2].photo_id == "late-001"
 
 
+class TestRemovePhoto:
+    """Tests for the remove_photo signal — INT-3."""
+
+    async def test_remove_photo_signal(self, workflow_env, tq):
+        """Sending remove_photo signal removes the photo from workflow state.
+
+        Covers INT-3 TDD criterion: Workflow signal removes photo from state.
+        """
+        async with Worker(
+            workflow_env.client,
+            task_queue=tq,
+            workflows=[DesignProjectWorkflow],
+            activities=ALL_ACTIVITIES,
+        ):
+            handle = await _start_workflow(workflow_env, tq)
+            await handle.signal(DesignProjectWorkflow.add_photo, _photo(0))
+            await asyncio.sleep(0.3)
+
+            state = await handle.query(DesignProjectWorkflow.get_state)
+            assert len(state.photos) == 1
+
+            await handle.signal(DesignProjectWorkflow.remove_photo, state.photos[0].photo_id)
+            await asyncio.sleep(0.3)
+
+            state = await handle.query(DesignProjectWorkflow.get_state)
+            assert len(state.photos) == 0
+
+    async def test_remove_photo_preserves_others(self, workflow_env, tq):
+        """Removing one photo preserves other photos in state."""
+        async with Worker(
+            workflow_env.client,
+            task_queue=tq,
+            workflows=[DesignProjectWorkflow],
+            activities=ALL_ACTIVITIES,
+        ):
+            handle = await _start_workflow(workflow_env, tq)
+            photo_a = PhotoData(
+                photo_id="keep-a",
+                storage_key="photos/a.jpg",
+                photo_type="room",
+            )
+            photo_b = PhotoData(
+                photo_id="remove-b",
+                storage_key="photos/b.jpg",
+                photo_type="room",
+            )
+            photo_c = PhotoData(
+                photo_id="keep-c",
+                storage_key="photos/c.jpg",
+                photo_type="inspiration",
+            )
+            await handle.signal(DesignProjectWorkflow.add_photo, photo_a)
+            await handle.signal(DesignProjectWorkflow.add_photo, photo_b)
+            await handle.signal(DesignProjectWorkflow.add_photo, photo_c)
+            await asyncio.sleep(0.3)
+
+            await handle.signal(DesignProjectWorkflow.remove_photo, "remove-b")
+            await asyncio.sleep(0.3)
+
+            state = await handle.query(DesignProjectWorkflow.get_state)
+            assert len(state.photos) == 2
+            ids = [p.photo_id for p in state.photos]
+            assert "keep-a" in ids
+            assert "keep-c" in ids
+            assert "remove-b" not in ids
+
+    async def test_remove_nonexistent_photo_is_noop(self, workflow_env, tq):
+        """Removing a nonexistent photo_id is a safe no-op in the workflow."""
+        async with Worker(
+            workflow_env.client,
+            task_queue=tq,
+            workflows=[DesignProjectWorkflow],
+            activities=ALL_ACTIVITIES,
+        ):
+            handle = await _start_workflow(workflow_env, tq)
+            await handle.signal(DesignProjectWorkflow.add_photo, _photo(0))
+            await asyncio.sleep(0.3)
+
+            await handle.signal(DesignProjectWorkflow.remove_photo, "nonexistent-id")
+            await asyncio.sleep(0.3)
+
+            state = await handle.query(DesignProjectWorkflow.get_state)
+            assert len(state.photos) == 1
+
+
 class TestScanPhase:
     """Tests for the scan phase (complete or skip)."""
 

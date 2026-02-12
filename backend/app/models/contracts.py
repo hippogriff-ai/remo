@@ -31,6 +31,7 @@ class InspirationNote(BaseModel):
 class DesignBrief(BaseModel):
     room_type: str
     occupants: str | None = None
+    lifestyle: str | None = None
     pain_points: list[str] = []
     keep_items: list[str] = []
     style_profile: StyleProfile | None = None

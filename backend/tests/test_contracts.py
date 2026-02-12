@@ -82,6 +82,7 @@ class TestDesignBrief:
         """Only room_type required."""
         b = DesignBrief(room_type="living room")
         assert b.occupants is None
+        assert b.lifestyle is None
         assert b.pain_points == []
 
     def test_full(self):
@@ -89,6 +90,7 @@ class TestDesignBrief:
         b = DesignBrief(
             room_type="bedroom",
             occupants="couple",
+            lifestyle="Morning yoga, weekend hosting",
             pain_points=["too dark"],
             keep_items=["bed frame"],
             style_profile=StyleProfile(lighting="warm"),
@@ -96,7 +98,33 @@ class TestDesignBrief:
             inspiration_notes=[InspirationNote(photo_index=0, note="moody lighting")],
         )
         assert b.style_profile.lighting == "warm"
+        assert b.lifestyle == "Morning yoga, weekend hosting"
         assert len(b.inspiration_notes) == 1
+
+    def test_lifestyle_none_is_backwards_compatible(self):
+        """DesignBrief(lifestyle=None) is valid — INT-6 backwards compatibility.
+
+        Covers INT-6 TDD criterion: DesignBrief(lifestyle=None) is valid.
+        """
+        b = DesignBrief(room_type="office")
+        assert b.lifestyle is None
+        d = b.model_dump()
+        b2 = DesignBrief.model_validate(d)
+        assert b2.lifestyle is None
+
+    def test_lifestyle_serializes_correctly(self):
+        """DesignBrief with lifestyle serializes and deserializes.
+
+        Covers INT-6 TDD criterion: serializes/deserializes correctly.
+        """
+        b = DesignBrief(
+            room_type="living room",
+            lifestyle="Morning yoga, weekend hosting",
+        )
+        d = b.model_dump()
+        assert d["lifestyle"] == "Morning yoga, weekend hosting"
+        b2 = DesignBrief.model_validate(d)
+        assert b2.lifestyle == "Morning yoga, weekend hosting"
 
 
 class TestRoomDimensions:

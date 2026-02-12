@@ -6,12 +6,25 @@ shapes, and step transition logic.
 """
 
 import io
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from app.api.routes.projects import _mock_states
-from app.models.contracts import DesignOption, PhotoData, ValidatePhotoOutput
+import app.api.routes.projects as _projects_mod
+from app.api.routes.projects import (
+    _intake_sessions,
+    _mock_pending_generation,
+    _mock_states,
+)
+from app.models.contracts import (
+    ChatMessage,
+    DesignBrief,
+    DesignOption,
+    IntakeChatOutput,
+    PhotoData,
+    QuickReplyOption,
+    ValidatePhotoOutput,
+)
 
 # Reusable mock validation results
 _VALID = ValidatePhotoOutput(passed=True, failures=[], messages=["Photo looks great!"])
@@ -24,8 +37,16 @@ _INVALID = ValidatePhotoOutput(
 
 @pytest.fixture(autouse=True)
 def clear_mock_state():
-    """Reset mock state between tests."""
+    """Reset mock state and set generation delay to 0 for instant transitions."""
     _mock_states.clear()
+    _mock_pending_generation.clear()
+    _intake_sessions.clear()
+    _projects_mod.MOCK_GENERATION_DELAY = 0.0
+    yield
+    _mock_states.clear()
+    _mock_pending_generation.clear()
+    _intake_sessions.clear()
+    _projects_mod.MOCK_GENERATION_DELAY = 2.0
 
 
 @pytest.fixture
@@ -229,6 +250,135 @@ class TestPhotoUpload:
         assert state.json()["step"] == "photos"  # still photos, rejected doesn't count
 
 
+class TestPhotoDelete:
+    """DELETE /api/v1/projects/{id}/photos/{photoId} — INT-3."""
+
+    @pytest.mark.asyncio
+    async def test_delete_existing_photo(self, client, project_id):
+        """Deleting an existing photo returns 204 and removes it from state.
+
+        Covers INT-3 TDD criterion: Delete existing photo -> 204, photo removed.
+        """
+        _mock_states[project_id].photos.append(
+            PhotoData(
+                photo_id="photo-to-delete",
+                storage_key="s3://test/room.jpg",
+                photo_type="room",
+            ),
+        )
+        resp = await client.delete(f"/api/v1/projects/{project_id}/photos/photo-to-delete")
+        assert resp.status_code == 204
+        state = (await client.get(f"/api/v1/projects/{project_id}")).json()
+        assert len(state["photos"]) == 0
+
+    @pytest.mark.asyncio
+    async def test_delete_nonexistent_photo(self, client, project_id):
+        """Deleting a nonexistent photo returns 404 with photo_not_found.
+
+        Covers INT-3 TDD criterion: Delete nonexistent photo -> 404.
+        """
+        resp = await client.delete(f"/api/v1/projects/{project_id}/photos/no-such-photo")
+        assert resp.status_code == 404
+        assert resp.json()["error"] == "photo_not_found"
+
+    @pytest.mark.asyncio
+    async def test_delete_nonexistent_project(self, client):
+        """Deleting a photo from a nonexistent project returns 404.
+
+        Covers INT-3 TDD criterion: Delete nonexistent project -> 404.
+        """
+        resp = await client.delete("/api/v1/projects/nonexistent-id/photos/any-photo")
+        assert resp.status_code == 404
+        assert resp.json()["error"] == "workflow_not_found"
+
+    @pytest.mark.asyncio
+    async def test_delete_photo_wrong_step(self, client, project_id):
+        """Deleting a photo after the scan step returns 409.
+
+        Covers INT-3 TDD criterion: Delete after step past photos/scan -> 409.
+        """
+        _mock_states[project_id].step = "intake"
+        _mock_states[project_id].photos.append(
+            PhotoData(photo_id="photo-1", storage_key="s3://test/room.jpg", photo_type="room"),
+        )
+        resp = await client.delete(f"/api/v1/projects/{project_id}/photos/photo-1")
+        assert resp.status_code == 409
+        assert resp.json()["error"] == "wrong_step"
+
+    @pytest.mark.asyncio
+    async def test_delete_photo_during_scan_step(self, client, project_id):
+        """Deleting a photo during scan step succeeds and reverses to photos if needed."""
+        _mock_states[project_id].step = "scan"
+        _mock_states[project_id].photos = [
+            PhotoData(photo_id="room-1", storage_key="s3://test/room1.jpg", photo_type="room"),
+            PhotoData(photo_id="room-2", storage_key="s3://test/room2.jpg", photo_type="room"),
+        ]
+        # Delete one room photo — room count drops below 2, step should reverse
+        resp = await client.delete(f"/api/v1/projects/{project_id}/photos/room-2")
+        assert resp.status_code == 204
+        state = (await client.get(f"/api/v1/projects/{project_id}")).json()
+        assert state["step"] == "photos"
+        assert len(state["photos"]) == 1
+
+    @pytest.mark.asyncio
+    async def test_delete_inspiration_during_scan_keeps_step(self, client, project_id):
+        """Deleting an inspiration photo during scan keeps step at scan."""
+        _mock_states[project_id].step = "scan"
+        _mock_states[project_id].photos = [
+            PhotoData(photo_id="room-1", storage_key="s3://test/room1.jpg", photo_type="room"),
+            PhotoData(photo_id="room-2", storage_key="s3://test/room2.jpg", photo_type="room"),
+            PhotoData(
+                photo_id="inspo-1", storage_key="s3://test/inspo.jpg", photo_type="inspiration"
+            ),
+        ]
+        resp = await client.delete(f"/api/v1/projects/{project_id}/photos/inspo-1")
+        assert resp.status_code == 204
+        state = (await client.get(f"/api/v1/projects/{project_id}")).json()
+        assert state["step"] == "scan"
+        assert len(state["photos"]) == 2
+
+    @pytest.mark.asyncio
+    async def test_delete_preserves_other_photos(self, client, project_id):
+        """Deleting one photo leaves other photos intact."""
+        _mock_states[project_id].photos = [
+            PhotoData(
+                photo_id="keep-me",
+                storage_key="s3://test/room1.jpg",
+                photo_type="room",
+            ),
+            PhotoData(
+                photo_id="delete-me",
+                storage_key="s3://test/room2.jpg",
+                photo_type="room",
+            ),
+            PhotoData(
+                photo_id="keep-me-too",
+                storage_key="s3://test/inspo.jpg",
+                photo_type="inspiration",
+            ),
+        ]
+        resp = await client.delete(f"/api/v1/projects/{project_id}/photos/delete-me")
+        assert resp.status_code == 204
+        state = (await client.get(f"/api/v1/projects/{project_id}")).json()
+        assert len(state["photos"]) == 2
+        photo_ids = [p["photo_id"] for p in state["photos"]]
+        assert "keep-me" in photo_ids
+        assert "keep-me-too" in photo_ids
+        assert "delete-me" not in photo_ids
+
+    @pytest.mark.asyncio
+    async def test_delete_same_photo_twice(self, client, project_id):
+        """Deleting the same photo twice returns 404 on the second attempt."""
+        _mock_states[project_id].photos.append(
+            PhotoData(photo_id="once-only", storage_key="s3://test/room.jpg", photo_type="room"),
+        )
+        resp1 = await client.delete(f"/api/v1/projects/{project_id}/photos/once-only")
+        assert resp1.status_code == 204
+        resp2 = await client.delete(f"/api/v1/projects/{project_id}/photos/once-only")
+        assert resp2.status_code == 404
+        assert resp2.json()["error"] == "photo_not_found"
+
+
 class TestScanEndpoints:
     """POST /api/v1/projects/{id}/scan and scan/skip"""
 
@@ -332,6 +482,10 @@ class TestIntakeEndpoints:
     async def test_send_message(self, client, project_id):
         """First intake message returns style question (step 2 of conversation)."""
         _mock_states[project_id].step = "intake"
+        await client.post(
+            f"/api/v1/projects/{project_id}/intake/start",
+            json={"mode": "quick"},
+        )
         resp = await client.post(
             f"/api/v1/projects/{project_id}/intake/message",
             json={"message": "living room"},
@@ -352,6 +506,10 @@ class TestIntakeEndpoints:
         from app.models.contracts import IntakeChatOutput
 
         _mock_states[project_id].step = "intake"
+        await client.post(
+            f"/api/v1/projects/{project_id}/intake/start",
+            json={"mode": "quick"},
+        )
         # Send 3 messages to reach summary
         await client.post(
             f"/api/v1/projects/{project_id}/intake/message",
@@ -508,6 +666,85 @@ class TestIntakeEndpoints:
         )
         assert resp.status_code == 422
         assert resp.json()["error"] == "validation_error"
+
+
+class TestMockGenerationStep:
+    """GAP-5: Verify generation step is visible between intake and selection."""
+
+    @pytest.mark.asyncio
+    async def test_confirm_intake_shows_generation_step(self, client, project_id):
+        """After confirm_intake with delay, step is 'generation' and options are empty.
+
+        Covers GAP-5 TDD criterion: state.step == 'generation', options empty.
+        """
+        _mock_states[project_id].step = "intake"
+        # Use a long delay so generation doesn't auto-complete
+        _projects_mod.MOCK_GENERATION_DELAY = 9999.0
+        await client.post(
+            f"/api/v1/projects/{project_id}/intake/confirm",
+            json={"brief": {"room_type": "living room"}},
+        )
+        state = (await client.get(f"/api/v1/projects/{project_id}")).json()
+        assert state["step"] == "generation"
+        assert state["generated_options"] == []
+
+    @pytest.mark.asyncio
+    async def test_generation_completes_after_delay(self, client, project_id):
+        """After delay elapsed, polling transitions to 'selection' with options.
+
+        Covers GAP-5 TDD criterion: after polling delay, step == 'selection'
+        with 2 generated_options.
+        """
+        _mock_states[project_id].step = "intake"
+        # Set delay to 0 so generation completes on next poll
+        _projects_mod.MOCK_GENERATION_DELAY = 0.0
+        await client.post(
+            f"/api/v1/projects/{project_id}/intake/confirm",
+            json={"brief": {"room_type": "living room"}},
+        )
+        state = (await client.get(f"/api/v1/projects/{project_id}")).json()
+        assert state["step"] == "selection"
+        assert len(state["generated_options"]) == 2
+
+    @pytest.mark.asyncio
+    async def test_skip_intake_shows_generation_step(self, client, project_id):
+        """skip_intake follows the same two-step transition.
+
+        Covers GAP-5 TDD criterion: skip_intake shows generation then selection.
+        """
+        _mock_states[project_id].step = "intake"
+        _projects_mod.MOCK_GENERATION_DELAY = 9999.0
+        await client.post(f"/api/v1/projects/{project_id}/intake/skip")
+        state = (await client.get(f"/api/v1/projects/{project_id}")).json()
+        assert state["step"] == "generation"
+        assert state["generated_options"] == []
+
+    @pytest.mark.asyncio
+    async def test_skip_intake_generation_completes(self, client, project_id):
+        """skip_intake generation completes on next poll with delay=0."""
+        _mock_states[project_id].step = "intake"
+        _projects_mod.MOCK_GENERATION_DELAY = 0.0
+        await client.post(f"/api/v1/projects/{project_id}/intake/skip")
+        state = (await client.get(f"/api/v1/projects/{project_id}")).json()
+        assert state["step"] == "selection"
+        assert len(state["generated_options"]) == 2
+
+    @pytest.mark.asyncio
+    async def test_design_brief_preserved_through_generation(
+        self,
+        client,
+        project_id,
+    ):
+        """Design brief is stored even while step is 'generation'."""
+        _mock_states[project_id].step = "intake"
+        _projects_mod.MOCK_GENERATION_DELAY = 9999.0
+        await client.post(
+            f"/api/v1/projects/{project_id}/intake/confirm",
+            json={"brief": {"room_type": "bedroom", "pain_points": ["too dark"]}},
+        )
+        state = (await client.get(f"/api/v1/projects/{project_id}")).json()
+        assert state["step"] == "generation"
+        assert state["design_brief"]["room_type"] == "bedroom"
 
 
 class TestSelectionEndpoints:
@@ -1179,6 +1416,12 @@ class TestNotFoundOnAllEndpoints:
     _FAKE_ID = "nonexistent-project-id"
 
     @pytest.mark.asyncio
+    async def test_photo_delete_returns_404(self, client):
+        """Photo delete on nonexistent project returns 404."""
+        resp = await client.delete(f"/api/v1/projects/{self._FAKE_ID}/photos/any-photo")
+        assert resp.status_code == 404
+
+    @pytest.mark.asyncio
     async def test_photo_upload_returns_404(self, client):
         """Photo upload on nonexistent project returns 404."""
         resp = await client.post(
@@ -1530,3 +1773,222 @@ class TestFullFlow:
         ws = WorkflowState.model_validate(body)
         assert ws.step == "completed"
         assert ws.shopping_list is not None
+
+
+class TestRealIntakeWiring:
+    """INT-2: Verify real intake agent wiring via _real_intake_message.
+
+    These tests patch use_mock_activities=False and mock _run_intake_core
+    to verify IntakeChatInput construction, history tracking, error handling,
+    and cleanup on start_over/delete.
+    """
+
+    @pytest.fixture
+    def mock_agent(self):
+        """Patch use_mock_activities=False and mock _run_intake_core."""
+        mock_core = AsyncMock(
+            return_value=IntakeChatOutput(
+                agent_message="Tell me about your room.",
+                options=[
+                    QuickReplyOption(number=1, label="Living Room", value="living room"),
+                ],
+                progress="Question 1 of 3",
+            )
+        )
+        with (
+            patch.object(_projects_mod.settings, "use_mock_activities", False),
+            patch("app.activities.intake._run_intake_core", mock_core),
+        ):
+            yield mock_core
+
+    @pytest.fixture
+    def intake_project(self, project_id):
+        """Project at intake step with 2 room photos and 1 inspiration photo."""
+        state = _mock_states[project_id]
+        state.step = "intake"
+        state.photos = [
+            PhotoData(
+                photo_id="room-1",
+                storage_key="photos/room-1.jpg",
+                photo_type="room",
+            ),
+            PhotoData(
+                photo_id="room-2",
+                storage_key="photos/room-2.jpg",
+                photo_type="room",
+            ),
+            PhotoData(
+                photo_id="inspo-1",
+                storage_key="photos/inspo-1.jpg",
+                photo_type="inspiration",
+                note="love the blue walls",
+            ),
+        ]
+        return project_id
+
+    @pytest.mark.asyncio
+    async def test_real_intake_constructs_correct_input(self, client, intake_project, mock_agent):
+        """IntakeChatInput includes correct mode, project_context, and message."""
+        pid = intake_project
+        # Start intake to create session
+        await client.post(f"/api/v1/projects/{pid}/intake/start", json={"mode": "full"})
+
+        resp = await client.post(
+            f"/api/v1/projects/{pid}/intake/message",
+            json={"message": "living room"},
+        )
+        assert resp.status_code == 200
+        assert resp.json()["agent_message"] == "Tell me about your room."
+
+        # Verify the input passed to _run_intake_core
+        call_args = mock_agent.call_args[0][0]
+        assert call_args.mode == "full"
+        assert call_args.user_message == "living room"
+        assert call_args.conversation_history == []  # first message, no history yet
+        assert call_args.project_context["room_photos"] == [
+            "photos/room-1.jpg",
+            "photos/room-2.jpg",
+        ]
+        assert call_args.project_context["inspiration_photos"] == ["photos/inspo-1.jpg"]
+        assert len(call_args.project_context["inspiration_notes"]) == 1
+        # photo_index is within inspiration photos (not all photos)
+        assert call_args.project_context["inspiration_notes"][0]["photo_index"] == 0
+        assert call_args.project_context["inspiration_notes"][0]["note"] == "love the blue walls"
+
+    @pytest.mark.asyncio
+    async def test_real_intake_accumulates_history(self, client, intake_project, mock_agent):
+        """Conversation history grows across multiple send_intake_message calls."""
+        pid = intake_project
+        await client.post(f"/api/v1/projects/{pid}/intake/start", json={"mode": "quick"})
+
+        # First message
+        await client.post(
+            f"/api/v1/projects/{pid}/intake/message",
+            json={"message": "living room"},
+        )
+        # History should now have user + assistant messages
+        session = _intake_sessions[pid]
+        assert len(session.history) == 2
+        assert session.history[0] == ChatMessage(role="user", content="living room")
+        assert session.history[1] == ChatMessage(
+            role="assistant", content="Tell me about your room."
+        )
+
+        # Second message — history is passed to agent
+        await client.post(
+            f"/api/v1/projects/{pid}/intake/message",
+            json={"message": "modern style"},
+        )
+        call_args = mock_agent.call_args[0][0]
+        assert len(call_args.conversation_history) == 2  # from first turn
+        assert call_args.conversation_history[0].content == "living room"
+        assert call_args.conversation_history[1].content == "Tell me about your room."
+
+        # After second call, session has 4 messages
+        assert len(session.history) == 4
+
+    @pytest.mark.asyncio
+    async def test_real_intake_stores_partial_brief(self, client, intake_project, mock_agent):
+        """partial_brief from agent response is stored and passed on next turn."""
+        pid = intake_project
+        await client.post(f"/api/v1/projects/{pid}/intake/start", json={"mode": "quick"})
+
+        # Agent returns a partial brief
+        mock_agent.return_value = IntakeChatOutput(
+            agent_message="Here's a summary.",
+            is_summary=True,
+            partial_brief=DesignBrief(room_type="living room"),
+            progress="Summary",
+        )
+
+        await client.post(
+            f"/api/v1/projects/{pid}/intake/message",
+            json={"message": "that's all"},
+        )
+
+        # Verify session stored the partial brief
+        session = _intake_sessions[pid]
+        assert session.last_partial_brief is not None
+        assert session.last_partial_brief.room_type == "living room"
+
+        # On next call, previous_brief should be in project_context
+        mock_agent.return_value = IntakeChatOutput(
+            agent_message="Anything else?",
+            progress="Follow-up",
+        )
+        await client.post(
+            f"/api/v1/projects/{pid}/intake/message",
+            json={"message": "add plants"},
+        )
+        call_args = mock_agent.call_args[0][0]
+        assert "previous_brief" in call_args.project_context
+        assert call_args.project_context["previous_brief"]["room_type"] == "living room"
+
+    @pytest.mark.asyncio
+    async def test_real_intake_agent_error_returns_500(self, client, intake_project, mock_agent):
+        """Exception from _run_intake_core returns 500 ErrorResponse."""
+        pid = intake_project
+        await client.post(f"/api/v1/projects/{pid}/intake/start", json={"mode": "quick"})
+
+        mock_agent.side_effect = RuntimeError("Claude API timeout")
+
+        resp = await client.post(
+            f"/api/v1/projects/{pid}/intake/message",
+            json={"message": "hello"},
+        )
+        assert resp.status_code == 500
+        body = resp.json()
+        assert body["error"] == "intake_error"
+        # Error message is sanitized — no raw exception text leaked
+        assert "design assistant" in body["message"]
+
+    @pytest.mark.asyncio
+    async def test_real_intake_no_session_returns_409(self, client, intake_project, mock_agent):
+        """Calling send_intake_message without start_intake returns 409."""
+        pid = intake_project
+        # Don't call start_intake — session doesn't exist
+
+        resp = await client.post(
+            f"/api/v1/projects/{pid}/intake/message",
+            json={"message": "hello"},
+        )
+        assert resp.status_code == 409
+        assert resp.json()["error"] == "wrong_step"
+        assert "start_intake" in resp.json()["message"]
+
+    @pytest.mark.asyncio
+    async def test_start_over_clears_intake_session(self, client, intake_project, mock_agent):
+        """start_over removes the intake session."""
+        pid = intake_project
+        await client.post(f"/api/v1/projects/{pid}/intake/start", json={"mode": "full"})
+        assert pid in _intake_sessions
+
+        await client.post(f"/api/v1/projects/{pid}/start-over")
+        assert pid not in _intake_sessions
+
+    @pytest.mark.asyncio
+    async def test_delete_project_clears_intake_session(self, client, intake_project, mock_agent):
+        """delete_project removes the intake session."""
+        pid = intake_project
+        await client.post(f"/api/v1/projects/{pid}/intake/start", json={"mode": "full"})
+        assert pid in _intake_sessions
+
+        await client.delete(f"/api/v1/projects/{pid}")
+        assert pid not in _intake_sessions
+
+    @pytest.mark.asyncio
+    async def test_real_intake_error_doesnt_corrupt_history(
+        self, client, intake_project, mock_agent
+    ):
+        """When agent errors, the failed message is not added to history."""
+        pid = intake_project
+        await client.post(f"/api/v1/projects/{pid}/intake/start", json={"mode": "quick"})
+
+        mock_agent.side_effect = RuntimeError("transient error")
+        await client.post(
+            f"/api/v1/projects/{pid}/intake/message",
+            json={"message": "bad message"},
+        )
+
+        session = _intake_sessions[pid]
+        assert len(session.history) == 0  # nothing appended on error

@@ -1,6 +1,6 @@
 """Tests verifying the project scaffold is correctly set up."""
 
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
@@ -22,6 +22,70 @@ class TestHealthEndpoint:
         assert "postgres" in body
         assert "temporal" in body
         assert "r2" in body
+
+    @pytest.mark.asyncio
+    async def test_health_services_disconnected_by_default(self, client):
+        """Without running services, all checks report 'disconnected'."""
+        resp = await client.get("/health")
+        body = resp.json()
+        assert body["status"] == "ok"
+        assert body["postgres"] == "disconnected"
+        assert body["temporal"] == "disconnected"
+        assert body["r2"] == "disconnected"
+
+    @pytest.mark.asyncio
+    async def test_health_all_connected(self, client):
+        """When all services are up, health reports all 'connected'."""
+        with (
+            patch(
+                "app.api.routes.health._check_postgres",
+                new_callable=AsyncMock,
+                return_value="connected",
+            ),
+            patch(
+                "app.api.routes.health._check_temporal",
+                new_callable=AsyncMock,
+                return_value="connected",
+            ),
+            patch(
+                "app.api.routes.health._check_r2",
+                new_callable=AsyncMock,
+                return_value="connected",
+            ),
+        ):
+            resp = await client.get("/health")
+        body = resp.json()
+        assert body["status"] == "ok"
+        assert body["postgres"] == "connected"
+        assert body["temporal"] == "connected"
+        assert body["r2"] == "connected"
+
+    @pytest.mark.asyncio
+    async def test_health_partial_connected(self, client):
+        """One service down, others up — reports mixed status."""
+        with (
+            patch(
+                "app.api.routes.health._check_postgres",
+                new_callable=AsyncMock,
+                return_value="disconnected",
+            ),
+            patch(
+                "app.api.routes.health._check_temporal",
+                new_callable=AsyncMock,
+                return_value="connected",
+            ),
+            patch(
+                "app.api.routes.health._check_r2",
+                new_callable=AsyncMock,
+                return_value="connected",
+            ),
+        ):
+            resp = await client.get("/health")
+        body = resp.json()
+        assert body["status"] == "ok"
+        assert body["postgres"] == "disconnected"
+        assert body["temporal"] == "connected"
+        assert body["r2"] == "connected"
 
 
 class TestRequestIdMiddleware:
@@ -104,7 +168,7 @@ class TestOpenAPISchema:
     """
 
     def test_all_project_endpoints_in_schema(self):
-        """All 15 project endpoints + 1 health endpoint appear in the OpenAPI schema."""
+        """All 16 project endpoints + 1 health endpoint appear in the OpenAPI schema."""
         from app.main import app
 
         schema = app.openapi()
@@ -115,6 +179,7 @@ class TestOpenAPISchema:
             "/api/v1/projects",
             "/api/v1/projects/{project_id}",
             "/api/v1/projects/{project_id}/photos",
+            "/api/v1/projects/{project_id}/photos/{photo_id}",
             "/api/v1/projects/{project_id}/scan",
             "/api/v1/projects/{project_id}/scan/skip",
             "/api/v1/projects/{project_id}/intake/start",
