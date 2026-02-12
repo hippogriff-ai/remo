@@ -511,6 +511,7 @@ def build_options(options_raw: list[dict[str, Any]] | None) -> list[QuickReplyOp
             value=opt.get("value", ""),
         )
         for i, opt in enumerate(options_raw)
+        if isinstance(opt, dict)
     ]
 
 

@@ -614,7 +614,10 @@ async def score_all_products(
 
     # Sort each item's products by score (best first)
     for item_scores in all_scores:
-        item_scores.sort(key=lambda s: s.get("weighted_total", 0), reverse=True)
+        item_scores.sort(
+            key=lambda s: float(s.get("weighted_total", 0) or 0),
+            reverse=True,
+        )
 
     return all_scores
 
@@ -722,7 +725,8 @@ def apply_confidence_filtering(
         best_url = best.get("product_url", "")
         if best_url:
             used_urls.add(best_url)
-        price_cents = best.get("price_cents", 0)
+        raw_price = best.get("price_cents", 0)
+        price_cents = int(raw_price) if isinstance(raw_price, (int, float)) else 0
         total_cost += price_cents
 
         fit_status = None
