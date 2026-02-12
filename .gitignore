@@ -1,5 +1,6 @@
 # Claude Code
 .claude/
+CONTINUITY.md
 
 # Agent prompts (live at /Hanalei/remo-plans/, not in repo)
 specs/PROMPT_*.md
