@@ -560,13 +560,13 @@ async def _run_intake_core(input: IntakeChatInput) -> IntakeChatOutput:
     client = anthropic.AsyncAnthropic(api_key=api_key)
 
     try:
-        response = await client.messages.create(
+        response = await client.messages.create(  # type: ignore[call-overload]
             model=MODEL,
             max_tokens=MAX_TOKENS,
             system=system_prompt,
-            tools=INTAKE_TOOLS,  # type: ignore[arg-type]
+            tools=INTAKE_TOOLS,
             tool_choice={"type": "any"},
-            messages=messages,  # type: ignore[arg-type]
+            messages=messages,
         )
     except anthropic.RateLimitError as e:
         log.warning("intake_rate_limited", turn=turn_number, mode=input.mode)
