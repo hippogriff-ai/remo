@@ -192,6 +192,7 @@ remo/
 | # | Deliverable | Success Metric |
 |---|------------|----------------|
 | 13 | Wire real activities into workflow | Each activity produces real results through the workflow |
+| 14 | Add `DELETE /projects/{id}/photos/{photoId}` endpoint | iOS delete-photo calls succeed; photo removed from workflow state + R2 |
 
 ### P3: Stabilization
 
@@ -499,6 +500,7 @@ Bucket: remo-assets (dev: remo-assets-dev)
 | `GET` | `/api/v1/projects/{id}` | Query state | Full `WorkflowState` |
 | `DELETE` | `/api/v1/projects/{id}` | Cancel + purge | 204 |
 | `POST` | `/api/v1/projects/{id}/photos` | Upload -> validate -> signal | `{ photo_id, validation }` |
+| `DELETE` | `/api/v1/projects/{id}/photos/{photoId}` | Remove photo from project | 204 |
 | `POST` | `/api/v1/projects/{id}/scan` | Upload -> signal | 200 |
 | `POST` | `/api/v1/projects/{id}/scan/skip` | Signal skip_scan | 200 |
 | `POST` | `/api/v1/projects/{id}/intake/start` | Begin intake with mode | `{ agent_message, options }` |

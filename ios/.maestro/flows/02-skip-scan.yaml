@@ -1,0 +1,9 @@
+appId: com.hippogriff.remo
+---
+# LiDARScanScreen: skip the room scan (photos were skipped via --maestro-test backdoor)
+- assertVisible: "Scan Your Room"
+- tapOn:
+    id: "scan_skip"
+# Confirm the skip dialog
+- tapOn: "Skip"
+- takeScreenshot: 02-skip-scan

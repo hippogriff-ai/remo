@@ -40,6 +40,28 @@ docker compose up -d  # PostgreSQL + Temporal
 .venv/bin/python -m alembic upgrade head
 ```
 
+### iOS
+
+```bash
+# Swift unit tests (run from repo root)
+swift test --package-path ios/Packages/RemoModels        # 54 tests
+swift test --package-path ios/Packages/RemoNetworking    # 35 tests
+swift test --package-path ios/Packages/RemoAnnotation    # 10 tests
+
+# Generate Xcode project (after changing project.yml)
+cd ios && xcodegen generate
+
+# Build for simulator
+xcodebuild -project ios/Remo.xcodeproj -scheme Remo -configuration Debug \
+  -destination 'platform=iOS Simulator,name=iPhone 16 Pro'
+
+# Maestro UI tests (requires simulator running with app installed)
+maestro test ios/.maestro/flows/happy-path.yaml          # full happy path (8 subflows)
+maestro test ios/.maestro/flows/03-intake-chat.yaml      # single subflow
+```
+
+After editing iOS files, run Swift unit tests to verify. Run Maestro happy path after UI changes to catch regressions.
+
 ## Architecture
 
 - **iOS app** (SwiftUI, iOS 17+) communicates via HTTPS to a **FastAPI gateway**

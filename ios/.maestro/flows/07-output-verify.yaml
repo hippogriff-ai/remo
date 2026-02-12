@@ -1,0 +1,19 @@
+appId: com.hippogriff.remo
+---
+# OutputScreen: verify final screen elements and open shopping list
+- assertVisible: "Your Design is Ready!"
+- assertVisible:
+    id: "output_save"
+- assertVisible:
+    id: "output_share"
+- assertVisible:
+    id: "output_shopping"
+# Open shopping list
+- tapOn: "View Shopping List"
+- extendedWaitUntil:
+    visible: "Shopping List"
+    timeout: 5000
+- takeScreenshot: 07-output-shopping
+# Dismiss shopping list
+- back
+- takeScreenshot: 08-output-final

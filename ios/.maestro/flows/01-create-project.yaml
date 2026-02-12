@@ -1,0 +1,12 @@
+appId: com.hippogriff.remo
+---
+# HomeScreen: verify empty state, create a new project, then tap to enter it
+- assertVisible: "No Projects Yet"
+- tapOn:
+    id: "home_new_project"
+# Wait for the project row to appear (step = scan due to maestro-test backdoor)
+- assertVisible: "Scan room dimensions"
+- takeScreenshot: 01-home-screen
+# Tap the project row to navigate into ProjectFlowScreen
+- tapOn:
+    id: "home_project_0"

@@ -1,6 +1,6 @@
 # Architecture Diagrams
 
-Mermaid diagrams for the Remo backend. Renders on GitHub and in Obsidian.
+Mermaid diagrams for the Remo system. Renders on GitHub and in Obsidian.
 
 ## System Architecture
 
@@ -310,4 +310,181 @@ sequenceDiagram
     API->>WF: signal add_photo(PhotoData)
     Note over WF: If room_count >= 2:<br/>advance to "scan"
     API-->>iOS: 200 PhotoUploadResponse
+```
+
+---
+
+## iOS Architecture (T1)
+
+### SPM Package Dependency Graph
+
+8 local SPM packages with a clean dependency tree. The app target depends on all packages; UI packages depend on RemoModels and RemoNetworking.
+
+```mermaid
+graph TD
+    App["Remo App Target<br/>(HomeScreen, ProjectFlow,<br/>Router, PollingManager)"]
+
+    subgraph UI["UI Packages (6)"]
+        Photo["RemoPhotoUpload<br/>PhotoUploadScreen<br/>CameraView"]
+        Chat["RemoChatUI<br/>IntakeChatScreen<br/>ChatBubble, QuickReplyChips"]
+        Annot["RemoAnnotation<br/>IterationScreen<br/>AnnotationCanvas"]
+        Design["RemoDesignViews<br/>Selection, Generating,<br/>Approval, Output"]
+        Shop["RemoShoppingList<br/>ShoppingListScreen<br/>ProductCard"]
+        LiDAR["RemoLiDAR<br/>LiDARScanScreen"]
+    end
+
+    subgraph Core["Core Packages (2)"]
+        Models["RemoModels<br/>Models, ProjectState,<br/>ProjectStep, AnyCodable,<br/>WorkflowClientProtocol"]
+        Net["RemoNetworking<br/>MockWorkflowClient,<br/>RealWorkflowClient,<br/>APIError"]
+    end
+
+    App --> Photo & Chat & Annot & Design & Shop & LiDAR
+    App --> Models & Net
+
+    Photo --> Models & Net
+    Chat --> Models & Net
+    Annot --> Models & Net
+    Design --> Models & Net & Shop
+    Shop --> Models & Net
+    LiDAR --> Models & Net
+
+    Net --> Models
+
+    style Models fill:#e8d5b7,stroke:#333
+    style Net fill:#b7d5e8,stroke:#333
+```
+
+### Navigation Flow
+
+`ProjectStep` drives the entire navigation. The `ProjectRouter` maps each step to its screen view, and `ProjectFlowScreen` pushes screens onto the `NavigationStack` when `ProjectState.step` changes.
+
+```mermaid
+stateDiagram-v2
+    [*] --> HomeScreen
+
+    HomeScreen --> ProjectFlowScreen : tap project / create new
+
+    state ProjectFlowScreen {
+        [*] --> PhotoUploadScreen
+
+        PhotoUploadScreen --> LiDARScanScreen : 2+ room photos
+        LiDARScanScreen --> IntakeChatScreen : scan / skip
+        IntakeChatScreen --> GeneratingScreen : confirm brief / skip
+        GeneratingScreen --> DesignSelectionScreen : poll detects selection ready
+        DesignSelectionScreen --> IterationScreen : select option
+        IterationScreen --> IterationScreen : submit edit (< 5 rounds)
+        IterationScreen --> ApprovalScreen : 5 rounds reached
+        IterationScreen --> OutputScreen : approve during iteration
+        ApprovalScreen --> OutputScreen : approve
+        OutputScreen --> ShoppingListScreen : view shopping (sheet)
+
+        IntakeChatScreen --> IntakeChatScreen : start_over resets here
+        DesignSelectionScreen --> IntakeChatScreen : start_over
+        IterationScreen --> IntakeChatScreen : start_over
+    }
+```
+
+### Data Flow: Polling + State Update
+
+Shows how backend state flows through the system. The `PollingManager` polls `GET /projects/{id}`, the `WorkflowState` DTO is decoded, `ProjectState.apply()` maps it into the `@Observable` state, and SwiftUI views reactively update.
+
+```mermaid
+sequenceDiagram
+    participant View as SwiftUI View
+    participant PS as ProjectState<br/>(@Observable)
+    participant PM as PollingManager<br/>(actor)
+    participant Client as WorkflowClient<br/>(protocol)
+    participant API as FastAPI Backend
+
+    View->>Client: user action<br/>(e.g., submitAnnotationEdit)
+    Client->>API: POST /projects/{id}/iterate/annotate
+    API-->>Client: ActionResponse
+    View->>Client: getState(projectId)
+    Client->>API: GET /projects/{id}
+    API-->>Client: WorkflowState JSON
+    Client-->>View: WorkflowState (decoded)
+    View->>PS: apply(workflowState)
+    Note over PS: Updates step, photos,<br/>currentImage, etc.
+    PS-->>View: @Observable triggers<br/>view re-render
+
+    Note over PM,API: For async steps (generation, shopping):
+    PM->>Client: getState (every 2s)
+    Client->>API: GET /projects/{id}
+    API-->>Client: WorkflowState
+    alt step changed or error
+        PM-->>View: return new WorkflowState
+        View->>PS: apply(workflowState)
+    else same step, no error
+        PM->>PM: sleep 2s, retry
+    end
+```
+
+### Protocol Injection Architecture
+
+All views depend on `WorkflowClientProtocol`, never a concrete implementation. In P1, `MockWorkflowClient` provides hardcoded responses. In P2, `RealWorkflowClient` makes actual HTTP calls. The swap happens in one line in `RemoApp`.
+
+```mermaid
+graph LR
+    subgraph Views["SwiftUI Views (10 screens)"]
+        direction TB
+        V1["PhotoUploadScreen"]
+        V2["IntakeChatScreen"]
+        V3["IterationScreen"]
+        V4["DesignSelectionScreen"]
+        V5["..."]
+    end
+
+    subgraph Protocol["Abstraction"]
+        P["WorkflowClientProtocol<br/>(Sendable, async throws)"]
+    end
+
+    subgraph Implementations["Concrete Clients"]
+        Mock["MockWorkflowClient<br/>(in-memory state,<br/>hardcoded responses)"]
+        Real["RealWorkflowClient<br/>(HTTP to FastAPI,<br/>multipart upload)"]
+    end
+
+    Views -->|"depends on"| P
+    Mock -->|"conforms to"| P
+    Real -->|"conforms to"| P
+
+    subgraph App["RemoApp (entry point)"]
+        Swap["let client: any WorkflowClientProtocol<br/>= MockWorkflowClient()  // P1<br/>// = RealWorkflowClient(baseURL: ...)  // P2"]
+    end
+
+    App -->|"injects"| Views
+
+    style Mock stroke-dasharray: 0
+    style Real stroke-dasharray: 5 5
+```
+
+### Error Handling Flow
+
+The codebase uses two error handling patterns: screen-level `@State errorMessage` alerts for user actions, and a global `ErrorOverlay` on `ProjectFlowScreen` for workflow-level errors from the backend.
+
+```mermaid
+flowchart TD
+    subgraph UserAction["User Action (e.g., submit edit)"]
+        Action["async function in view"]
+    end
+
+    subgraph ErrorPath["Error Handling"]
+        Catch["catch block"]
+        Alert["@State errorMessage<br/>→ .alert() sheet"]
+    end
+
+    subgraph WorkflowError["Backend Workflow Error"]
+        Poll["PollingManager<br/>or getState()"]
+        Apply["ProjectState.apply()"]
+        ErrField["projectState.error != nil"]
+        Overlay["ErrorOverlay<br/>(retryable? → Retry button)"]
+    end
+
+    Action -->|"throws"| Catch
+    Catch -->|"error.localizedDescription"| Alert
+
+    Poll -->|"WorkflowState"| Apply
+    Apply -->|"sets error field"| ErrField
+    ErrField -->|"overlay shown"| Overlay
+    Overlay -->|"tap Retry"| RetryAPI["retryFailedStep()"]
+    RetryAPI -->|"success"| Apply
 ```
