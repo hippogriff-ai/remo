@@ -6,6 +6,7 @@ shapes, and step transition logic.
 """
 
 import io
+import time
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -14,6 +15,7 @@ import app.api.routes.projects as _projects_mod
 from app.api.routes.projects import (
     _intake_sessions,
     _mock_pending_generation,
+    _mock_pending_shopping,
     _mock_states,
 )
 from app.models.contracts import (
@@ -37,16 +39,20 @@ _INVALID = ValidatePhotoOutput(
 
 @pytest.fixture(autouse=True)
 def clear_mock_state():
-    """Reset mock state and set generation delay to 0 for instant transitions."""
+    """Reset mock state and set delays to 0 for instant transitions."""
     _mock_states.clear()
     _mock_pending_generation.clear()
+    _mock_pending_shopping.clear()
     _intake_sessions.clear()
     _projects_mod.MOCK_GENERATION_DELAY = 0.0
+    _projects_mod.MOCK_SHOPPING_DELAY = 0.0
     yield
     _mock_states.clear()
     _mock_pending_generation.clear()
+    _mock_pending_shopping.clear()
     _intake_sessions.clear()
     _projects_mod.MOCK_GENERATION_DELAY = 2.0
+    _projects_mod.MOCK_SHOPPING_DELAY = 2.0
 
 
 @pytest.fixture
@@ -121,6 +127,36 @@ class TestDeleteProject:
         assert resp.status_code == 404
         assert resp.json()["error"] == "workflow_not_found"
 
+    @pytest.mark.asyncio
+    async def test_delete_during_generation_cleans_up(self, client, project_id):
+        """Deleting project during generation step cleans up pending generation state.
+
+        Ensures _mock_pending_generation dict is cleaned up so memory
+        doesn't leak for long-running test suites or API instances.
+        """
+        _mock_states[project_id].step = "generation"
+        _mock_pending_generation[project_id] = (
+            time.monotonic() + 9999,
+            [],
+        )
+        resp = await client.delete(f"/api/v1/projects/{project_id}")
+        assert resp.status_code == 204
+        assert project_id not in _mock_pending_generation
+
+    @pytest.mark.asyncio
+    async def test_delete_cleans_up_intake_session(self, client, project_id):
+        """Deleting project during intake cleans up intake session state."""
+        _mock_states[project_id].step = "intake"
+        # Start intake to create a session
+        await client.post(
+            f"/api/v1/projects/{project_id}/intake/start",
+            json={"mode": "quick"},
+        )
+        assert project_id in _intake_sessions
+        resp = await client.delete(f"/api/v1/projects/{project_id}")
+        assert resp.status_code == 204
+        assert project_id not in _intake_sessions
+
 
 class TestPhotoUpload:
     """POST /api/v1/projects/{id}/photos"""
@@ -182,8 +218,8 @@ class TestPhotoUpload:
     @pytest.mark.asyncio
     @patch("app.api.routes.projects.validate_photo", return_value=_VALID)
     async def test_photo_upload_wrong_step_returns_409(self, _mock_val, client, project_id):
-        """Photo upload at wrong step returns 409 conflict."""
-        _mock_states[project_id].step = "scan"
+        """Photo upload at wrong step (past scan) returns 409 conflict."""
+        _mock_states[project_id].step = "intake"
         fake_file = io.BytesIO(b"data")
         resp = await client.post(
             f"/api/v1/projects/{project_id}/photos",
@@ -248,6 +284,149 @@ class TestPhotoUpload:
         )
         state = await client.get(f"/api/v1/projects/{project_id}")
         assert state.json()["step"] == "photos"  # still photos, rejected doesn't count
+
+    @pytest.mark.asyncio
+    async def test_fourth_inspiration_photo_rejected(self, client, project_id):
+        """PHOTO-10: 4th inspiration photo is blocked with 422.
+
+        Covers product spec PHOTO-10: "Maximum 3 inspiration photos".
+        The limit is checked before validation, so no mock needed.
+        """
+        # Pre-populate 3 inspiration photos
+        for i in range(3):
+            _mock_states[project_id].photos.append(
+                PhotoData(
+                    photo_id=f"inspo-{i}",
+                    storage_key=f"s3://test/inspo-{i}.jpg",
+                    photo_type="inspiration",
+                ),
+            )
+        resp = await client.post(
+            f"/api/v1/projects/{project_id}/photos",
+            files={"file": ("inspo4.jpg", io.BytesIO(b"img"), "image/jpeg")},
+            params={"photo_type": "inspiration"},
+        )
+        assert resp.status_code == 422
+        assert resp.json()["error"] == "too_many_inspiration_photos"
+
+    @pytest.mark.asyncio
+    @patch("app.api.routes.projects.validate_photo", return_value=_VALID)
+    async def test_room_photo_not_limited_by_inspiration_cap(self, _mock_val, client, project_id):
+        """Room photos are unaffected by the inspiration limit.
+
+        Verifies that max inspiration limit doesn't block room uploads.
+        """
+        for i in range(3):
+            _mock_states[project_id].photos.append(
+                PhotoData(
+                    photo_id=f"inspo-{i}",
+                    storage_key=f"s3://test/inspo-{i}.jpg",
+                    photo_type="inspiration",
+                ),
+            )
+        # Room photo should still work
+        resp = await client.post(
+            f"/api/v1/projects/{project_id}/photos",
+            files={"file": ("room.jpg", io.BytesIO(b"img"), "image/jpeg")},
+            params={"photo_type": "room"},
+        )
+        assert resp.status_code == 200
+
+    # --- PHOTO-7: inspiration photo notes ---
+
+    @pytest.mark.asyncio
+    @patch("app.api.routes.projects.validate_photo", return_value=_VALID)
+    async def test_inspiration_photo_with_note(self, _mock_val, client, project_id):
+        """PHOTO-7: Inspiration photo note is stored on PhotoData."""
+        resp = await client.post(
+            f"/api/v1/projects/{project_id}/photos",
+            files={"file": ("inspo.jpg", io.BytesIO(b"img"), "image/jpeg")},
+            params={"photo_type": "inspiration", "note": "Love the warm lighting"},
+        )
+        assert resp.status_code == 200
+        state = (await client.get(f"/api/v1/projects/{project_id}")).json()
+        inspo = [p for p in state["photos"] if p["photo_type"] == "inspiration"]
+        assert len(inspo) == 1
+        assert inspo[0]["note"] == "Love the warm lighting"
+
+    @pytest.mark.asyncio
+    async def test_note_on_room_photo_returns_422(self, client, project_id):
+        """Notes are only allowed on inspiration photos."""
+        resp = await client.post(
+            f"/api/v1/projects/{project_id}/photos",
+            files={"file": ("room.jpg", io.BytesIO(b"img"), "image/jpeg")},
+            params={"photo_type": "room", "note": "some note"},
+        )
+        assert resp.status_code == 422
+        assert resp.json()["error"] == "note_not_allowed"
+
+    @pytest.mark.asyncio
+    async def test_note_exceeding_200_chars_returns_422(self, client, project_id):
+        """Inspiration photo note must be 200 characters or fewer."""
+        resp = await client.post(
+            f"/api/v1/projects/{project_id}/photos",
+            files={"file": ("inspo.jpg", io.BytesIO(b"img"), "image/jpeg")},
+            params={"photo_type": "inspiration", "note": "x" * 201},
+        )
+        assert resp.status_code == 422
+        assert resp.json()["error"] == "note_too_long"
+
+    @pytest.mark.asyncio
+    @patch("app.api.routes.projects.validate_photo", return_value=_VALID)
+    async def test_inspiration_photo_without_note(self, _mock_val, client, project_id):
+        """Inspiration photo without note has note=null."""
+        resp = await client.post(
+            f"/api/v1/projects/{project_id}/photos",
+            files={"file": ("inspo.jpg", io.BytesIO(b"img"), "image/jpeg")},
+            params={"photo_type": "inspiration"},
+        )
+        assert resp.status_code == 200
+        state = (await client.get(f"/api/v1/projects/{project_id}")).json()
+        inspo = [p for p in state["photos"] if p["photo_type"] == "inspiration"]
+        assert inspo[0]["note"] is None
+
+    # --- Photo uploads during scan step ---
+
+    @pytest.mark.asyncio
+    @patch("app.api.routes.projects.validate_photo", return_value=_VALID)
+    async def test_inspiration_upload_during_scan_step(self, _mock_val, client, project_id):
+        """Users can add inspiration photos after auto-transition to scan."""
+        _mock_states[project_id].step = "scan"
+        resp = await client.post(
+            f"/api/v1/projects/{project_id}/photos",
+            files={"file": ("inspo.jpg", io.BytesIO(b"img"), "image/jpeg")},
+            params={"photo_type": "inspiration"},
+        )
+        assert resp.status_code == 200
+        # Step stays scan (auto-transition only fires from "photos")
+        assert _mock_states[project_id].step == "scan"
+
+    @pytest.mark.asyncio
+    @patch("app.api.routes.projects.validate_photo", return_value=_VALID)
+    async def test_room_upload_during_scan_step(self, _mock_val, client, project_id):
+        """Additional room photos can be uploaded during scan step."""
+        _mock_states[project_id].step = "scan"
+        _mock_states[project_id].photos = [
+            PhotoData(photo_id="r0", storage_key="s3://r0.jpg", photo_type="room"),
+            PhotoData(photo_id="r1", storage_key="s3://r1.jpg", photo_type="room"),
+        ]
+        resp = await client.post(
+            f"/api/v1/projects/{project_id}/photos",
+            files={"file": ("room3.jpg", io.BytesIO(b"img"), "image/jpeg")},
+        )
+        assert resp.status_code == 200
+        assert len(_mock_states[project_id].photos) == 3
+
+    @pytest.mark.asyncio
+    async def test_upload_blocked_during_intake_step(self, client, project_id):
+        """Photo uploads are blocked once past the scan step."""
+        _mock_states[project_id].step = "intake"
+        resp = await client.post(
+            f"/api/v1/projects/{project_id}/photos",
+            files={"file": ("late.jpg", io.BytesIO(b"img"), "image/jpeg")},
+        )
+        assert resp.status_code == 409
+        assert resp.json()["error"] == "wrong_step"
 
 
 class TestPhotoDelete:
@@ -600,8 +779,13 @@ class TestIntakeEndpoints:
 
     @pytest.mark.asyncio
     async def test_skip_intake_generates_options(self, client, project_id):
-        """Skipping intake still generates options."""
+        """Skipping intake still generates options (requires inspiration photos)."""
         _mock_states[project_id].step = "intake"
+        _mock_states[project_id].photos.append(
+            PhotoData(
+                photo_id="inspo-0", storage_key="s3://test/inspo.jpg", photo_type="inspiration"
+            ),
+        )
         await client.post(f"/api/v1/projects/{project_id}/intake/skip")
         state = await client.get(f"/api/v1/projects/{project_id}")
         body = state.json()
@@ -645,6 +829,40 @@ class TestIntakeEndpoints:
         assert resp.status_code == 409
         assert resp.json()["error"] == "wrong_step"
 
+    # --- INTAKE-3a: skip-intake guard ---
+
+    @pytest.mark.asyncio
+    async def test_skip_intake_without_inspiration_returns_422(self, client, project_id):
+        """INTAKE-3a: Skipping intake without inspiration photos is blocked."""
+        _mock_states[project_id].step = "intake"
+        # No inspiration photos in state
+        resp = await client.post(f"/api/v1/projects/{project_id}/intake/skip")
+        assert resp.status_code == 422
+        assert resp.json()["error"] == "intake_required"
+
+    @pytest.mark.asyncio
+    async def test_skip_intake_with_room_photos_only_returns_422(self, client, project_id):
+        """Room photos alone don't satisfy the inspiration requirement for skip."""
+        _mock_states[project_id].step = "intake"
+        _mock_states[project_id].photos.append(
+            PhotoData(photo_id="room-0", storage_key="s3://test/room.jpg", photo_type="room"),
+        )
+        resp = await client.post(f"/api/v1/projects/{project_id}/intake/skip")
+        assert resp.status_code == 422
+        assert resp.json()["error"] == "intake_required"
+
+    @pytest.mark.asyncio
+    async def test_skip_intake_with_inspiration_photo_succeeds(self, client, project_id):
+        """INTAKE-3a: Skipping intake with inspiration photos is allowed."""
+        _mock_states[project_id].step = "intake"
+        _mock_states[project_id].photos.append(
+            PhotoData(
+                photo_id="inspo-0", storage_key="s3://test/inspo.jpg", photo_type="inspiration"
+            ),
+        )
+        resp = await client.post(f"/api/v1/projects/{project_id}/intake/skip")
+        assert resp.status_code == 200
+
     @pytest.mark.asyncio
     async def test_invalid_intake_mode_returns_422(self, client, project_id):
         """Invalid intake mode returns 422 validation error."""
@@ -666,6 +884,23 @@ class TestIntakeEndpoints:
         )
         assert resp.status_code == 422
         assert resp.json()["error"] == "validation_error"
+
+    @pytest.mark.asyncio
+    async def test_send_message_without_start_returns_409(self, client, project_id):
+        """Sending intake message at intake step without calling start_intake first returns 409.
+
+        Distinct from test_send_message_wrong_step_returns_409 which tests the wrong-step
+        guard. This tests the mock-mode "no session" guard — step is correct (intake) but
+        the conversation session hasn't been initialized via start_intake.
+        """
+        _mock_states[project_id].step = "intake"
+        resp = await client.post(
+            f"/api/v1/projects/{project_id}/intake/message",
+            json={"message": "I want a cozy living room"},
+        )
+        assert resp.status_code == 409
+        assert resp.json()["error"] == "wrong_step"
+        assert "start_intake" in resp.json()["message"]
 
 
 class TestMockGenerationStep:
@@ -713,6 +948,11 @@ class TestMockGenerationStep:
         Covers GAP-5 TDD criterion: skip_intake shows generation then selection.
         """
         _mock_states[project_id].step = "intake"
+        _mock_states[project_id].photos.append(
+            PhotoData(
+                photo_id="inspo-0", storage_key="s3://test/inspo.jpg", photo_type="inspiration"
+            ),
+        )
         _projects_mod.MOCK_GENERATION_DELAY = 9999.0
         await client.post(f"/api/v1/projects/{project_id}/intake/skip")
         state = (await client.get(f"/api/v1/projects/{project_id}")).json()
@@ -723,6 +963,11 @@ class TestMockGenerationStep:
     async def test_skip_intake_generation_completes(self, client, project_id):
         """skip_intake generation completes on next poll with delay=0."""
         _mock_states[project_id].step = "intake"
+        _mock_states[project_id].photos.append(
+            PhotoData(
+                photo_id="inspo-0", storage_key="s3://test/inspo.jpg", photo_type="inspiration"
+            ),
+        )
         _projects_mod.MOCK_GENERATION_DELAY = 0.0
         await client.post(f"/api/v1/projects/{project_id}/intake/skip")
         state = (await client.get(f"/api/v1/projects/{project_id}")).json()
@@ -776,6 +1021,22 @@ class TestSelectionEndpoints:
         resp = await client.post(f"/api/v1/projects/{project_id}/select", json={"index": 0})
         assert resp.status_code == 422
         assert resp.json()["error"] == "invalid_selection"
+
+    @pytest.mark.asyncio
+    async def test_select_negative_index_returns_422(self, client, project_id):
+        """Pydantic ge=0 constraint rejects negative index before endpoint code runs."""
+        _mock_states[project_id].step = "selection"
+        resp = await client.post(f"/api/v1/projects/{project_id}/select", json={"index": -1})
+        assert resp.status_code == 422
+        assert resp.json()["error"] == "validation_error"
+
+    @pytest.mark.asyncio
+    async def test_select_index_too_high_returns_422(self, client, project_id):
+        """Pydantic le=1 constraint rejects index > 1 before endpoint code runs."""
+        _mock_states[project_id].step = "selection"
+        resp = await client.post(f"/api/v1/projects/{project_id}/select", json={"index": 2})
+        assert resp.status_code == 422
+        assert resp.json()["error"] == "validation_error"
 
     @pytest.mark.asyncio
     async def test_select_wrong_step_returns_409(self, client, project_id):
@@ -853,6 +1114,51 @@ class TestSelectionEndpoints:
         _mock_states[project_id].step = "completed"
         resp = await client.post(f"/api/v1/projects/{project_id}/start-over")
         assert resp.status_code == 409
+
+    @pytest.mark.asyncio
+    async def test_start_over_blocked_from_shopping(self, client, project_id):
+        """Start over returns 409 from shopping step (waiting for shopping list).
+
+        Users cannot restart while the shopping list is being generated.
+        The only way forward from shopping is to wait for completion.
+        """
+        _mock_states[project_id].step = "shopping"
+        resp = await client.post(f"/api/v1/projects/{project_id}/start-over")
+        assert resp.status_code == 409
+        assert resp.json()["error"] == "wrong_step"
+
+    @pytest.mark.asyncio
+    async def test_start_over_from_scan_step(self, client, project_id):
+        """Start over from scan step resets to intake, preserving photos."""
+        from app.models.contracts import PhotoData
+
+        state = _mock_states[project_id]
+        state.step = "scan"
+        state.photos = [
+            PhotoData(photo_id="p0", storage_key="photos/room_0.jpg", photo_type="room"),
+            PhotoData(photo_id="p1", storage_key="photos/room_1.jpg", photo_type="room"),
+        ]
+        resp = await client.post(f"/api/v1/projects/{project_id}/start-over")
+        assert resp.status_code == 200
+        body = (await client.get(f"/api/v1/projects/{project_id}")).json()
+        assert body["step"] == "intake"
+        # Photos preserved across start-over
+        assert len(body["photos"]) == 2
+
+    @pytest.mark.asyncio
+    async def test_start_over_from_approval_not_approved(self, client, project_id):
+        """Start over from approval step (before approve signal) succeeds.
+
+        Distinct from test_start_over_blocked_after_approval which tests
+        approved=True. Here approved=False — user is reviewing but hasn't
+        committed yet, so start-over should be allowed.
+        """
+        _mock_states[project_id].step = "approval"
+        _mock_states[project_id].approved = False
+        resp = await client.post(f"/api/v1/projects/{project_id}/start-over")
+        assert resp.status_code == 200
+        body = (await client.get(f"/api/v1/projects/{project_id}")).json()
+        assert body["step"] == "intake"
 
     @pytest.mark.asyncio
     async def test_start_over_preserves_photos_and_scan_data(
@@ -1063,6 +1369,21 @@ class TestIterationEndpoints:
         assert resp.json()["error"] == "validation_error"
 
     @pytest.mark.asyncio
+    async def test_empty_feedback_string_returns_422(self, client, project_id):
+        """Empty string feedback hits Pydantic min_length=1 before endpoint code.
+
+        Distinct from test_missing_feedback_returns_422 (missing field entirely)
+        and test_short_text_feedback_returns_422 (1-9 chars, hits endpoint check).
+        """
+        _mock_states[project_id].step = "iteration"
+        resp = await client.post(
+            f"/api/v1/projects/{project_id}/iterate/feedback",
+            json={"feedback": ""},
+        )
+        assert resp.status_code == 422
+        assert resp.json()["error"] == "validation_error"
+
+    @pytest.mark.asyncio
     async def test_annotate_empty_annotations_returns_422(self, client, project_id):
         """Empty annotations array violates min_length=1 constraint."""
         _mock_states[project_id].step = "iteration"
@@ -1091,6 +1412,54 @@ class TestIterationEndpoints:
             },
         )
         assert resp.status_code == 422
+
+    @pytest.mark.asyncio
+    async def test_annotate_region_id_out_of_range_returns_422(self, client, project_id):
+        """Pydantic ge=1 constraint on region_id rejects 0."""
+        _mock_states[project_id].step = "iteration"
+        resp = await client.post(
+            f"/api/v1/projects/{project_id}/iterate/annotate",
+            json={
+                "annotations": [
+                    {
+                        "region_id": 0,
+                        "center_x": 0.5,
+                        "center_y": 0.5,
+                        "radius": 0.1,
+                        "instruction": "Make this area brighter",
+                    }
+                ]
+            },
+        )
+        assert resp.status_code == 422
+        assert resp.json()["error"] == "validation_error"
+
+    @pytest.mark.asyncio
+    async def test_short_text_feedback_returns_422(self, client, project_id):
+        """REGEN-2: Text feedback < 10 chars returns 422.
+
+        Covers product spec REGEN-2: "darker" (7 chars) should be rejected.
+        """
+        _mock_states[project_id].step = "iteration"
+        _mock_states[project_id].current_image = "https://r2.example.com/base.png"
+        resp = await client.post(
+            f"/api/v1/projects/{project_id}/iterate/feedback",
+            json={"feedback": "darker"},
+        )
+        assert resp.status_code == 422
+        assert resp.json()["error"] == "feedback_too_short"
+        assert "10 characters" in resp.json()["message"]
+
+    @pytest.mark.asyncio
+    async def test_exact_ten_char_feedback_accepted(self, client, project_id):
+        """Text feedback of exactly 10 chars is accepted."""
+        _mock_states[project_id].step = "iteration"
+        _mock_states[project_id].current_image = "https://r2.example.com/base.png"
+        resp = await client.post(
+            f"/api/v1/projects/{project_id}/iterate/feedback",
+            json={"feedback": "1234567890"},  # exactly 10
+        )
+        assert resp.status_code == 200
 
     @pytest.mark.asyncio
     async def test_annotate_too_many_annotations_returns_422(self, client, project_id):
@@ -1195,7 +1564,7 @@ class TestIterationEndpoints:
 
     @pytest.mark.asyncio
     async def test_sixth_iteration_blocked_after_cap(self, client, project_id):
-        """Cannot submit more iterations after reaching the 5-iteration cap."""
+        """REGEN-5: Both annotate and feedback are blocked after 5-iteration cap."""
         _mock_states[project_id].step = "iteration"
         _mock_states[project_id].current_image = "https://r2.example.com/base.png"
 
@@ -1216,7 +1585,7 @@ class TestIterationEndpoints:
                 },
             )
 
-        # 6th iteration should fail (step is now "approval", not "iteration")
+        # 6th annotation blocked (step is now "approval", not "iteration")
         resp = await client.post(
             f"/api/v1/projects/{project_id}/iterate/annotate",
             json={
@@ -1233,6 +1602,76 @@ class TestIterationEndpoints:
         )
         assert resp.status_code == 409
         assert resp.json()["error"] == "wrong_step"
+
+        # Feedback also blocked after cap (REGEN-5: both buttons disabled)
+        resp = await client.post(
+            f"/api/v1/projects/{project_id}/iterate/feedback",
+            json={"feedback": "This feedback should also be blocked after cap"},
+        )
+        assert resp.status_code == 409
+        assert resp.json()["error"] == "wrong_step"
+
+    @pytest.mark.asyncio
+    async def test_mixed_annotations_and_feedback_share_pool(self, client, project_id):
+        """REGEN-4: Annotation and text feedback iterations share the 5-count pool."""
+        _mock_states[project_id].step = "iteration"
+        _mock_states[project_id].current_image = "https://r2.example.com/base.png"
+
+        # 3 annotation iterations
+        for i in range(3):
+            await client.post(
+                f"/api/v1/projects/{project_id}/iterate/annotate",
+                json={
+                    "annotations": [
+                        {
+                            "region_id": 1,
+                            "center_x": 0.5,
+                            "center_y": 0.5,
+                            "radius": 0.1,
+                            "instruction": f"Annotation iteration {i + 1}",
+                        }
+                    ]
+                },
+            )
+
+        body = (await client.get(f"/api/v1/projects/{project_id}")).json()
+        assert body["iteration_count"] == 3
+        assert body["step"] == "iteration"
+
+        # 2 text feedback iterations (should reach cap)
+        for i in range(2):
+            await client.post(
+                f"/api/v1/projects/{project_id}/iterate/feedback",
+                json={"feedback": f"Feedback iteration {i + 4} adjustments"},
+            )
+
+        body = (await client.get(f"/api/v1/projects/{project_id}")).json()
+        assert body["iteration_count"] == 5
+        assert body["step"] == "approval"
+        # Revision history should contain mixed types
+        types = [r["type"] for r in body["revision_history"]]
+        assert types == ["annotation", "annotation", "annotation", "feedback", "feedback"]
+
+    @pytest.mark.asyncio
+    async def test_start_over_during_generation_cleans_up(self, client, project_id):
+        """Start over during pending generation clears the generation queue."""
+        _mock_states[project_id].step = "intake"
+        _projects_mod.MOCK_GENERATION_DELAY = 9999.0
+        await client.post(
+            f"/api/v1/projects/{project_id}/intake/confirm",
+            json={"brief": {"room_type": "bedroom"}},
+        )
+        # Now in generation step with pending generation
+        body = (await client.get(f"/api/v1/projects/{project_id}")).json()
+        assert body["step"] == "generation"
+
+        # Start over should work and clean up
+        resp = await client.post(f"/api/v1/projects/{project_id}/start-over")
+        assert resp.status_code == 200
+        body = (await client.get(f"/api/v1/projects/{project_id}")).json()
+        assert body["step"] == "intake"
+        assert body["generated_options"] == []
+        assert project_id not in _mock_pending_generation
 
 
 class TestApprovalEndpoints:
@@ -1295,6 +1734,173 @@ class TestApprovalEndpoints:
         assert resp.status_code == 409
         assert resp.json()["error"] == "wrong_step"
 
+    @pytest.mark.asyncio
+    async def test_double_approve_returns_409(self, client, project_id):
+        """Approving an already-completed project returns 409."""
+        _mock_states[project_id].step = "iteration"
+        resp = await client.post(f"/api/v1/projects/{project_id}/approve")
+        assert resp.status_code == 200
+        # Second approve should fail (step is now "completed")
+        resp = await client.post(f"/api/v1/projects/{project_id}/approve")
+        assert resp.status_code == 409
+        assert resp.json()["error"] == "wrong_step"
+
+    @pytest.mark.asyncio
+    async def test_approve_blocked_by_active_error(self, client, project_id):
+        """Approve is rejected when workflow has an active error (parity with workflow signal).
+
+        In the Temporal workflow, approve_design is silently ignored when
+        self.error is not None.  The mock API mirrors this by returning 409
+        so T1 iOS gets explicit feedback.
+        """
+        from app.models.contracts import WorkflowError
+
+        _mock_states[project_id].step = "iteration"
+        _mock_states[project_id].error = WorkflowError(
+            message="Revision failed — please retry", retryable=True
+        )
+        resp = await client.post(f"/api/v1/projects/{project_id}/approve")
+        assert resp.status_code == 409
+        assert resp.json()["error"] == "active_error"
+        # State unchanged — not approved
+        body = (await client.get(f"/api/v1/projects/{project_id}")).json()
+        assert body["approved"] is False
+        assert body["step"] == "iteration"
+
+    @pytest.mark.asyncio
+    async def test_approve_succeeds_after_clearing_error(self, client, project_id):
+        """Approve works once the error is cleared via retry.
+
+        Verifies the full recovery path: error → retry → approve.
+        """
+        from app.models.contracts import WorkflowError
+
+        _mock_states[project_id].step = "iteration"
+        _mock_states[project_id].error = WorkflowError(
+            message="Revision failed — please retry", retryable=True
+        )
+        # Retry clears the error
+        await client.post(f"/api/v1/projects/{project_id}/retry")
+        body = (await client.get(f"/api/v1/projects/{project_id}")).json()
+        assert body["error"] is None
+
+        # Now approve succeeds
+        resp = await client.post(f"/api/v1/projects/{project_id}/approve")
+        assert resp.status_code == 200
+        body = (await client.get(f"/api/v1/projects/{project_id}")).json()
+        assert body["approved"] is True
+        assert body["step"] == "completed"
+
+    @pytest.mark.asyncio
+    async def test_approve_from_generation_returns_409(self, client, project_id):
+        """IMP-30: Approve during generation step returns 409.
+
+        iOS could race and send approve while generation is in progress.
+        The API must reject this clearly.
+        """
+        _mock_states[project_id].step = "generation"
+        resp = await client.post(f"/api/v1/projects/{project_id}/approve")
+        assert resp.status_code == 409
+        assert resp.json()["error"] == "wrong_step"
+
+    @pytest.mark.asyncio
+    async def test_approve_from_selection_returns_409(self, client, project_id):
+        """IMP-30: Approve during selection step returns 409.
+
+        User must select a design option before approving.
+        """
+        _mock_states[project_id].step = "selection"
+        resp = await client.post(f"/api/v1/projects/{project_id}/approve")
+        assert resp.status_code == 409
+        assert resp.json()["error"] == "wrong_step"
+
+    @pytest.mark.asyncio
+    async def test_approve_blocked_by_error_at_approval_step(self, client, project_id):
+        """IMP-30: Approve blocked when error is set at approval step.
+
+        Realistic scenario: 5th iteration fails, user is forced to approval
+        step with an active error. Approve must still be blocked.
+        """
+        from app.models.contracts import WorkflowError
+
+        _mock_states[project_id].step = "approval"
+        _mock_states[project_id].error = WorkflowError(
+            message="Revision failed — please retry", retryable=True
+        )
+        resp = await client.post(f"/api/v1/projects/{project_id}/approve")
+        assert resp.status_code == 409
+        assert resp.json()["error"] == "active_error"
+        # State unchanged — not approved
+        body = (await client.get(f"/api/v1/projects/{project_id}")).json()
+        assert body["approved"] is False
+        assert body["step"] == "approval"
+
+
+class TestMockShoppingStep:
+    """IMP-14: Verify shopping step is visible between approval and completion.
+
+    Mirrors GAP-5 pattern: approve transitions to step='shopping' first,
+    then polling auto-completes to step='completed' after delay.
+    This lets iOS test the 'Generating shopping list...' spinner UI.
+    """
+
+    @pytest.mark.asyncio
+    async def test_approve_shows_shopping_step(self, client, project_id):
+        """After approve with delay, step is 'shopping' and shopping_list is null."""
+        _mock_states[project_id].step = "iteration"
+        _mock_states[project_id].current_image = "https://r2.example.com/img.png"
+        _projects_mod.MOCK_SHOPPING_DELAY = 9999.0
+        resp = await client.post(f"/api/v1/projects/{project_id}/approve")
+        assert resp.status_code == 200
+        body = (await client.get(f"/api/v1/projects/{project_id}")).json()
+        assert body["step"] == "shopping"
+        assert body["shopping_list"] is None
+        assert body["approved"] is True
+
+    @pytest.mark.asyncio
+    async def test_shopping_completes_after_delay(self, client, project_id):
+        """After delay elapsed, polling transitions to 'completed' with shopping_list."""
+        _mock_states[project_id].step = "iteration"
+        _mock_states[project_id].current_image = "https://r2.example.com/img.png"
+        _projects_mod.MOCK_SHOPPING_DELAY = 0.0
+        await client.post(f"/api/v1/projects/{project_id}/approve")
+        body = (await client.get(f"/api/v1/projects/{project_id}")).json()
+        assert body["step"] == "completed"
+        assert body["shopping_list"] is not None
+        assert len(body["shopping_list"]["items"]) == 2
+        assert body["shopping_list"]["total_estimated_cost_cents"] == 33998
+
+    @pytest.mark.asyncio
+    async def test_shopping_list_has_unmatched_items(self, client, project_id):
+        """Shopping list includes unmatched items with Google Shopping fallback URLs."""
+        _mock_states[project_id].step = "iteration"
+        _mock_states[project_id].current_image = "https://r2.example.com/img.png"
+        _projects_mod.MOCK_SHOPPING_DELAY = 0.0
+        await client.post(f"/api/v1/projects/{project_id}/approve")
+        body = (await client.get(f"/api/v1/projects/{project_id}")).json()
+        unmatched = body["shopping_list"]["unmatched"]
+        assert len(unmatched) == 1
+        assert unmatched[0]["category"] == "Rug"
+        assert "google.com" in unmatched[0]["google_shopping_url"]
+
+    @pytest.mark.asyncio
+    async def test_delete_during_shopping_cleans_up(self, client, project_id):
+        """Deleting a project during shopping step cleans up pending state."""
+        _mock_states[project_id].step = "iteration"
+        _mock_states[project_id].current_image = "https://r2.example.com/img.png"
+        _projects_mod.MOCK_SHOPPING_DELAY = 9999.0
+        await client.post(f"/api/v1/projects/{project_id}/approve")
+        body = (await client.get(f"/api/v1/projects/{project_id}")).json()
+        assert body["step"] == "shopping"
+        # Delete project while shopping is pending
+        resp = await client.delete(f"/api/v1/projects/{project_id}")
+        assert resp.status_code == 204
+        # Project is gone
+        resp = await client.get(f"/api/v1/projects/{project_id}")
+        assert resp.status_code == 404
+        # Pending shopping state cleaned up
+        assert project_id not in _mock_pending_shopping
+
 
 class TestRetryEndpoint:
     """POST /api/v1/projects/{id}/retry"""
@@ -1312,6 +1918,23 @@ class TestRetryEndpoint:
         from app.models.contracts import ActionResponse, WorkflowError
 
         _mock_states[project_id].error = WorkflowError(message="Generation failed", retryable=True)
+        resp = await client.post(f"/api/v1/projects/{project_id}/retry")
+        assert resp.status_code == 200
+        ActionResponse.model_validate(resp.json())
+        state = await client.get(f"/api/v1/projects/{project_id}")
+        assert state.json()["error"] is None
+
+    @pytest.mark.asyncio
+    async def test_retry_noop_when_no_error(self, client, project_id):
+        """Retry is a no-op when no error exists — returns 200, state unchanged.
+
+        Matches workflow behavior: retry_failed_step sets error=None unconditionally,
+        so calling it when error is already None is a harmless no-op. iOS may call this
+        optimistically without checking for an active error first.
+        """
+        from app.models.contracts import ActionResponse
+
+        assert _mock_states[project_id].error is None
         resp = await client.post(f"/api/v1/projects/{project_id}/retry")
         assert resp.status_code == 200
         ActionResponse.model_validate(resp.json())
@@ -1774,6 +2397,131 @@ class TestFullFlow:
         assert ws.step == "completed"
         assert ws.shopping_list is not None
 
+    @pytest.mark.asyncio
+    @patch("app.api.routes.projects.validate_photo", return_value=_VALID)
+    async def test_premium_happy_path(self, _mock_val, client):
+        """Full-featured flow: LiDAR scan + inspiration photos with notes + mixed iterations.
+
+        Exercises the "premium experience" path that the basic happy_path skips:
+        - Inspiration photo upload with notes (IMP-4)
+        - Upload during scan step (IMP-5)
+        - LiDAR scan data (not skip)
+        - Mixed annotation + text feedback iterations (REGEN-4)
+        - Data preservation across all step transitions
+        """
+        # 1. Create project
+        resp = await client.post("/api/v1/projects", json={"device_fingerprint": "test-premium"})
+        pid = resp.json()["project_id"]
+
+        # 2. Upload 2 room photos (auto-transitions to scan)
+        for i in range(2):
+            await client.post(
+                f"/api/v1/projects/{pid}/photos",
+                files={"file": (f"room_{i}.jpg", io.BytesIO(b"img"), "image/jpeg")},
+            )
+        assert _mock_states[pid].step == "scan"
+
+        # 3. Upload inspiration photo with note DURING scan step (IMP-5)
+        resp = await client.post(
+            f"/api/v1/projects/{pid}/photos",
+            files={"file": ("inspo.jpg", io.BytesIO(b"img"), "image/jpeg")},
+            params={"photo_type": "inspiration", "note": "Love the warm lighting"},
+        )
+        assert resp.status_code == 200
+        assert _mock_states[pid].step == "scan"  # still in scan
+
+        # 4. Upload LiDAR scan data (SCAN-1)
+        scan_body = {
+            "room": {"width": 4.5, "length": 6.0, "height": 2.7},
+            "walls": [{"id": "wall_0", "width": 4.5, "height": 2.7}],
+            "openings": [],
+        }
+        resp = await client.post(f"/api/v1/projects/{pid}/scan", json=scan_body)
+        assert resp.status_code == 200
+        assert _mock_states[pid].step == "intake"
+
+        # 5. Intake conversation
+        await client.post(f"/api/v1/projects/{pid}/intake/start", json={"mode": "quick"})
+        await client.post(f"/api/v1/projects/{pid}/intake/message", json={"message": "living room"})
+        await client.post(
+            f"/api/v1/projects/{pid}/intake/message", json={"message": "warm and cozy"}
+        )
+        await client.post(
+            f"/api/v1/projects/{pid}/intake/message", json={"message": "Keep the bookshelf"}
+        )
+
+        # 6. Confirm intake with brief
+        await client.post(
+            f"/api/v1/projects/{pid}/intake/confirm",
+            json={
+                "brief": {
+                    "room_type": "living room",
+                    "pain_points": ["too dark"],
+                    "keep_items": ["bookshelf"],
+                    "style_profile": {"lighting": "warm", "mood": "cozy"},
+                }
+            },
+        )
+
+        # 7. Select option 1 (second option)
+        await client.post(f"/api/v1/projects/{pid}/select", json={"index": 1})
+
+        # 8. Mixed iterations: 1 annotation + 1 text feedback
+        await client.post(
+            f"/api/v1/projects/{pid}/iterate/annotate",
+            json={
+                "annotations": [
+                    {
+                        "region_id": 1,
+                        "center_x": 0.5,
+                        "center_y": 0.5,
+                        "radius": 0.1,
+                        "instruction": "Replace this lamp with a warmer pendant light",
+                    }
+                ]
+            },
+        )
+        await client.post(
+            f"/api/v1/projects/{pid}/iterate/feedback",
+            json={"feedback": "Make the overall color palette warmer with more earth tones"},
+        )
+
+        # 9. Approve design
+        await client.post(f"/api/v1/projects/{pid}/approve")
+
+        # 10. Verify comprehensive final state
+        body = (await client.get(f"/api/v1/projects/{pid}")).json()
+        assert body["step"] == "completed"
+        assert body["approved"] is True
+
+        # Photos preserved: 2 room + 1 inspiration
+        assert len(body["photos"]) == 3
+        inspo = [p for p in body["photos"] if p["photo_type"] == "inspiration"]
+        assert len(inspo) == 1
+        assert inspo[0]["note"] == "Love the warm lighting"
+
+        # Scan data preserved
+        assert body["scan_data"] is not None
+        assert body["scan_data"]["room_dimensions"]["width_m"] == 4.5
+
+        # Design brief preserved
+        assert body["design_brief"] is not None
+        assert body["design_brief"]["room_type"] == "living room"
+        assert body["design_brief"]["keep_items"] == ["bookshelf"]
+
+        # Selected option 1 (not 0)
+        assert body["selected_option"] == 1
+
+        # Mixed iterations preserved
+        assert body["iteration_count"] == 2
+        assert len(body["revision_history"]) == 2
+        assert body["revision_history"][0]["type"] == "annotation"
+        assert body["revision_history"][1]["type"] == "feedback"
+
+        # Shopping list generated
+        assert body["shopping_list"] is not None
+        assert len(body["shopping_list"]["items"]) >= 1
+
 
 class TestRealIntakeWiring:
     """INT-2: Verify real intake agent wiring via _real_intake_message.
@@ -1941,6 +2689,7 @@ class TestRealIntakeWiring:
         assert body["error"] == "intake_error"
         # Error message is sanitized — no raw exception text leaked
         assert "design assistant" in body["message"]
+        assert body["retryable"] is True
 
     @pytest.mark.asyncio
     async def test_real_intake_no_session_returns_409(self, client, intake_project, mock_agent):

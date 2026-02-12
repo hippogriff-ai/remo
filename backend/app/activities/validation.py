@@ -159,7 +159,8 @@ def _check_content(image_data: bytes, photo_type: str) -> tuple[bool, str]:
     else:
         prompt = (
             "Is this a photo that could serve as design inspiration (interior design, furniture, "
-            "decor, architecture, etc.)? Reply with exactly YES or NO, then a brief reason."
+            "decor, architecture, textures, etc.)? Photos of people or animals are not acceptable "
+            "as inspiration. Reply with exactly YES or NO, then a brief reason."
         )
 
     try:
@@ -190,6 +191,11 @@ def _check_content(image_data: bytes, photo_type: str) -> tuple[bool, str]:
 
         answer = response.content[0].text.strip().upper()
         if answer.startswith("NO"):
+            if photo_type == "inspiration":
+                return False, (
+                    "Inspiration photos should show spaces, furniture, or design details "
+                    "— not people or animals. Please choose a different image."
+                )
             reason = response.content[0].text.strip()
             return False, f"This doesn't look like a valid {photo_type} photo. {reason}"
         return True, ""

@@ -29,6 +29,7 @@ async def request_id_middleware(request: Request, call_next):
     can report it when debugging errors.
     """
     request_id = request.headers.get("X-Request-ID") or str(uuid.uuid4())
+    request.state.request_id = request_id
     structlog.contextvars.clear_contextvars()
     structlog.contextvars.bind_contextvars(request_id=request_id)
     response = await call_next(request)
@@ -50,7 +51,7 @@ async def validation_exception_handler(
     for err in exc.errors():
         loc = " → ".join(str(part) for part in err["loc"])
         messages.append(f"{loc}: {err['msg']}")
-    return JSONResponse(
+    response = JSONResponse(
         status_code=422,
         content={
             "error": "validation_error",
@@ -58,6 +59,10 @@ async def validation_exception_handler(
             "retryable": False,
         },
     )
+    response.headers["X-Request-ID"] = getattr(
+        request.state, "request_id", request.headers.get("X-Request-ID", "")
+    )
+    return response
 
 
 @app.exception_handler(Exception)
@@ -74,7 +79,7 @@ async def unhandled_exception_handler(request: Request, exc: Exception) -> JSONR
         error_type=type(exc).__name__,
         exc_info=exc,
     )
-    return JSONResponse(
+    response = JSONResponse(
         status_code=500,
         content={
             "error": "internal_error",
@@ -82,6 +87,10 @@ async def unhandled_exception_handler(request: Request, exc: Exception) -> JSONR
             "retryable": True,
         },
     )
+    response.headers["X-Request-ID"] = getattr(
+        request.state, "request_id", request.headers.get("X-Request-ID", "")
+    )
+    return response
 
 
 app.include_router(health.router)

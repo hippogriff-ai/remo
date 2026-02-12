@@ -31,6 +31,7 @@ with workflow.unsafe.imports_passed_through():
         EditDesignInput,
         GenerateDesignsInput,
         GenerateShoppingListInput,
+        InspirationNote,
         PhotoData,
         RevisionRecord,
         ScanData,
@@ -320,6 +321,13 @@ class DesignProjectWorkflow:
 
     @workflow.signal
     async def select_option(self, index: int) -> None:
+        if self.step != "selection":
+            workflow.logger.warning(
+                "select_option ignored: step is '%s' (expected 'selection') for project %s",
+                self.step,
+                self._project_id,
+            )
+            return
         if 0 <= index < len(self.generated_options):
             self.selected_option = index
         else:
@@ -370,6 +378,13 @@ class DesignProjectWorkflow:
 
     @workflow.signal
     async def approve_design(self) -> None:
+        if self.step not in ("iteration", "approval"):
+            workflow.logger.warning(
+                "approve_design ignored: step is '%s' for project %s",
+                self.step,
+                self._project_id,
+            )
+            return
         if self.error is not None:
             workflow.logger.warning(
                 "approve_design ignored: active error for project %s",
@@ -409,12 +424,22 @@ class DesignProjectWorkflow:
     # --- Input builders ---
 
     def _generation_input(self) -> GenerateDesignsInput:
+        inspiration_photos = [p for p in self.photos if p.photo_type == "inspiration"]
+        # Prefer agent-assembled notes from the design brief; fall back to
+        # raw photo notes (e.g. when intake is skipped but user attached notes
+        # to inspiration photos via PHOTO-7).
+        if self.design_brief and self.design_brief.inspiration_notes:
+            notes = self.design_brief.inspiration_notes
+        else:
+            notes = [
+                InspirationNote(photo_index=i, note=p.note)
+                for i, p in enumerate(inspiration_photos)
+                if p.note
+            ]
         return GenerateDesignsInput(
             room_photo_urls=[p.storage_key for p in self.photos if p.photo_type == "room"],
-            inspiration_photo_urls=[
-                p.storage_key for p in self.photos if p.photo_type == "inspiration"
-            ],
-            inspiration_notes=(self.design_brief.inspiration_notes if self.design_brief else []),
+            inspiration_photo_urls=[p.storage_key for p in inspiration_photos],
+            inspiration_notes=notes,
             design_brief=self.design_brief,
             room_dimensions=self.scan_data.room_dimensions if self.scan_data else None,
         )

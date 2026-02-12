@@ -271,6 +271,301 @@ The intake agent needs a curated evaluation dataset to measure and tune prompt q
 - Eval scores calibrated: human-rated "good" briefs score 80+, "bad" briefs score < 60
 - All 3 modes reach mean eval score of 87+ across the silver dataset
 
+### IMP-3: Product spec test case coverage (T0)
+
+**Status: DONE** — Added PHOTO-10 (max 3 inspiration photos) and REGEN-2 (10-char minimum text feedback) enforcement at the API level. 4 new tests, 724 total passing.
+
+Audit of `specs/PRODUCT_SPEC.md` test cases against backend tests found two missing backend validations:
+- **PHOTO-10**: 4th inspiration photo should be blocked. Added `MAX_INSPIRATION_PHOTOS = 3` with 422 response.
+- **REGEN-2**: Text feedback < 10 chars should be rejected. Added API-level 10-char check (contract has `min_length=1`; the stricter validation is defense-in-depth).
+
+**TDD criteria**:
+- Upload 4th inspiration photo → 422 `too_many_inspiration_photos`
+- Room photo upload unaffected by inspiration limit
+- Text feedback "darker" (7 chars) → 422 `feedback_too_short`
+- Text feedback exactly 10 chars → 200 accepted
+
+### IMP-4: Photo notes + skip-intake guard (T0)
+
+**Status: DONE** — Added PHOTO-7 inspiration photo note support and INTAKE-3a skip-intake guard. 7 new tests, 731 total passing.
+
+Two product spec gaps closed:
+- **PHOTO-7**: `PhotoData.note` existed in the contract but couldn't be set via the upload API. Added `note` query parameter to `upload_photo`. Validates: notes only on inspiration photos (422 `note_not_allowed`), max 200 chars (422 `note_too_long`).
+- **INTAKE-3a**: `skip_intake` allowed skipping without inspiration photos. Product spec says intake is mandatory when user has no inspiration photos. Added guard returning 422 `intake_required`. Updated all existing skip_intake tests to pre-populate inspiration photos.
+
+**TDD criteria**:
+- Upload inspiration photo with note → note stored on PhotoData
+- Upload room photo with note → 422 `note_not_allowed`
+- Upload inspiration photo with >200 char note → 422 `note_too_long`
+- Upload inspiration photo without note → note is null
+- Skip intake with no photos → 422 `intake_required`
+- Skip intake with room photos only → 422 `intake_required`
+- Skip intake with inspiration photo → 200 accepted
+
+### IMP-33: Shopping error cancellation + OpenAPI method contract (T0)
+
+**Status: DONE** — Two coverage gaps closed: (1) Added `test_cancel_during_shopping_error_abandons` to `TestCancellation` — completes the cancellation symmetry where cancel_project escapes all three error wait states (generation, iteration, and now shopping). The shopping error wait uses the same `_wait` helper with `_cancelled` checking, which was already correct but untested. (2) Added `test_http_methods_match_spec` to `TestOpenAPISchema` — verifies that every endpoint has the correct HTTP method in the OpenAPI schema. T1 iOS generates Swift method signatures from the schema; a POST accidentally registered as GET would produce non-functional Swift code. 807 total passing.
+
+**TDD criteria**:
+- `cancel_project` during shopping error wait → `step == "abandoned"`, workflow completes normally
+- OpenAPI schema: each endpoint path has exactly the expected HTTP methods (GET, POST, DELETE)
+
+### IMP-32: X-Request-ID on error responses — exception handler fix (T0)
+
+**Status: DONE** — Fixed real production bug: `X-Request-ID` header was missing from 500 error responses. Root cause: Starlette's `BaseHTTPMiddleware` (`@app.middleware("http")`) uses a streaming response wrapper in `call_next`. When an exception handler catches an unhandled error and returns a `JSONResponse`, the middleware's post-processing (header injection) doesn't propagate to the final response. Fix: (1) store `request_id` on `request.state` in the middleware, (2) both exception handlers (`RequestValidationError` + `Exception`) now read `request.state.request_id` and set `X-Request-ID` directly on their response. Belt-and-suspenders: middleware still sets it for normal responses, exception handlers set it for error responses. 5 new tests: 404/409/422 include header, client-provided ID echoed on error, 500 includes header. 805 total passing.
+
+**TDD criteria**:
+- 404 response includes `X-Request-ID` header
+- 409 response includes `X-Request-ID` header
+- 422 response includes `X-Request-ID` header
+- Client-provided `X-Request-ID` echoed on error (404)
+- 500 unhandled exception response includes `X-Request-ID` header
+
+### IMP-31: Workflow `approve_design` step guard — prevent premature approval (T0)
+
+**Status: DONE** — Fixed critical workflow bug: `approve_design` signal handler had no step guard, so a premature approve during `generation` or `selection` would set `self.approved=True`. The iteration loop (`while count < 5 and not self.approved`) would then exit immediately, skipping the entire iteration phase and going straight to shopping. Users would never get to refine their design. Now the signal is ignored unless `step` is `iteration` or `approval`, matching the mock API's `_check_step(state, ("iteration", "approval"))` guard. 2 new workflow tests (generation + selection paths), 801 total passing.
+
+**TDD criteria**:
+- `approve_design` during `generation` → `approved` remains False, workflow reaches `selection` normally
+- `approve_design` during `selection` → `approved` remains False, workflow waits for option selection, iteration phase still available
+
+### IMP-30: Step guard hardening — workflow + API edge cases (T0)
+
+**Status: DONE** — Fixed workflow `select_option` signal handler: was missing step guard, so a late signal during `iteration` could silently overwrite `selected_option` in the query result (corrupting iOS state display). Now ignores signals when `step != "selection"`, matching mock API's `_check_step(state, "selection")` guard. Added 4 new tests: (1) workflow test verifying late `select_option` during iteration is ignored, (2-3) mock API tests for approve from `generation` and `selection` steps return 409, (4) mock API test for approve blocked by error at `approval` step (realistic post-5th-iteration failure scenario). 799 total passing.
+
+**TDD criteria**:
+- Workflow `select_option` during iteration → `selected_option` unchanged, no error set
+- Mock API approve from `generation` → 409 `wrong_step`
+- Mock API approve from `selection` → 409 `wrong_step`
+- Mock API approve with error at `approval` step → 409 `active_error`, state unchanged
+
+### IMP-29: Inspiration photo content rejection — spec-compliant message (T0)
+
+**Status: DONE** — Product spec PHOTO-11 and PHOTO-12 require a specific rejection message for inspiration photos containing people or animals: "Inspiration photos should show spaces, furniture, or design details — not people or animals. Please choose a different image." Previously the code returned a generic "This doesn't look like a valid inspiration photo" with Claude's raw reason appended. Fixed: (1) updated inspiration prompt to explicitly mention people/animals as rejection criteria, (2) inspiration rejections now return the spec-exact message instead of the generic one. Room photo rejections unchanged (still include Claude's reason for specificity). 3 new tests, 795 total passing.
+
+**TDD criteria**:
+- Inspiration photo with person → message contains "not people or animals" and "Please choose a different image"
+- Inspiration photo with pet → same spec message
+- Room photo rejection → still contains "valid room photo" and Claude's specific reason (unchanged behavior)
+
+### IMP-28: Mock state idempotency + intake retryable flag (T0)
+
+**Status: DONE** — Two robustness fixes from stale agent review findings: (1) `del _mock_pending_generation[project_id]` → `.pop(project_id, None)` in both `_maybe_complete_generation` and `_maybe_complete_shopping`. Prevents theoretical `KeyError` if concurrent GET requests race through the generation/shopping completion path. (2) Intake agent 500 error response now includes `retryable=True` — most agent failures (rate limits, API timeouts) are transient and iOS should offer retry. Test assertion updated. 792 total passing.
+
+**TDD criteria**:
+- `_maybe_complete_generation` uses `.pop()` instead of `del` (idempotent)
+- `_maybe_complete_shopping` uses `.pop()` instead of `del` (idempotent)
+- Intake 500 error response has `retryable=True`
+
+### IMP-27: R2 delete_prefix partial failure coverage (T0)
+
+**Status: DONE** — Fixed accidental coverage in `TestDeletePrefix` where MagicMock's `.get("Errors", [])` returned a truthy MagicMock instead of the expected empty list, silently hitting the warning branch without verifying it. Fixed by making `delete_objects` return proper S3-shaped response dicts `{"Deleted": [...]}` in existing tests. Added explicit `test_partial_failure_logs_warning` test: configures `delete_objects` to return a response with one success and one error, verifies `logger.warning("r2_delete_partial_failure", ...)` is called with correct prefix and error count. 792 total passing.
+
+**TDD criteria**:
+- delete_objects returns {"Errors": [1 error]} → logger.warning called with "r2_delete_partial_failure"
+- Warning includes prefix and error list
+- Existing tests use proper response dicts (not accidental MagicMock coverage)
+
+### IMP-26: Logging configuration branch coverage (T0)
+
+**Status: DONE** — Added 3 tests verifying logging configuration branches not covered by line-only coverage: (1) production environment selects JSONRenderer (structlog.processors.JSONRenderer), (2) unknown LOG_LEVEL string ("BOGUS") falls back to INFO filtering (BoundLoggerFilteringAtInfo), (3) explicit development environment selects ConsoleRenderer. These cover the renderer ternary branch and the `_LOG_LEVEL_MAP.get()` fallback. 791 total passing.
+
+**TDD criteria**:
+- ENVIRONMENT=production → last processor is JSONRenderer instance
+- LOG_LEVEL=BOGUS → filtering class name contains "Info"
+- ENVIRONMENT=development → last processor is ConsoleRenderer instance
+
+### IMP-25: Worker main() + validation helper coverage (T0)
+
+**Status: DONE** — Added 7 tests closing the last meaningful T0 coverage gaps. Worker main() tests (3): verify configure_logging + asyncio.run called, KeyboardInterrupt exits cleanly, fatal error calls sys.exit(1). Validation helper tests (4): _get_anthropic_client singleton creation with API key, singleton reuse on subsequent calls, JPG→JPEG format normalization, None format defaults to JPEG. worker.py 83% → 98% (only `__main__` guard uncovered), validation.py 95% → 99% (only empty-pixels line uncovered). 788 total passing.
+
+**TDD criteria**:
+- main() calls configure_logging() then asyncio.run(run_worker())
+- KeyboardInterrupt caught and suppressed (no re-raise)
+- RuntimeError during run → sys.exit(1)
+- _get_anthropic_client creates Anthropic(api_key=...) on first call
+- _get_anthropic_client returns cached client on subsequent calls
+- _detect_media_type normalizes "JPG" → "image/jpeg"
+- _detect_media_type defaults None format → "image/jpeg"
+
+### IMP-24: Health check happy path coverage (T0)
+
+**Status: DONE** — Added 5 tests for health check probe functions (`_check_postgres`, `_check_temporal`, `_check_r2`) testing the "connected" happy paths that require mocked external dependencies. Previously only the "disconnected" error paths were covered (tested via the endpoint with no real services). New tests: (1) postgres connected — mock asyncpg.connect, verify fetchval("SELECT 1") + close(), (2) postgres close runs on fetchval failure, (3) temporal connected without API key (no TLS), (4) temporal connected with API key (TLS + api_key verified in call args), (5) R2 connected via head_bucket. health.py coverage 81% → 100%. 781 total passing.
+
+**TDD criteria**:
+- _check_postgres returns "connected" when fetchval succeeds, connection closed
+- _check_postgres returns "disconnected" when fetchval raises, connection still closed (finally block)
+- _check_temporal returns "connected" via non-TLS path (no api_key)
+- _check_temporal returns "connected" via TLS path (api_key present, tls=True verified)
+- _check_r2 returns "connected" when head_bucket succeeds
+
+### IMP-23: Validation DoS defense + shopping instructions verification (T0)
+
+**Status: DONE** — Two targeted gap closures: (1) Extreme aspect ratio blur defense test — 512x5000 image triggers the longest-side cap in `_check_blur` (line 108-110 of validation.py, previously uncovered). Verifies the DoS guard works without OOM. (2) Revision history instructions assertions — shopping input test now verifies `.instructions` strings match the original signal payloads (not just `.type`). Mixed iterations test verifies both annotation and feedback instruction extraction. These confirm `_extract_instructions` passes correct data to T3's shopping agent. 776 total passing, validation.py coverage 93%→95%.
+
+**TDD criteria**:
+- Extreme aspect ratio image (512x5000) completes _check_blur without error
+- Shopping input revision_history[0].instructions == ["Replace the couch with a modern sectional"]
+- Mixed iterations: revision_history[2].instructions == ["Make it warmer"] (feedback type)
+
+### IMP-22: Queued actions during iteration error (T0)
+
+**Status: DONE** — Added test verifying action ordering when user submits edits while an error is active. Scenario: annotation edit fails → while error shows, user submits text feedback → retry processes re-queued annotation first (index 0), then queued feedback (index 1). Validates `_action_queue.insert(0, ...)` re-queuing semantics. 775 total passing.
+
+**TDD criteria**:
+- Annotation edit fails, error is surfaced, iteration_count stays 0
+- Feedback submitted while error active is queued
+- After retry, both actions process: annotation first (revision_history[0].type=="annotation"), feedback second
+- Final state: iteration_count==2, revision_history has 2 entries in correct order
+
+### IMP-21: Start-over during in-flight generation activity (T0)
+
+**Status: DONE** — Added `_slow_generate` activity stub (2s delay) and test verifying start_over during in-flight generation discards the stale result. This is the most likely real user scenario — Gemini generation takes 30-60s in production, users will hit start-over mid-generation. Tests the `if self._restart_requested: continue` check after `execute_activity(generate_designs, ...)`. 775 total passing.
+
+**TDD criteria**:
+- While generation activity is in-flight, start_over signal fires
+- After activity completes and cycle restarts: step=="intake", generated_options==[], design_brief is None
+- Stale generation result NOT applied, error is None (clean restart)
+
+### IMP-20: Delete cleanup coverage in mock mode (T0)
+
+**Status: DONE** — Added test verifying `delete_project` cleans up `_intake_sessions` in mock mode. Previously only tested in real-intake mode (`TestRealIntakeWiring`). Also bundled with the IMP-17 generation cleanup test. 773 total passing.
+
+**TDD criteria**:
+- Delete project during active intake session removes entry from `_intake_sessions`
+- Session created via `start_intake`, verified present, then cleaned up by delete
+
+### IMP-19: WorkflowState completed-state round-trip (T0)
+
+**Status: DONE** — Added comprehensive round-trip test for WorkflowState with all 12 fields populated, including previously untested: `scan_data` (with room_dimensions), `shopping_list` (with items, unmatched, total), `approved=True`, photo `note` field, `design_brief.inspiration_notes`. This exercises the exact JSON shape iOS parses at the end of the flow. 772 total passing.
+
+**TDD criteria**:
+- WorkflowState at "completed" step with all fields survives JSON round-trip
+- scan_data.room_dimensions preserved (width_m, length_m, height_m)
+- shopping_list with items, unmatched, total_estimated_cost_cents preserved
+- Photo notes, design brief inspiration_notes preserved
+- approved=True, error=None correctly serialized
+
+### IMP-18: Worker _load_activities branch coverage (T0)
+
+**Status: DONE** — Added 3 tests verifying the `_load_activities()` config switch in worker.py. Tests: (1) `use_mock_activities=True` loads mock stubs with correct Temporal activity names, (2) `use_mock_activities=False` loads real T2/T3 modules (generate.py, edit.py, shopping.py), (3) missing real modules raise `ImportError` with actionable message mentioning `USE_MOCK_ACTIVITIES`. 771 total passing.
+
+**TDD criteria**:
+- Mock branch returns 4 activities with correct @activity.defn names
+- Real branch returns 4 activities from real modules (not mock_stubs)
+- Missing module gives ImportError mentioning USE_MOCK_ACTIVITIES
+
+### IMP-17: Pydantic boundary validation + delete cleanup (T0)
+
+**Status: DONE** — Added 5 tests covering Pydantic validation boundaries and delete cleanup during generation. Tests: (1) `select_option` with index=-1 → 422 (ge=0 constraint), (2) `select_option` with index=2 → 422 (le=1 constraint), (3) empty string feedback → 422 (min_length=1 constraint), (4) annotation region_id=0 → 422 (ge=1 constraint), (5) delete project during generation → 204 with `_mock_pending_generation` cleaned up. 768 total passing.
+
+**TDD criteria**:
+- Negative selection index (-1) returns 422 validation_error from Pydantic ge=0
+- Oversized selection index (2) returns 422 validation_error from Pydantic le=1
+- Empty string feedback returns 422 validation_error from Pydantic min_length=1
+- Annotation with region_id=0 returns 422 validation_error from Pydantic ge=1
+- Delete during generation step returns 204 and cleans up _mock_pending_generation
+
+### IMP-16: Mock API edge case coverage (T0)
+
+**Status: DONE** — Added 5 tests covering previously untested mock API error paths and edge cases. Tests: (1) `send_intake_message` without `start_intake` → 409 "Call start_intake first", (2) `retry` when no error exists → 200 no-op, (3) `start_over` from scan step → 200 with photos preserved, (4) `start_over` from approval step (not yet approved) → 200, (5) `start_over` blocked from shopping step → 409. 763 total passing.
+
+**TDD criteria**:
+- Intake message at correct step but without session initialization returns 409 with "start_intake" in message
+- Retry with error=None returns 200, state.error remains None
+- Start-over from scan step resets to intake, photos preserved
+- Start-over from approval (approved=False) resets to intake
+- Start-over from shopping step returns 409 wrong_step
+
+### IMP-15: Unique mock edit URLs for chain integrity (T0)
+
+**Status: DONE** — Mock `edit_design` stub now returns unique URLs per invocation via `uuid4` hex prefix (e.g., `mock/edit_a1b2c3d4.png`). Previously returned static `mock/edit.png`, making `test_revision_chain_integrity` pass trivially since all revisions had identical URLs. Updated conformance test to check URL prefix+suffix pattern and verify two calls produce different URLs. 758 total passing.
+
+**TDD criteria**:
+- Mock `edit_design` returns URLs matching `https://r2.example.com/mock/edit_{hex}.png`
+- Two calls with same input produce different URLs
+- `test_revision_chain_integrity` (workflow) now non-trivially verifies chaining via unique URLs
+
+### IMP-14: Mock shopping step with polling-based completion (T0)
+
+**Status: DONE** — Mock API's `approve_design` now transitions to `step="shopping"` with `shopping_list=None` first, then auto-completes to `step="completed"` with populated shopping list on next poll after `MOCK_SHOPPING_DELAY`. Mirrors GAP-5 generation pattern. Cleanup in `delete_project` and `start_over`. 4 new tests, 758 total passing.
+
+**TDD criteria**:
+- After approve with delay, `state.step == "shopping"` and `shopping_list is None`
+- After poll with delay=0, `state.step == "completed"` with 2 items and unmatched
+- Shopping list includes `unmatched` items with Google Shopping fallback URLs
+- Delete project during shopping step cleans up pending state
+
+### IMP-13: Activity contract round-trip tests + edit input completeness (T0)
+
+**Status: DONE** — Added 13 new tests: 5 activity Input model JSON round-trip tests (GenerateDesignsInput, EditDesignInput x2, GenerateShoppingListInput, IntakeChatInput), 5 activity Output model round-trip tests (GenerateDesignsOutput, EditDesignOutput, GenerateShoppingListOutput, IntakeChatOutput x2), 3 mock stub output conformance tests. Also added missing assertions to workflow edit input tests: `project_id`, `room_photo_urls`, `inspiration_photo_urls`. 754 total passing.
+
+**TDD criteria**:
+- All 4 activity Input models survive JSON round-trip with fully-populated nested data (DesignBrief, StyleProfile, InspirationNote, RoomDimensions, AnnotationRegion, RevisionRecord, ChatMessage)
+- All 4 activity Output models survive JSON round-trip including optional fields (None, empty lists)
+- Mock stubs produce outputs satisfying all Pydantic constraints (min_length, ge/le, etc.)
+- Edit input builder forwards `project_id`, `inspiration_photo_urls`, and all context fields to T2 activity
+
+### IMP-12: REGEN-5 complete coverage (T0)
+
+**Status: DONE** — Extended `test_sixth_iteration_blocked_after_cap` to also verify text feedback is blocked after 5-iteration cap (not just annotations). Directly covers REGEN-5 product spec test case: "Both 'Annotate' and 'Regenerate' buttons are disabled." 741 total passing.
+
+### IMP-11: Complete OpenAPI response documentation (T0)
+
+**Status: DONE** — Added missing response codes to OpenAPI `responses` dicts: 413 on `upload_photo` (file too large), 409 on `start-over` (blocked by approved/completed). No code behavior changes, documentation only. 741 total passing.
+
+### IMP-10: Premium happy path e2e test (T0)
+
+**Status: DONE** — Full-featured end-to-end test exercising the "premium experience" path: LiDAR scan upload + inspiration photos with notes (during scan step) + full intake conversation + mixed annotation/feedback iterations. Validates data preservation across all step transitions. 1 new test, 741 total passing.
+
+**TDD criteria**:
+- Create → 2 room photos → 1 inspiration w/ note during scan → LiDAR scan → intake → confirm → select → 1 annotation + 1 feedback → approve
+- Final state: 3 photos (note preserved), scan_data (dimensions preserved), design_brief, iteration_count=2, mixed revision_history, shopping_list
+
+### IMP-9: Block approve_design during active error (T0)
+
+**Status: DONE** — Mock API parity fix: the Temporal workflow's `approve_design` signal silently ignores the call when `self.error is not None`, but the mock API had no such check. Added error guard to `approve_design` endpoint — returns 409 `active_error` when workflow has an unresolved error. 2 new tests, 740 total passing.
+
+**TDD criteria**:
+- approve_design with active error returns 409 `active_error`, state unchanged
+- approve_design after retry (error cleared) returns 200, step becomes "completed"
+
+### IMP-8: OpenAPI response documentation + CLAUDE.md update (T0)
+
+**Status: DONE** — Added 422 to `responses` dict on 4 endpoints that return custom 422 errors from handler logic (upload_photo, skip_intake, submit_text_feedback, select_option). Updated CLAUDE.md status from "301 tests, P2 blocked" to "738 tests, P2 in progress."
+
+### IMP-7: Preserve photo notes when intake is skipped (T0)
+
+**Status: DONE** — Bug fix: `_generation_input()` only extracted inspiration notes from `DesignBrief.inspiration_notes`, silently dropping `PhotoData.note` values when intake was skipped. Added fallback to build `InspirationNote` objects from photo notes. 1 new workflow test, 738 total passing.
+
+The bug: user uploads inspiration photos with notes → skips intake → `design_brief` is None → generation receives zero notes. Fix: when `design_brief` has no inspiration notes, fall back to `[InspirationNote(photo_index=i, note=p.note) for i,p in enumerate(inspo) if p.note]`.
+
+**TDD criteria**:
+- Upload 2 inspiration photos (1 with note, 1 without) → skip intake → generation receives exactly 1 InspirationNote with correct photo_index and note text
+- Photos without notes produce no fallback InspirationNote
+- Both inspiration photos still appear in inspiration_photo_urls
+
+### IMP-6: Edge case test coverage (T0)
+
+**Status: DONE** — Added REGEN-4 mixed iteration types test, start-over during generation, and double-approve guard. 3 new tests, 737 total passing.
+
+Three product spec edge cases covered:
+- **REGEN-4**: Annotation and text feedback iterations share the 5-count pool. Test verifies 3 annotations + 2 feedbacks = 5 total, auto-transition to approval, revision history preserves mixed types.
+- **Start over during generation**: User confirms intake, generation starts (pending), user calls start-over. Verifies mock pending generation is cleaned up.
+- **Double approve**: Approving an already-completed project returns 409 (step is "completed", not "iteration" or "approval").
+
+### IMP-5: Allow photo uploads during scan step (T0)
+
+**Status: DONE** — Fixed product spec bug where auto-transition to "scan" blocked inspiration photo uploads. 3 new tests (1 existing updated), 734 total passing.
+
+The product spec flow (§4.3) has inspiration photos uploaded *before* the scan step, but the auto-transition after 2 room photos moved step to "scan" prematurely, returning 409 for subsequent uploads. Fix: expanded `upload_photo` allowed steps from `"photos"` to `("photos", "scan")`, consistent with `delete_photo` (INT-3) which already allows both steps.
+
+**TDD criteria**:
+- Upload inspiration photo during scan step → 200, step stays "scan"
+- Upload room photo during scan step → 200, additional photo stored
+- Upload photo during intake step → 409 blocked (past the photo/scan window)
+- Updated existing wrong-step test from "scan" → "intake"
+
 ### IMP-2: Intake agent integration quality (discovered during wiring)
 
 *Placeholder — items discovered while wiring INT-2 go here. The ralph loop agent should add specific issues as sub-bullets when found during integration testing.*

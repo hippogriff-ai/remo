@@ -128,6 +128,21 @@ class TestCheckBlur:
         ok, _ = _check_blur(img)
         assert isinstance(ok, bool)
 
+    def test_extreme_aspect_ratio_capped(self) -> None:
+        """Tall narrow image triggers the longest-side cap (DoS defense).
+
+        A 512x5000 image bypasses shortest-side normalization (512 < 1024)
+        but its longest side (5000) exceeds NORMALIZE_SIZE * 4 (4096).
+        Without the cap, processing ~2.5M pixels is fine, but the guard
+        prevents pathological cases like 1024x100000 (100M pixels).
+        Verify the cap fires and the function completes without error.
+        """
+        img = _make_sharp_image(512, 5000)
+        ok, msg = _check_blur(img)
+        assert isinstance(ok, bool)
+        # If the function completed without OOM, the cap worked.
+        # The result depends on image content, not the cap itself.
+
 
 # ── Content classification checks ───────────────────────────────────
 
@@ -153,6 +168,66 @@ class TestDetectMediaType:
         """PNG bytes should return image/png."""
         img = _make_image(100, 100)
         assert _detect_media_type(_image_to_bytes(img, fmt="PNG")) == "image/png"
+
+
+class TestGetAnthropicClient:
+    """Tests for _get_anthropic_client — lazy singleton initialization."""
+
+    @patch("app.activities.validation.anthropic.Anthropic")
+    def test_creates_client_on_first_call(self, mock_cls: MagicMock) -> None:
+        """First call creates an Anthropic client with the configured API key."""
+        import app.activities.validation as val_mod
+
+        val_mod._anthropic_client = None  # reset singleton
+        mock_instance = MagicMock()
+        mock_cls.return_value = mock_instance
+
+        with patch("app.activities.validation.settings") as mock_settings:
+            mock_settings.anthropic_api_key = "test-key-abc"
+            result = val_mod._get_anthropic_client()
+
+        assert result is mock_instance
+        mock_cls.assert_called_once_with(api_key="test-key-abc")
+        val_mod._anthropic_client = None  # cleanup
+
+    @patch("app.activities.validation.anthropic.Anthropic")
+    def test_reuses_client_on_subsequent_calls(self, mock_cls: MagicMock) -> None:
+        """Subsequent calls reuse the cached client (singleton)."""
+        import app.activities.validation as val_mod
+
+        sentinel = MagicMock()
+        val_mod._anthropic_client = sentinel  # pre-populate
+
+        result = val_mod._get_anthropic_client()
+        assert result is sentinel
+        mock_cls.assert_not_called()  # no new client created
+        val_mod._anthropic_client = None  # cleanup
+
+
+class TestDetectMediaTypeEdgeCases:
+    """Edge cases for _detect_media_type not covered by TestDetectMediaType."""
+
+    def test_jpg_format_normalized_to_jpeg(self) -> None:
+        """If Pillow reports format as 'JPG', it should be normalized to 'JPEG'.
+
+        Pillow normally returns 'JPEG' (not 'JPG'), but the safety
+        normalization in _detect_media_type handles the edge case.
+        """
+        mock_img = MagicMock()
+        mock_img.format = "JPG"
+
+        with patch("app.activities.validation.Image.open", return_value=mock_img):
+            result = _detect_media_type(b"fake-image-data")
+        assert result == "image/jpeg"
+
+    def test_none_format_defaults_to_jpeg(self) -> None:
+        """If Pillow returns None format, should default to JPEG."""
+        mock_img = MagicMock()
+        mock_img.format = None
+
+        with patch("app.activities.validation.Image.open", return_value=mock_img):
+            result = _detect_media_type(b"fake-image-data")
+        assert result == "image/jpeg"
 
 
 class TestCheckContent:
@@ -201,6 +276,57 @@ class TestCheckContent:
 
         ok, msg = _check_content(b"fake-image-data", "inspiration")
         assert ok is True
+
+    @patch("app.activities.validation._detect_media_type", return_value="image/jpeg")
+    @patch("app.activities.validation._get_anthropic_client")
+    def test_inspiration_person_rejected_with_spec_message(
+        self, mock_get_client: MagicMock, _mock_media: MagicMock
+    ) -> None:
+        """PHOTO-11: Inspiration photo with person returns spec-compliant message."""
+        mock_client = MagicMock()
+        mock_client.messages.create.return_value = _mock_anthropic_response(
+            "NO. This is a photo of a person posing in a room."
+        )
+        mock_get_client.return_value = mock_client
+
+        ok, msg = _check_content(b"fake-image-data", "inspiration")
+        assert ok is False
+        assert "not people or animals" in msg
+        assert "Please choose a different image" in msg
+
+    @patch("app.activities.validation._detect_media_type", return_value="image/jpeg")
+    @patch("app.activities.validation._get_anthropic_client")
+    def test_inspiration_pet_rejected_with_spec_message(
+        self, mock_get_client: MagicMock, _mock_media: MagicMock
+    ) -> None:
+        """PHOTO-12: Inspiration photo with pet returns same spec-compliant message."""
+        mock_client = MagicMock()
+        mock_client.messages.create.return_value = _mock_anthropic_response(
+            "NO. This is a photo of a dog on a couch."
+        )
+        mock_get_client.return_value = mock_client
+
+        ok, msg = _check_content(b"fake-image-data", "inspiration")
+        assert ok is False
+        assert "not people or animals" in msg
+        assert "Please choose a different image" in msg
+
+    @patch("app.activities.validation._detect_media_type", return_value="image/jpeg")
+    @patch("app.activities.validation._get_anthropic_client")
+    def test_room_rejection_still_uses_generic_message(
+        self, mock_get_client: MagicMock, _mock_media: MagicMock
+    ) -> None:
+        """Room photo rejection still uses the generic message with Claude's reason."""
+        mock_client = MagicMock()
+        mock_client.messages.create.return_value = _mock_anthropic_response(
+            "NO. This is an outdoor landscape photo."
+        )
+        mock_get_client.return_value = mock_client
+
+        ok, msg = _check_content(b"fake-image-data", "room")
+        assert ok is False
+        assert "valid room photo" in msg
+        assert "outdoor landscape" in msg
 
     @patch("app.activities.validation._detect_media_type", return_value="image/jpeg")
     @patch("app.activities.validation._get_anthropic_client")

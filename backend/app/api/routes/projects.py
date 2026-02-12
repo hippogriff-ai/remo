@@ -50,6 +50,7 @@ logger = structlog.get_logger()
 router = APIRouter(tags=["projects"])
 
 MAX_PHOTO_BYTES = 20 * 1024 * 1024  # 20 MB
+MAX_INSPIRATION_PHOTOS = 3
 
 # In-memory mock state store (replaced by Temporal in P2)
 _mock_states: dict[str, WorkflowState] = {}
@@ -70,6 +71,10 @@ _intake_sessions: dict[str, _IntakeSession] = {}
 _mock_pending_generation: dict[str, tuple[float, list[DesignOption]]] = {}
 MOCK_GENERATION_DELAY: float = 2.0  # seconds; set to 0.0 in tests
 
+# Mock shopping: stores (ready_at, shopping_list) per project for simulated delay
+_mock_pending_shopping: dict[str, tuple[float, GenerateShoppingListOutput]] = {}
+MOCK_SHOPPING_DELAY: float = 2.0  # seconds; set to 0.0 in tests
+
 
 def _maybe_complete_generation(project_id: str, state: WorkflowState) -> None:
     """Auto-complete generation if the simulated delay has elapsed."""
@@ -82,13 +87,28 @@ def _maybe_complete_generation(project_id: str, state: WorkflowState) -> None:
     if time.monotonic() >= ready_at:
         state.generated_options = options
         state.step = "selection"
-        del _mock_pending_generation[project_id]
+        _mock_pending_generation.pop(project_id, None)
+
+
+def _maybe_complete_shopping(project_id: str, state: WorkflowState) -> None:
+    """Auto-complete shopping list if the simulated delay has elapsed."""
+    if state.step != "shopping":
+        return
+    pending = _mock_pending_shopping.get(project_id)
+    if pending is None:
+        return
+    ready_at, shopping_list = pending
+    if time.monotonic() >= ready_at:
+        state.shopping_list = shopping_list
+        state.step = "completed"
+        _mock_pending_shopping.pop(project_id, None)
 
 
 def _get_state(project_id: str) -> WorkflowState | None:
     state = _mock_states.get(project_id)
     if state is not None:
         _maybe_complete_generation(project_id, state)
+        _maybe_complete_shopping(project_id, state)
     return state
 
 
@@ -190,6 +210,7 @@ async def delete_project(project_id: str):
     del _mock_states[project_id]
     _intake_sessions.pop(project_id, None)
     _mock_pending_generation.pop(project_id, None)
+    _mock_pending_shopping.pop(project_id, None)
     logger.info("project_deleted", project_id=project_id)
 
 
@@ -199,18 +220,42 @@ async def delete_project(project_id: str):
 @router.post(
     "/projects/{project_id}/photos",
     response_model=PhotoUploadResponse,
-    responses={404: {"model": ErrorResponse}, 409: {"model": ErrorResponse}},
+    responses={
+        404: {"model": ErrorResponse},
+        409: {"model": ErrorResponse},
+        413: {"model": ErrorResponse},
+        422: {"model": ErrorResponse},
+    },
 )
 async def upload_photo(
     project_id: str,
     file: UploadFile,
     photo_type: Literal["room", "inspiration"] = "room",
+    note: str | None = None,
 ):
     """Upload photo -> validate -> add to state if valid."""
     state = _get_state(project_id)
-    if err := _check_step(state, "photos", "upload photos"):
+    if err := _check_step(state, ("photos", "scan"), "upload photos"):
         return err
     assert state is not None  # guaranteed by _check_step's 404 path
+
+    # PHOTO-7: notes are only valid on inspiration photos
+    if note is not None and photo_type != "inspiration":
+        return _error(422, "note_not_allowed", "Notes are only allowed on inspiration photos")
+    if note is not None and len(note) > 200:
+        return _error(
+            422, "note_too_long", "Inspiration photo note must be 200 characters or fewer"
+        )
+
+    # PHOTO-10: enforce max inspiration photos before doing any work
+    if photo_type == "inspiration":
+        inspo_count = sum(1 for p in state.photos if p.photo_type == "inspiration")
+        if inspo_count >= MAX_INSPIRATION_PHOTOS:
+            return _error(
+                422,
+                "too_many_inspiration_photos",
+                f"Maximum {MAX_INSPIRATION_PHOTOS} inspiration photos",
+            )
 
     # Stream-read with early termination to avoid buffering unbounded uploads
     chunks: list[bytes] = []
@@ -235,6 +280,7 @@ async def upload_photo(
             photo_id=photo_id,
             storage_key=f"projects/{project_id}/photos/{photo_type}_{len(state.photos)}.jpg",
             photo_type=photo_type,
+            note=note,
         )
         state.photos.append(photo)
         # Auto-transition to scan after minimum room photos (mirrors workflow behavior)
@@ -475,7 +521,9 @@ async def _real_intake_message(
         result = await _run_intake_core(intake_input)
     except Exception:
         logger.exception("intake_agent_error", project_id=project_id)
-        return _error(500, "intake_error", "The design assistant encountered an error")
+        return _error(
+            500, "intake_error", "The design assistant encountered an error", retryable=True
+        )
 
     session.history.append(ChatMessage(role="user", content=message))
     session.history.append(ChatMessage(role="assistant", content=result.agent_message))
@@ -508,14 +556,29 @@ async def confirm_intake(project_id: str, body: IntakeConfirmRequest):
 @router.post(
     "/projects/{project_id}/intake/skip",
     response_model=ActionResponse,
-    responses={404: {"model": ErrorResponse}, 409: {"model": ErrorResponse}},
+    responses={
+        404: {"model": ErrorResponse},
+        409: {"model": ErrorResponse},
+        422: {"model": ErrorResponse},
+    },
 )
 async def skip_intake(project_id: str):
-    """Skip intake and use defaults."""
+    """Skip intake and use defaults.
+
+    INTAKE-3a: skipping is only allowed if at least 1 inspiration photo
+    was uploaded — without inspiration, the generator has no style signal.
+    """
     state = _get_state(project_id)
     if err := _check_step(state, "intake", "skip intake"):
         return err
     assert state is not None
+    has_inspiration = any(p.photo_type == "inspiration" for p in state.photos)
+    if not has_inspiration:
+        return _error(
+            422,
+            "intake_required",
+            "Intake is required when no inspiration photos are uploaded",
+        )
     state.step = "generation"
     _mock_pending_generation[project_id] = (
         time.monotonic() + MOCK_GENERATION_DELAY,
@@ -530,7 +593,11 @@ async def skip_intake(project_id: str):
 @router.post(
     "/projects/{project_id}/select",
     response_model=ActionResponse,
-    responses={404: {"model": ErrorResponse}, 409: {"model": ErrorResponse}},
+    responses={
+        404: {"model": ErrorResponse},
+        409: {"model": ErrorResponse},
+        422: {"model": ErrorResponse},
+    },
 )
 async def select_option(project_id: str, body: SelectOptionRequest):
     """Select one of the generated design options."""
@@ -549,7 +616,7 @@ async def select_option(project_id: str, body: SelectOptionRequest):
 @router.post(
     "/projects/{project_id}/start-over",
     response_model=ActionResponse,
-    responses={404: {"model": ErrorResponse}},
+    responses={404: {"model": ErrorResponse}, 409: {"model": ErrorResponse}},
 )
 async def start_over(project_id: str):
     """Go back to intake and start the design process over."""
@@ -572,6 +639,7 @@ async def start_over(project_id: str):
     state.step = "intake"
     _intake_sessions.pop(project_id, None)
     _mock_pending_generation.pop(project_id, None)
+    _mock_pending_shopping.pop(project_id, None)
     return ActionResponse()
 
 
@@ -597,7 +665,11 @@ async def submit_annotation_edit(project_id: str, body: AnnotationEditRequest):
 @router.post(
     "/projects/{project_id}/iterate/feedback",
     response_model=ActionResponse,
-    responses={404: {"model": ErrorResponse}, 409: {"model": ErrorResponse}},
+    responses={
+        404: {"model": ErrorResponse},
+        409: {"model": ErrorResponse},
+        422: {"model": ErrorResponse},
+    },
 )
 async def submit_text_feedback(project_id: str, body: TextFeedbackRequest):
     """Submit text feedback for design revision."""
@@ -605,6 +677,13 @@ async def submit_text_feedback(project_id: str, body: TextFeedbackRequest):
     if err := _check_step(state, "iteration", "submit feedback"):
         return err
     assert state is not None
+    # REGEN-2: enforce 10-char minimum for text feedback
+    if len(body.feedback) < 10:
+        return _error(
+            422,
+            "feedback_too_short",
+            "Please provide more detail (at least 10 characters)",
+        )
     _apply_revision(state, project_id, "feedback", instructions=[body.feedback])
     return ActionResponse()
 
@@ -623,8 +702,15 @@ async def approve_design(project_id: str):
     if err := _check_step(state, ("iteration", "approval"), "approve"):
         return err
     assert state is not None
+    # Matches workflow: approve_design signal is ignored when there's an active error.
+    # User must call retry_failed_step first.
+    if state.error is not None:
+        return _error(409, "active_error", "Resolve the error before approving")
     state.approved = True
-    state.shopping_list = GenerateShoppingListOutput(
+    # Transition to shopping step with simulated delay (mirrors GAP-5 generation pattern).
+    # iOS polls GET /projects/{id} and sees step="shopping" with shopping_list=None,
+    # then on next poll after delay, sees step="completed" with shopping_list populated.
+    shopping_list = GenerateShoppingListOutput(
         items=[
             ProductMatch(
                 category_group="Furniture",
@@ -658,7 +744,11 @@ async def approve_design(project_id: str):
         ],
         total_estimated_cost_cents=33998,
     )
-    state.step = "completed"
+    _mock_pending_shopping[project_id] = (
+        time.monotonic() + MOCK_SHOPPING_DELAY,
+        shopping_list,
+    )
+    state.step = "shopping"
     return ActionResponse()
 
 

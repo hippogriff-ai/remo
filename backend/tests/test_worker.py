@@ -13,7 +13,7 @@ from app.activities.mock_stubs import (
     generate_shopping_list,
 )
 from app.activities.purge import purge_project_data
-from app.worker import ACTIVITIES, WORKFLOWS, create_temporal_client, run_worker
+from app.worker import ACTIVITIES, WORKFLOWS, _load_activities, create_temporal_client, run_worker
 from app.workflows.design_project import DesignProjectWorkflow
 
 
@@ -145,6 +145,52 @@ class TestRunWorker:
                 await run_worker()
 
 
+class TestLoadActivities:
+    """Verify _load_activities correctly switches between mock and real implementations."""
+
+    def test_mock_branch_loads_mock_stubs(self) -> None:
+        """use_mock_activities=True loads from mock_stubs module."""
+        with patch("app.worker.settings") as mock_settings:
+            mock_settings.use_mock_activities = True
+            activities = _load_activities()
+        assert len(activities) == 4
+        # Check all loaded activities have @activity.defn names
+        names = [getattr(a, "__temporal_activity_definition").name for a in activities]
+        assert "generate_designs" in names
+        assert "edit_design" in names
+        assert "generate_shopping_list" in names
+        assert "purge_project_data" in names
+
+    def test_real_branch_loads_real_modules(self) -> None:
+        """use_mock_activities=False loads from real T2/T3 modules."""
+        with patch("app.worker.settings") as mock_settings:
+            mock_settings.use_mock_activities = False
+            activities = _load_activities()
+        assert len(activities) == 4
+        names = [getattr(a, "__temporal_activity_definition").name for a in activities]
+        assert "generate_designs" in names
+        assert "edit_design" in names
+        assert "generate_shopping_list" in names
+        assert "purge_project_data" in names
+        # Verify these come from the real modules, not mock_stubs
+        from app.activities import edit, generate, shopping
+
+        fn_modules = {a.__module__ for a in activities}
+        assert edit.__name__ in fn_modules
+        assert generate.__name__ in fn_modules
+        assert shopping.__name__ in fn_modules
+
+    def test_real_branch_import_error_gives_helpful_message(self) -> None:
+        """Missing real modules gives actionable error mentioning USE_MOCK_ACTIVITIES."""
+        with (
+            patch("app.worker.settings") as mock_settings,
+            patch.dict("sys.modules", {"app.activities.generate": None}),
+        ):
+            mock_settings.use_mock_activities = False
+            with pytest.raises(ImportError, match="USE_MOCK_ACTIVITIES"):
+                _load_activities()
+
+
 class TestMockStubsGuard:
     """Verify the production guard warns when mock stubs are registered."""
 
@@ -205,6 +251,52 @@ class TestMockStubsGuard:
             mock_logger.warning.assert_not_called()
 
 
+class TestMainEntrypoint:
+    """Verify the main() CLI entrypoint handles all exit scenarios."""
+
+    @patch("app.worker.run_worker")
+    @patch("app.worker.asyncio.run")
+    @patch("app.worker.configure_logging")
+    def test_main_calls_configure_logging_and_run(
+        self, mock_configure: MagicMock, mock_run: MagicMock, mock_worker: MagicMock
+    ) -> None:
+        """main() configures logging then runs the async worker."""
+        from app.worker import main
+
+        main()
+        mock_configure.assert_called_once()
+        mock_run.assert_called_once()
+
+    @patch("app.worker.run_worker")
+    @patch("app.worker.asyncio.run", side_effect=KeyboardInterrupt)
+    @patch("app.worker.configure_logging")
+    def test_main_handles_keyboard_interrupt(
+        self, mock_configure: MagicMock, mock_run: MagicMock, mock_worker: MagicMock
+    ) -> None:
+        """Ctrl+C exits cleanly without error."""
+        from app.worker import main
+
+        # Should not raise — KeyboardInterrupt is caught and suppressed
+        main()
+
+    @patch("app.worker.sys")
+    @patch("app.worker.run_worker")
+    @patch("app.worker.asyncio.run", side_effect=RuntimeError("fatal"))
+    @patch("app.worker.configure_logging")
+    def test_main_fatal_error_exits_with_code_1(
+        self,
+        mock_configure: MagicMock,
+        mock_run: MagicMock,
+        mock_worker: MagicMock,
+        mock_sys: MagicMock,
+    ) -> None:
+        """Unhandled exceptions log the error and call sys.exit(1)."""
+        from app.worker import main
+
+        main()
+        mock_sys.exit.assert_called_once_with(1)
+
+
 class TestConfigureLogging:
     """Verify logging configuration is shared between API and worker."""
 
@@ -234,3 +326,60 @@ class TestConfigureLogging:
         bound = structlog.get_logger().bind()
         class_name = type(bound).__name__
         assert "Error" in class_name, f"Expected filtering at ERROR, got {class_name}"
+
+    def test_json_renderer_in_production(self, monkeypatch) -> None:
+        """Production environment uses JSONRenderer for structured log output."""
+        import structlog
+
+        monkeypatch.setenv("ENVIRONMENT", "production")
+
+        from app.config import Settings
+
+        fresh_settings = Settings()
+        monkeypatch.setattr("app.logging.settings", fresh_settings)
+
+        from app.logging import configure_logging
+
+        configure_logging()
+
+        config = structlog.get_config()
+        renderer = config["processors"][-1]
+        assert isinstance(renderer, structlog.processors.JSONRenderer)
+
+    def test_unknown_log_level_falls_back_to_info(self, monkeypatch) -> None:
+        """Unknown LOG_LEVEL string falls back to INFO filtering."""
+        import structlog
+
+        monkeypatch.setenv("LOG_LEVEL", "BOGUS")
+
+        from app.config import Settings
+
+        fresh_settings = Settings()
+        monkeypatch.setattr("app.logging.settings", fresh_settings)
+
+        from app.logging import configure_logging
+
+        configure_logging()
+
+        bound = structlog.get_logger().bind()
+        class_name = type(bound).__name__
+        assert "Info" in class_name, f"Expected filtering at INFO, got {class_name}"
+
+    def test_console_renderer_in_development(self, monkeypatch) -> None:
+        """Development environment uses ConsoleRenderer for human-readable output."""
+        import structlog
+
+        monkeypatch.setenv("ENVIRONMENT", "development")
+
+        from app.config import Settings
+
+        fresh_settings = Settings()
+        monkeypatch.setattr("app.logging.settings", fresh_settings)
+
+        from app.logging import configure_logging
+
+        configure_logging()
+
+        config = structlog.get_config()
+        renderer = config["processors"][-1]
+        assert isinstance(renderer, structlog.dev.ConsoleRenderer)
