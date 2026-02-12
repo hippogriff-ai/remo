@@ -112,7 +112,12 @@ public actor MockWorkflowClient: WorkflowClientProtocol {
 
     public func startIntake(projectId: String, mode: String) async throws -> IntakeChatOutput {
         try await simulateDelay()
-        guard states[projectId] != nil else { throw notFound() }
+        guard let state = states[projectId] else { throw notFound() }
+        guard state.step == "intake" else {
+            throw APIError.httpError(statusCode: 409, response: ErrorResponse(
+                error: "wrong_step", message: "Expected step 'intake', got '\(state.step)'", retryable: false
+            ))
+        }
         intakeMessages[projectId] = []
         return IntakeChatOutput(
             agentMessage: "Welcome! Let's design your perfect room. What type of room are we working with?",

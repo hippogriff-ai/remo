@@ -62,13 +62,9 @@ public final class RealWorkflowClient: WorkflowClientProtocol, @unchecked Sendab
     }
 
     public func deletePhoto(projectId: String, photoId: String) async throws {
-        try await wrapErrors {
-            let url = self.baseURL.appendingPathComponent("/api/v1/projects/\(projectId)/photos/\(photoId)")
-            var request = URLRequest(url: url)
-            request.httpMethod = "DELETE"
-            let (data, response) = try await self.session.data(for: request)
-            try self.checkHTTPResponse(response, data: data)
-        }
+        // Note: Backend does not yet expose DELETE /photos/{photoId}.
+        // P2: T0 to add endpoint. Until then, this will 404 and the UI rollback handles it.
+        try await delete("/api/v1/projects/\(projectId)/photos/\(photoId)")
     }
 
     // MARK: - Scan
