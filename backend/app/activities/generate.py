@@ -281,7 +281,9 @@ async def generate_designs(input: GenerateDesignsInput) -> GenerateDesignsOutput
                 non_retryable=True,
             )
 
-        # Cap total images to model limit (room photos take priority)
+        # Safety cap: product allows 2 room + 3 inspiration = 5 images max,
+        # well under the model's 14-image ceiling. This guard only fires if
+        # upstream validation is bypassed or limits change.
         total_images = len(room_images) + len(inspiration_images)
         if total_images > MAX_INPUT_IMAGES:
             max_inspiration = MAX_INPUT_IMAGES - len(room_images)

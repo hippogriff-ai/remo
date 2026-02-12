@@ -25,7 +25,21 @@ from app.config import settings
 logger = structlog.get_logger()
 
 GEMINI_MODEL = "gemini-3-pro-image-preview"
-MAX_INPUT_IMAGES = 14  # Gemini Pro image model limit
+
+# --- Image budget constants ---
+# Product constraints: 2 room photos + 3 inspiration photos = 5 input images max.
+# Per-call budget: initial gen sends up to 5 refs; edits send 1 annotated image.
+# Model ceiling: Gemini Pro supports up to 14 input images per request.
+#
+# The real risk is NOT single-call input (bounded by product at ~6 images),
+# but *history accumulation* over multi-turn edit sessions. Each edit round
+# adds ~2 images to history (annotated input + generated output). Over the
+# workflow's 5-edit cap, history alone reaches ~10 images + 6 initial context
+# = 16, exceeding the model ceiling. History pruning in continue_chat handles
+# this by stripping images from intermediate turns.
+MAX_INPUT_IMAGES = 14  # Gemini Pro model ceiling (safety cap)
+MAX_ROOM_PHOTOS = 2  # Product limit: 2 room photos required
+MAX_INSPIRATION_PHOTOS = 3  # Product limit: max 3 inspiration photos
 
 IMAGE_CONFIG = types.GenerateContentConfig(
     response_modalities=["TEXT", "IMAGE"],
@@ -278,8 +292,14 @@ def _prune_history_images(
 ) -> list[types.Content]:
     """Strip image parts from intermediate history turns to stay under the model limit.
 
-    Keeps the first 2 turns (context setup) and the most recent 2 turns intact.
-    Strips inline_data from middle turns, replacing with a text placeholder.
+    This addresses the main image-budget concern: history growth over multi-turn
+    edits. Each edit round adds ~2 images (annotated input + generated output).
+    Over 5 rounds the history alone reaches ~10 images, plus ~6 from the initial
+    context, totalling ~16 — exceeding the model's 14-image ceiling.
+
+    Strategy: keep the first 2 turns (context setup with room/inspiration refs)
+    and the most recent 2 turns (latest exchange) intact. Strip inline_data from
+    middle turns, replacing with a text placeholder.
     """
     if _count_image_parts(history) <= max_images:
         return history
@@ -348,7 +368,9 @@ def continue_chat(
         else:
             raise ValueError(f"Unexpected message part type: {type(item).__name__}")
 
-    # Prune history images if total would exceed model limit
+    # Prune history images if accumulated turns exceed model ceiling.
+    # Single-call inputs are bounded by product (max 6 images), but history
+    # grows ~2 images per edit round and hits the 14-image ceiling by round 4-5.
     max_history_images = MAX_INPUT_IMAGES - new_image_count
     pruned_history = _prune_history_images(history, max_history_images)
 

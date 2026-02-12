@@ -179,9 +179,11 @@ async def _bootstrap_chat(
         _download_images(input.inspiration_photo_urls),
     )
 
-    # Cap images to model limit: reserve slots for base_image (always) +
-    # annotated image (when annotations present in turn 2)
-    reserved = 2 if input.annotations else 1
+    # Safety cap: product allows 2 room + 3 inspiration = 5 refs, plus
+    # base_image (always) and annotated image (when annotations present) =
+    # 7 images max in bootstrap. Well under the model's 14-image ceiling.
+    # This guard only fires if upstream validation is bypassed.
+    reserved = 2 if input.annotations else 1  # base_image + annotated
     max_ref_images = MAX_INPUT_IMAGES - reserved
     total_ref = len(room_images) + len(inspiration_images)
     if total_ref > max_ref_images:
@@ -193,7 +195,7 @@ async def _bootstrap_chat(
             inspiration_images = inspiration_images[:max_inspiration]
         logger.warning(
             "bootstrap_images_truncated",
-            original_count=total_ref + 1,
+            original_count=total_ref + reserved,
             room_kept=len(room_images),
             inspiration_kept=len(inspiration_images),
         )
