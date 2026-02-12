@@ -85,6 +85,9 @@ struct HomeScreen: View {
 
     private func loadAndRefreshProjects() async {
         // Restore persisted project IDs
+        // Note: chatMessages/currentIntakeOutput are not persisted — on relaunch,
+        // intake-step projects restart the conversation. In P2 with the real backend,
+        // chat history can be fetched via WorkflowState.chatHistoryKey.
         let savedIds = UserDefaults.standard.stringArray(forKey: Self.projectIdsKey) ?? []
         if !savedIds.isEmpty {
             projects = savedIds.map { id in

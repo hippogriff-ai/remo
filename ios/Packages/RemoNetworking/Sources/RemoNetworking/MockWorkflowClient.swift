@@ -183,6 +183,11 @@ public actor MockWorkflowClient: WorkflowClientProtocol {
     public func selectOption(projectId: String, index: Int) async throws {
         try await simulateDelay()
         guard var state = states[projectId] else { throw notFound() }
+        guard state.generatedOptions.indices.contains(index) else {
+            throw APIError.httpError(statusCode: 422, response: ErrorResponse(
+                error: "invalid_index", message: "Invalid option index: \(index)", retryable: false
+            ))
+        }
         state.selectedOption = index
         state.currentImage = state.generatedOptions[index].imageUrl
         state.step = "iteration"

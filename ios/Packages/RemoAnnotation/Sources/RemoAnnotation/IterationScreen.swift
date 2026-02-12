@@ -17,6 +17,7 @@ public struct IterationScreen: View {
     @State private var regionHistory: [[AnnotationRegion]] = []
     @State private var textFeedback = ""
     @State private var isSubmitting = false
+    @State private var isApproving = false
     @State private var errorMessage: String?
 
     enum IterationMode: String, CaseIterable {
@@ -76,7 +77,7 @@ public struct IterationScreen: View {
             }
             .buttonStyle(.borderedProminent)
             .controlSize(.large)
-            .disabled(!canSubmit || isSubmitting)
+            .disabled(!canSubmit || isSubmitting || isApproving)
             .padding()
             .accessibilityLabel(isSubmitting ? "Generating revision" : "Generate Revision")
             .accessibilityHint("Sends your edits to generate a revised design")
@@ -86,7 +87,7 @@ public struct IterationScreen: View {
                 Task { await approve() }
             }
             .font(.subheadline)
-            .disabled(isSubmitting)
+            .disabled(isSubmitting || isApproving)
             .padding(.bottom)
             .accessibilityHint("Approve the current design and continue to shopping list")
             .accessibilityIdentifier("iteration_approve")
@@ -193,11 +194,14 @@ public struct IterationScreen: View {
     }
 
     private func approve() async {
+        guard !isApproving else { return }
         guard let projectId = projectState.projectId else {
             assertionFailure("approve() called without projectId")
             errorMessage = "Project not initialized"
             return
         }
+        isApproving = true
+        defer { isApproving = false }
         do {
             try await client.approveDesign(projectId: projectId)
             let newState = try await client.getState(projectId: projectId)
