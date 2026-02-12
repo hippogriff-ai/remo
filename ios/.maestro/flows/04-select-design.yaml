@@ -1,0 +1,10 @@
+appId: com.hippogriff.remo
+---
+# DesignSelectionScreen: tap a design card then choose it
+- assertVisible: "Choose a Design"
+# Tap the first design card
+- tapOn: "Modern Minimalist"
+# Choose the selected design
+- tapOn:
+    id: "selection_choose"
+- takeScreenshot: 04-select-design

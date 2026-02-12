@@ -1,0 +1,34 @@
+appId: com.hippogriff.remo
+---
+# IntakeChatScreen: 3-step chat conversation then confirm brief
+- assertVisible: "Design Chat"
+# Wait for the first agent message to load (mock has 300ms delay)
+- extendedWaitUntil:
+    visible: "Living Room"
+    timeout: 5000
+# Step 1: select room type
+- tapOn:
+    id: "chat_option_1"
+# Step 2: wait for style options, then select
+- extendedWaitUntil:
+    visible: "Modern Minimalist"
+    timeout: 5000
+- tapOn:
+    id: "chat_option_1"
+# Step 3: open-ended question — type a response
+- extendedWaitUntil:
+    visible:
+      id: "chat_input"
+    timeout: 5000
+- tapOn:
+    id: "chat_input"
+- inputText: "I want a brighter space with more natural light"
+- tapOn:
+    id: "chat_send"
+# Summary: wait for brief to appear and confirm
+- extendedWaitUntil:
+    visible: "Design Brief"
+    timeout: 5000
+- tapOn:
+    id: "chat_confirm_brief"
+- takeScreenshot: 03-intake-chat

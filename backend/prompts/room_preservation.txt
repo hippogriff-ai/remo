@@ -1,0 +1,4 @@
+Preserve the exact camera angle, room geometry, walls, ceiling, windows,
+doors, and floor plane from the reference photo. Do not modify the room
+architecture or viewing perspective. Maintain the same lighting direction
+and natural light sources.
