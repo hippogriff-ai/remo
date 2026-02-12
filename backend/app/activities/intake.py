@@ -26,127 +26,154 @@ from app.models.contracts import (
     StyleProfile,
 )
 
-log = structlog.get_logger("t3.intake")
+log = structlog.get_logger("intake")
 
 PROMPTS_DIR = Path(__file__).resolve().parent.parent.parent / "prompts"
 
 MODEL = "claude-opus-4-6"
 MAX_TOKENS = 4096
 
-# Tool definitions for the intake agent
-INTAKE_TOOLS: list[dict[str, Any]] = [
-    {
-        "name": "update_design_brief",
-        "description": (
-            "Update the design brief with information gathered from the conversation. "
-            "Call this on EVERY turn to keep the brief up to date. Fields should contain "
-            "ELEVATED design language — translated from the user's vague words into "
-            "professional design parameters."
-        ),
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "room_type": {
-                    "type": "string",
-                    "description": "Room type (living room, bedroom, kitchen, etc.)",
-                },
-                "occupants": {
-                    "type": "string",
-                    "description": "Who uses the room (e.g., 'couple with toddler and cat')",
-                },
-                "pain_points": {
-                    "type": "array",
-                    "items": {"type": "string"},
-                    "description": "Functional failures identified (root causes, not symptoms)",
-                },
-                "keep_items": {
-                    "type": "array",
-                    "items": {"type": "string"},
-                    "description": "Items the user wants to keep (must integrate into design)",
-                },
-                "style_profile": {
-                    "type": "object",
-                    "properties": {
-                        "lighting": {
-                            "type": "string",
-                            "description": (
-                                "All three layers (ambient, task, accent) with Kelvin temps "
-                                "and placement. E.g., 'Ambient: warm 2700K recessed, "
-                                "Task: 3500K under-cabinet, Accent: picture lights on art'"
-                            ),
-                        },
-                        "colors": {
-                            "type": "array",
-                            "items": {"type": "string"},
-                            "description": (
-                                "Colors with 60/30/10 proportions and application. "
-                                "E.g., ['warm ivory walls (60%)', "
-                                "'walnut wood tones (30%)', 'terracotta accents (10%)']"
-                            ),
-                        },
-                        "textures": {
-                            "type": "array",
-                            "items": {"type": "string"},
-                            "description": (
-                                "Professional material descriptors (min 3). "
-                                "E.g., 'weathered oak', 'brushed brass', "
-                                "'boucle upholstery' — never generic 'wood' or 'fabric'"
-                            ),
-                        },
-                        "clutter_level": {
-                            "type": "string",
-                            "description": (
-                                "One of: minimal / curated / layered. "
-                                "Include storage strategy context"
-                            ),
-                        },
-                        "mood": {
-                            "type": "string",
-                            "description": (
-                                "Spatial and sensory terms. E.g., "
-                                "'Intimate refuge — deep-seated furniture, "
-                                "layered warm textiles, soft pools of light'"
-                            ),
-                        },
-                    },
-                },
-                "constraints": {
-                    "type": "array",
-                    "items": {"type": "string"},
-                    "description": "Budget, pets, kids, mobility, rental, timeline, etc.",
-                },
-                "inspiration_notes": {
-                    "type": "array",
-                    "items": {
-                        "type": "object",
-                        "properties": {
-                            "photo_index": {"type": "integer"},
-                            "note": {"type": "string"},
-                            "agent_clarification": {"type": "string"},
-                        },
-                    },
-                    "description": "Agent's interpretation of inspiration photo elements",
-                },
-                "domains_covered": {
-                    "type": "array",
-                    "items": {"type": "string"},
-                    "description": (
-                        "Design domains covered so far from the 10-domain notepad: "
-                        "room_purpose, pain_points, style, color, lighting, "
-                        "texture, furniture, clutter, mood, constraints"
-                    ),
-                },
+# Shared brief property schemas (used by both skill tools)
+_BRIEF_PROPERTIES: dict[str, Any] = {
+    "room_type": {
+        "type": "string",
+        "description": "Room type (living room, bedroom, kitchen, etc.)",
+    },
+    "occupants": {
+        "type": "string",
+        "description": "Who uses the room (e.g., 'couple with toddler and cat')",
+    },
+    "pain_points": {
+        "type": "array",
+        "items": {"type": "string"},
+        "description": "Functional failures identified (root causes, not symptoms)",
+    },
+    "keep_items": {
+        "type": "array",
+        "items": {"type": "string"},
+        "description": "Items the user wants to keep (must integrate into design)",
+    },
+    "style_profile": {
+        "type": "object",
+        "additionalProperties": True,
+        "properties": {
+            "lighting": {
+                "type": "string",
+                "description": (
+                    "All three layers (ambient, task, accent) with Kelvin temps "
+                    "and placement. E.g., 'Ambient: warm 2700K recessed, "
+                    "Task: 3500K under-cabinet, Accent: picture lights on art'"
+                ),
             },
-            "required": ["room_type"],
+            "colors": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": (
+                    "Colors with 60/30/10 proportions and application. "
+                    "E.g., ['warm ivory walls (60%)', "
+                    "'walnut wood tones (30%)', 'terracotta accents (10%)']"
+                ),
+            },
+            "textures": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": (
+                    "Professional material descriptors (min 3). "
+                    "E.g., 'weathered oak', 'brushed brass', "
+                    "'boucle upholstery' — never generic 'wood' or 'fabric'"
+                ),
+            },
+            "clutter_level": {
+                "type": "string",
+                "description": (
+                    "One of: minimal / curated / layered. Include storage strategy context"
+                ),
+            },
+            "mood": {
+                "type": "string",
+                "description": (
+                    "Spatial and sensory terms. E.g., "
+                    "'Intimate refuge — deep-seated furniture, "
+                    "layered warm textiles, soft pools of light'"
+                ),
+            },
         },
     },
-    {
-        "name": "respond_to_user",
+    "lifestyle": {
+        "type": "string",
         "description": (
-            "Send a response to the user. Call this on EVERY turn after updating the design brief."
+            "How the user uses the space: activities, frequency, daily routines. "
+            "E.g., 'Morning yoga, evening reading, weekend hosting for 6-8 guests'"
+        ),
+    },
+    "constraints": {
+        "type": "array",
+        "items": {"type": "string"},
+        "description": "Budget, pets, kids, mobility, rental, timeline, etc.",
+    },
+    "inspiration_notes": {
+        "type": "array",
+        "items": {
+            "type": "object",
+            "properties": {
+                "photo_index": {"type": "integer"},
+                "note": {"type": "string"},
+                "agent_clarification": {"type": "string"},
+            },
+        },
+        "description": "Agent's interpretation of inspiration photo elements",
+    },
+    "domains_covered": {
+        "type": "array",
+        "items": {"type": "string"},
+        "description": (
+            "Design domains covered so far from the 11-domain notepad: "
+            "room_purpose, pain_points, style, color, lighting, "
+            "texture, furniture, clutter, mood, lifestyle, constraints"
+        ),
+    },
+}
+
+_OPTIONS_SCHEMA: dict[str, Any] = {
+    "type": "array",
+    "items": {
+        "type": "object",
+        "properties": {
+            "number": {"type": "integer"},
+            "label": {
+                "type": "string",
+                "description": "Short label (2-5 words)",
+            },
+            "value": {
+                "type": "string",
+                "description": "Design-relevant detail beyond the label",
+            },
+        },
+        "required": ["number", "label", "value"],
+    },
+    "description": (
+        "Quick-reply options (2-4). Use when the answer is "
+        "classifiable. Each must be specific and distinct. "
+        "For summary: 'That captures it perfectly' / "
+        "'A few adjustments' / 'Start fresh'"
+    ),
+}
+
+# Skill tool definitions — the agent picks EXACTLY ONE per turn
+SKILL_NAMES = frozenset({"interview_client", "draft_design_brief"})
+
+INTAKE_TOOLS: list[dict[str, Any]] = [
+    {
+        "name": "interview_client",
+        "description": (
+            "Ask the user a design-informed question to uncover uncovered domains, "
+            "probe vague answers, or resolve contradictions. Use the diagnostic question "
+            "bank and translation engine. Optionally include a partial_brief_update to "
+            "track what you've learned so far."
         ),
         "input_schema": {
             "type": "object",
+            "additionalProperties": True,
             "properties": {
                 "message": {
                     "type": "string",
@@ -156,30 +183,7 @@ INTAKE_TOOLS: list[dict[str, Any]] = [
                         "correct them."
                     ),
                 },
-                "options": {
-                    "type": "array",
-                    "items": {
-                        "type": "object",
-                        "properties": {
-                            "number": {"type": "integer"},
-                            "label": {
-                                "type": "string",
-                                "description": "Short label (2-5 words)",
-                            },
-                            "value": {
-                                "type": "string",
-                                "description": ("Design-relevant detail beyond the label"),
-                            },
-                        },
-                        "required": ["number", "label", "value"],
-                    },
-                    "description": (
-                        "Quick-reply options (2-4). Use when the answer is "
-                        "classifiable. Each must be specific and distinct. "
-                        "For summary: 'That captures it perfectly' / "
-                        "'A few adjustments' / 'Start fresh'"
-                    ),
-                },
+                "options": _OPTIONS_SCHEMA,
                 "is_open_ended": {
                     "type": "boolean",
                     "description": (
@@ -187,15 +191,61 @@ INTAKE_TOOLS: list[dict[str, Any]] = [
                         "False when offering classifiable options."
                     ),
                 },
-                "is_summary": {
-                    "type": "boolean",
+                "partial_brief_update": {
+                    "type": "object",
+                    "additionalProperties": True,
                     "description": (
-                        "True ONLY on the final turn. The summary shows "
-                        "translated design parameters for user verification."
+                        "Optional incremental brief update — track what you've "
+                        "learned so far in elevated design language. Include all "
+                        "previously gathered information plus new information."
+                    ),
+                    "properties": _BRIEF_PROPERTIES,
+                },
+                "domains_covered": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": (
+                        "Design domains covered so far from the 11-domain notepad: "
+                        "room_purpose, pain_points, style, color, lighting, "
+                        "texture, furniture, clutter, mood, lifestyle, constraints"
                     ),
                 },
             },
             "required": ["message"],
+        },
+    },
+    {
+        "name": "draft_design_brief",
+        "description": (
+            "Produce the final elevated design brief. Use when you have sufficient "
+            "information across key domains (6+ of 11 with depth). Apply the 20-rule "
+            "validation checklist and elevation rules. The design_brief field is REQUIRED."
+        ),
+        "input_schema": {
+            "type": "object",
+            "additionalProperties": True,
+            "properties": {
+                "message": {
+                    "type": "string",
+                    "description": (
+                        "Summary text showing translated design parameters. "
+                        "Frame as 'Here's how I'd bring that to life...' "
+                        "Highlight inferred preferences clearly."
+                    ),
+                },
+                "options": _OPTIONS_SCHEMA,
+                "design_brief": {
+                    "type": "object",
+                    "additionalProperties": True,
+                    "description": (
+                        "Complete, elevated DesignBrief with all gathered information. "
+                        "Every field should use professional design language."
+                    ),
+                    "properties": _BRIEF_PROPERTIES,
+                    "required": ["room_type"],
+                },
+            },
+            "required": ["message", "design_brief"],
         },
     },
 ]
@@ -209,8 +259,12 @@ MODE_INSTRUCTIONS = {
         "using diagnostic alternatives from the question bank. Adapt — if the user's "
         "answer covers multiple domains, skip ahead. Apply the translation engine to "
         "every response. Target ~3 turns, then synthesize an elevated brief.\n\n"
-        "Turn budget: you have approximately {remaining_turns} turns remaining "
-        "(including this one). When 0 turns remain, you MUST generate a summary."
+        "Skill selection: use `interview_client` for ~2-3 turns, then `draft_design_brief`. "
+        "If the user's first answer covers 5+ domains, you may draft after 1-2 turns.\n\n"
+        "Turn budget: {remaining_turns} turns remaining (including this one). "
+        "When 1 turn remains, this IS your last chance — you MUST use `draft_design_brief` "
+        "to produce the final elevated brief. Do NOT use `interview_client` on your last turn. "
+        "Even with incomplete information, draft the best brief you can from what you have."
     ),
     "full": (
         "### Full Mode (~10 turns)\n"
@@ -221,18 +275,32 @@ MODE_INSTRUCTIONS = {
         "based on what you've learned. Skip domains already covered. The notepad keeps "
         "you on track; your design intelligence picks the best next question and probes "
         "deeper when answers are surface-level.\n\n"
-        "Turn budget: you have approximately {remaining_turns} turns remaining "
-        "(including this one). When 0 turns remain, you MUST generate a summary."
+        "Skill selection: use `interview_client` until 6+ domains are covered with depth, "
+        "then `draft_design_brief`. Expect ~7-9 interview turns.\n\n"
+        "Turn budget: {remaining_turns} turns remaining (including this one). "
+        "When 1 turn remains, this IS your last chance — you MUST use `draft_design_brief` "
+        "to produce the final elevated brief. Do NOT use `interview_client` on your last turn. "
+        "Even with incomplete information, draft the best brief you can from what you have."
     ),
     "open": (
         "### Open Conversation Mode (~15 turns)\n"
         "Begin with an open prompt: 'Tell us about this room — what's on your mind, "
         "what you love, what you'd change, anything.' Follow the user's lead. Apply "
-        "the DIAGNOSE pipeline continuously. Track domains on your notepad internally. "
-        "When conversation energy slows, probe uncovered domains using diagnostic "
-        "questions. Cap at ~15 turns — synthesize an elevated brief and summarize.\n\n"
-        "Turn budget: you have approximately {remaining_turns} turns remaining "
-        "(including this one). When 0 turns remain, you MUST generate a summary."
+        "the DIAGNOSE pipeline continuously. Track domains on your notepad internally.\n\n"
+        "**Anchor Points**: In your first response, include a brief list of the design "
+        "domains you plan to explore (room_purpose, pain_points, style, color, lighting, "
+        "texture, furniture, clutter, mood, lifestyle, constraints). Frame it as: "
+        "'As we chat, I'll make sure we cover areas like [top 5 uncovered domains]. "
+        "But let's start with whatever's on your mind.' This anchors the conversation "
+        "and lets the user see the roadmap without forcing structure.\n\n"
+        "When conversation energy slows, reference the anchor list and probe uncovered "
+        "domains using diagnostic questions.\n\n"
+        "Skill selection: use `interview_client` until you have rich coverage across most "
+        "domains, then `draft_design_brief`. Expect ~10-14 interview turns.\n\n"
+        "Turn budget: {remaining_turns} turns remaining (including this one). "
+        "When 1 turn remains, this IS your last chance — you MUST use `draft_design_brief` "
+        "to produce the final elevated brief. Do NOT use `interview_client` on your last turn. "
+        "Even with incomplete information, draft the best brief you can from what you have."
     ),
 }
 
@@ -288,6 +356,8 @@ def _format_brief_context(brief: dict[str, Any]) -> str:
         lines.append(f"- Pain points: {', '.join(brief['pain_points'])}")
     if brief.get("keep_items"):
         lines.append(f"- Keep items: {', '.join(brief['keep_items'])}")
+    if brief.get("lifestyle"):
+        lines.append(f"- Lifestyle: {brief['lifestyle']}")
     if brief.get("constraints"):
         lines.append(f"- Constraints: {', '.join(brief['constraints'])}")
 
@@ -372,21 +442,18 @@ def _get_inspiration_note(
     return None
 
 
-def extract_tool_calls(
+def extract_skill_call(
     response: anthropic.types.Message,
-) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
-    """Extract update_design_brief and respond_to_user tool calls from response."""
-    brief_data: dict[str, Any] | None = None
-    response_data: dict[str, Any] | None = None
+) -> tuple[str | None, dict[str, Any]]:
+    """Extract the chosen skill tool call from response.
 
+    Returns (skill_name, skill_data). The agent should call exactly one
+    skill per turn — we take the first matching skill tool.
+    """
     for block in response.content:
-        if block.type == "tool_use":
-            if block.name == "update_design_brief":
-                brief_data = block.input  # type: ignore[assignment]
-            elif block.name == "respond_to_user":
-                response_data = block.input  # type: ignore[assignment]
-
-    return brief_data, response_data
+        if block.type == "tool_use" and block.name in SKILL_NAMES:
+            return block.name, block.input  # type: ignore[return-value]
+    return None, {}
 
 
 def build_brief(brief_data: dict[str, Any]) -> DesignBrief:
@@ -414,9 +481,17 @@ def build_brief(brief_data: dict[str, Any]) -> DesignBrief:
                 )
             )
 
+    # Merge lifestyle into occupants until T0 adds a dedicated field to DesignBrief
+    occupants = brief_data.get("occupants")
+    lifestyle = brief_data.get("lifestyle")
+    if lifestyle and occupants:
+        occupants = f"{occupants} — {lifestyle}"
+    elif lifestyle:
+        occupants = lifestyle
+
     return DesignBrief(
         room_type=brief_data.get("room_type", ""),
-        occupants=brief_data.get("occupants"),
+        occupants=occupants,
         pain_points=brief_data.get("pain_points", []),
         keep_items=brief_data.get("keep_items", []),
         style_profile=style_profile,
@@ -489,6 +564,7 @@ async def _run_intake_core(input: IntakeChatInput) -> IntakeChatOutput:
             max_tokens=MAX_TOKENS,
             system=system_prompt,
             tools=INTAKE_TOOLS,  # type: ignore[arg-type]
+            tool_choice={"type": "any"},
             messages=messages,  # type: ignore[arg-type]
         )
     except anthropic.RateLimitError as e:
@@ -503,34 +579,51 @@ async def _run_intake_core(input: IntakeChatInput) -> IntakeChatOutput:
             f"Claude API error ({e.status_code}): {e}", non_retryable=False
         ) from e
 
-    brief_data, response_data = extract_tool_calls(response)
+    skill_name, skill_data = extract_skill_call(response)
 
-    # If model didn't call respond_to_user, extract text from content blocks
-    if response_data is None:
-        log.warning("intake_missing_respond_tool", turn=turn_number, mode=input.mode)
+    # Fallback: if the model didn't call a skill tool, extract text from content blocks
+    if skill_name is None:
+        log.warning("intake_no_skill_called", turn=turn_number, mode=input.mode)
         text_parts = [b.text for b in response.content if hasattr(b, "text")]
         fallback = "I'm here to help with your room design. Tell me about the room?"
         agent_message = " ".join(text_parts) if text_parts else fallback
-        response_data = {"message": agent_message}
+        skill_data = {"message": agent_message}
 
-    if brief_data is None:
-        log.warning("intake_missing_brief_tool", turn=turn_number, mode=input.mode)
-
-    # Build output
+    # Build output based on which skill was chosen
     max_turns = MAX_TURNS.get(input.mode, 4)
-    domains_covered = brief_data.get("domains_covered", []) if brief_data else []
-    total_domains = 10
-    is_summary = response_data.get("is_summary", False)
+    total_domains = 11
 
-    # Server-side enforcement: force summary on final turn even if model forgot
+    if skill_name == "draft_design_brief":
+        # Draft skill: complete brief required, this is the summary turn
+        is_summary = True
+        brief_data = skill_data.get("design_brief")
+        domains_covered = brief_data.get("domains_covered", []) if brief_data else []
+    elif skill_name == "interview_client":
+        # Interview skill: optional partial brief, not a summary
+        is_summary = False
+        brief_data = skill_data.get("partial_brief_update")
+        domains_covered = skill_data.get("domains_covered", [])
+    else:
+        # No skill called (fallback path)
+        is_summary = False
+        brief_data = None
+        domains_covered = []
+
+    # Server-side enforcement: force summary on final turn even if model chose interview
     if turn_number >= max_turns and not is_summary:
         log.warning("intake_forced_summary", turn=turn_number, max_turns=max_turns)
         is_summary = True
+
+    # Safety net: if forced summary but no brief data, use accumulated previous_brief
+    if is_summary and brief_data is None and previous_brief is not None:
+        log.info("intake_using_previous_brief", turn=turn_number)
+        brief_data = previous_brief
 
     log.info(
         "intake_turn_complete",
         mode=input.mode,
         turn=turn_number,
+        skill=skill_name,
         domains_covered=len(domains_covered),
         has_brief=brief_data is not None,
         is_summary=is_summary,
@@ -539,9 +632,9 @@ async def _run_intake_core(input: IntakeChatInput) -> IntakeChatOutput:
     )
 
     return IntakeChatOutput(
-        agent_message=response_data.get("message", ""),
-        options=build_options(response_data.get("options")),
-        is_open_ended=response_data.get("is_open_ended", False),
+        agent_message=skill_data.get("message", ""),
+        options=build_options(skill_data.get("options")),
+        is_open_ended=skill_data.get("is_open_ended", False),
         progress=(
             f"Turn {turn_number} of ~{max_turns}"
             f" — {len(domains_covered)}/{total_domains} domains covered"

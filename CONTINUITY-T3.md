@@ -241,9 +241,60 @@ Build T3 AI Agents — intake chat agent and shopping list pipeline.
     - 2 new unit tests (partial failure tolerance, all-fail returns empty)
     - 536 total tests pass (214 T3 unit + 19 integration + 303 existing)
 
-- **Now**: FEATURE-COMPLETE + PRODUCTION-HARDENED + FULLY-ASYNC + 98% COVERAGE + SEARCH-OPTIMIZED + ERROR-PATHS-TESTED + COST-OBSERVABLE + RETRY-RESILIENT + DEDUP-ACROSS-ITEMS + RETAILER-NAMES + INPUT-VALIDATED + NULL-SAFE + SCORING-RESILIENT
+- **Done**: PR #5 review comment fixes
+    - Coerced `weighted_total` to float before all confidence comparisons (3 sites)
+    - Guarded non-dict items in `_validate_extracted_items` with isinstance check
+    - Dropped `t3.` prefix from logger names: `"intake"`, `"shopping"`
+    - Added `lifestyle` property to tool schema + `additionalProperties: true` for extensibility
+    - Merged lifestyle into occupants field (pending T0 contract update for dedicated field)
+    - Open mode anchor points: outputs planned domains in first response
+    - Updated domain count 10→11 (added lifestyle)
 
-- **Next**: Integration test validation (needs API key) or further enhancements
+- **Done**: Eval calibration — 30-example silver dataset + test harness
+    - `tests/eval_dataset.py`: 15 good + 15 bad curated DesignBrief examples with conversations
+    - `tests/test_eval_calibration.py`: parametrized tests verifying judge distinguishes quality
+    - Good examples avg 98.3 (range 88-100), bad examples avg 20.7 (range 8-42)
+    - Separation: 77.5 points — judge calibrated and ready for prompt tuning
+    - E501 exemption for dataset file in pyproject.toml
+
+- **Done**: Skill-based intake refactor — 2 mutually exclusive skills replace "god prompt"
+    - Replaced `update_design_brief` + `respond_to_user` (always both) → `interview_client` + `draft_design_brief` (pick one)
+    - Agent dynamically chooses skill based on domain coverage assessment
+    - `interview_client`: ask questions, optional `partial_brief_update` for incremental tracking
+    - `draft_design_brief`: produce final elevated brief (required `design_brief` field)
+    - Shared brief property schemas (`_BRIEF_PROPERTIES`) reused by both tools — DRY
+    - `extract_tool_calls()` → `extract_skill_call()` (returns skill name + data tuple)
+    - `_run_intake_core` branches on skill name instead of extracting both tools
+    - Server-side enforcement unchanged: `turn_number >= max_turns` forces `is_summary=True`
+    - MODE_INSTRUCTIONS updated with skill selection guidance per mode
+    - System prompt updated: OUTPUT FORMAT → "EXACTLY ONE skill per turn", Skill Selection subsection added
+    - 88 unit tests pass (net +0, same count — updated 15 tests for new tool names/schemas)
+    - 541 total tests pass, 50 skipped (integration), ruff clean, format clean, mypy clean
+    - Contract unchanged — `IntakeChatInput`/`IntakeChatOutput` same, workflow/API unaffected
+
+- **Done**: Live eval infrastructure bootstrap
+    - `tests/eval/test_live_eval.py` (NEW): runs 6 scenarios through agent → judge pipeline
+    - Passes `previous_brief` in `project_context` (matches real workflow)
+    - Rich dashboard: per-scenario totals, per-criterion averages, weakest areas
+    - Appends results to `score_history.jsonl` for tracking
+    - `evaluate_conversation_quality()` added to `intake_eval.py` (5 criteria × 5 pts = 25)
+    - Supplementary signal only (probing, acknowledgment, adaptation, translation visibility, flow)
+    - Thresholds: >= 70 per scenario, >= 70 avg overall (initial; target >= 87 avg)
+    - ruff clean, format clean, 541 tests pass + 51 skipped
+
+- **Done**: Eval tuning — 3 iterations, avg 98.7/100
+    - Iteration 0 (baseline): A=100, B=8, C=33, D=98, E=100, F=98, avg=72.8
+    - Iteration 1 (turn budget fix): Changed "When 0 turns remain" → "When 1 turn remains" in MODE_INSTRUCTIONS + system prompt. C: 33→100, but B: 8→0 (agent called no skill tool)
+    - Iteration 2 (tool_choice + previous_brief fallback):
+      - Added `tool_choice={"type": "any"}` to force skill tool calling on every turn
+      - Added previous_brief fallback: when forced summary has no brief, use accumulated brief from prior turns
+      - Results: A=100, B=92, C=100, D=100, E=100, F=100, avg=98.7
+    - All 6 >= 70 individually, avg 98.7 >= 87 target
+    - 31/31 calibration tests pass, 542 unit tests pass, ruff clean, format clean
+
+- **Now**: COMPLETE — all eval targets met
+
+- **Next**: PR review when ready
 
 ## Files Created/Modified
 - `backend/prompts/intake_system.txt` (NEW) — system prompt with design intelligence + Room Photos + Inspiration Photos sections

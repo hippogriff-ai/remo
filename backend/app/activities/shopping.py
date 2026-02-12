@@ -36,7 +36,7 @@ from app.models.contracts import (
     UnmatchedItem,
 )
 
-log = structlog.get_logger("t3.shopping")
+log = structlog.get_logger("shopping")
 
 PROMPTS_DIR = Path(__file__).resolve().parent.parent.parent / "prompts"
 
@@ -227,6 +227,14 @@ def _validate_extracted_items(
     """
     valid: list[dict[str, Any]] = []
     for item in items:
+        if not isinstance(item, dict):
+            log.warning(
+                "shopping_item_dropped",
+                reason="non-dict entry",
+                item_type=type(item).__name__,
+            )
+            continue
+
         # Required fields must be non-empty strings
         if not all(isinstance(item.get(f), str) and item[f].strip() for f in _REQUIRED_ITEM_FIELDS):
             log.warning(
@@ -685,12 +693,13 @@ def apply_confidence_filtering(
     for item, scores in zip(items, scored_products, strict=True):
         best = None
         for scored in scores:
-            confidence = scored.get("weighted_total", 0.0)
+            raw_conf = scored.get("weighted_total", 0)
+            confidence = float(raw_conf) if isinstance(raw_conf, (int, float)) else 0.0
             url = scored.get("product_url", "")
             if (
                 confidence >= 0.5
                 and url not in used_urls
-                and (best is None or confidence > best.get("weighted_total", 0))
+                and (best is None or confidence > float(best.get("weighted_total", 0) or 0))
             ):
                 best = scored
 
@@ -708,7 +717,8 @@ def apply_confidence_filtering(
             )
             continue
 
-        confidence = best.get("weighted_total", 0.0)
+        raw = best.get("weighted_total", 0.0)
+        confidence = float(raw) if isinstance(raw, (int, float)) else 0.0
         best_url = best.get("product_url", "")
         if best_url:
             used_urls.add(best_url)

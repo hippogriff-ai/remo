@@ -22,13 +22,14 @@ from app.activities.intake import (
     INTAKE_TOOLS,
     MAX_TURNS,
     MODE_INSTRUCTIONS,
+    SKILL_NAMES,
     _format_brief_context,
     _get_inspiration_note,
     _run_intake_core,
     build_brief,
     build_messages,
     build_options,
-    extract_tool_calls,
+    extract_skill_call,
     load_system_prompt,
 )
 from app.models.contracts import (
@@ -105,12 +106,12 @@ class TestLoadSystemPrompt:
         assert "Kelvin" in prompt
         assert "three layers" in prompt.lower() or "three lighting layers" in prompt.lower()
 
-    def test_tool_calling_instructions_present(self):
-        """The prompt must instruct the model to call both tools every turn."""
+    def test_skill_selection_instructions_present(self):
+        """The prompt must instruct the model to choose one skill per turn."""
         prompt = load_system_prompt("quick", 1)
-        assert "update_design_brief" in prompt
-        assert "respond_to_user" in prompt
-        assert "EVERY turn" in prompt
+        assert "interview_client" in prompt
+        assert "draft_design_brief" in prompt
+        assert "EXACTLY ONE" in prompt
 
     def test_mode_placeholder_replaced(self):
         """The {mode_instructions} placeholder should not appear in output."""
@@ -352,7 +353,7 @@ class TestGetInspirationNote:
 # === Tool Call Extraction Tests ===
 
 
-class TestExtractToolCalls:
+class TestExtractSkillCall:
     def _make_response(self, content_blocks):
         """Create a mock Anthropic response with given content blocks."""
         response = MagicMock()
@@ -372,58 +373,53 @@ class TestExtractToolCalls:
         block.text = text
         return block
 
-    def test_extracts_both_tools(self):
-        brief_data = {"room_type": "living room"}
-        response_data = {"message": "Tell me more"}
-        response = self._make_response(
-            [
-                self._make_tool_use("update_design_brief", brief_data),
-                self._make_tool_use("respond_to_user", response_data),
-            ]
-        )
-        brief, resp = extract_tool_calls(response)
-        assert brief == brief_data
-        assert resp == response_data
+    def test_extracts_interview_skill(self):
+        data = {"message": "Tell me more", "is_open_ended": True}
+        response = self._make_response([self._make_tool_use("interview_client", data)])
+        name, skill_data = extract_skill_call(response)
+        assert name == "interview_client"
+        assert skill_data == data
 
-    def test_handles_missing_brief(self):
-        response_data = {"message": "Hello"}
-        response = self._make_response(
-            [
-                self._make_tool_use("respond_to_user", response_data),
-            ]
-        )
-        brief, resp = extract_tool_calls(response)
-        assert brief is None
-        assert resp == response_data
+    def test_extracts_draft_skill(self):
+        data = {"message": "Here's your brief", "design_brief": {"room_type": "bedroom"}}
+        response = self._make_response([self._make_tool_use("draft_design_brief", data)])
+        name, skill_data = extract_skill_call(response)
+        assert name == "draft_design_brief"
+        assert skill_data == data
 
-    def test_handles_missing_response(self):
-        brief_data = {"room_type": "bedroom"}
+    def test_takes_first_skill_if_multiple(self):
+        """If model calls both skills (shouldn't), take the first one."""
         response = self._make_response(
             [
-                self._make_tool_use("update_design_brief", brief_data),
+                self._make_tool_use("interview_client", {"message": "Q1"}),
+                self._make_tool_use("draft_design_brief", {"message": "Summary"}),
             ]
         )
-        brief, resp = extract_tool_calls(response)
-        assert brief == brief_data
-        assert resp is None
+        name, _ = extract_skill_call(response)
+        assert name == "interview_client"
 
     def test_ignores_text_blocks(self):
         response = self._make_response(
             [
                 self._make_text("thinking..."),
-                self._make_tool_use("update_design_brief", {"room_type": "kitchen"}),
-                self._make_tool_use("respond_to_user", {"message": "Hi"}),
+                self._make_tool_use("interview_client", {"message": "Hi"}),
             ]
         )
-        brief, resp = extract_tool_calls(response)
-        assert brief is not None
-        assert resp is not None
+        name, skill_data = extract_skill_call(response)
+        assert name == "interview_client"
+        assert skill_data["message"] == "Hi"
+
+    def test_ignores_unknown_tool_names(self):
+        response = self._make_response([self._make_tool_use("unknown_tool", {"message": "?"})])
+        name, skill_data = extract_skill_call(response)
+        assert name is None
+        assert skill_data == {}
 
     def test_handles_empty_response(self):
         response = self._make_response([])
-        brief, resp = extract_tool_calls(response)
-        assert brief is None
-        assert resp is None
+        name, skill_data = extract_skill_call(response)
+        assert name is None
+        assert skill_data == {}
 
 
 # === Brief Building Tests ===
@@ -535,44 +531,65 @@ class TestBuildOptions:
 
 
 class TestToolDefinitions:
-    def test_two_tools_defined(self):
+    def test_two_skill_tools_defined(self):
         assert len(INTAKE_TOOLS) == 2
 
-    def test_tool_names(self):
+    def test_skill_names(self):
         names = {t["name"] for t in INTAKE_TOOLS}
-        assert names == {"update_design_brief", "respond_to_user"}
+        assert names == {"interview_client", "draft_design_brief"}
 
-    def test_brief_tool_requires_room_type(self):
-        brief_tool = next(t for t in INTAKE_TOOLS if t["name"] == "update_design_brief")
-        assert "room_type" in brief_tool["input_schema"]["required"]
+    def test_skill_names_constant_matches(self):
+        """SKILL_NAMES frozenset matches actual tool names."""
+        names = {t["name"] for t in INTAKE_TOOLS}
+        assert names == SKILL_NAMES
 
-    def test_response_tool_requires_message(self):
-        resp_tool = next(t for t in INTAKE_TOOLS if t["name"] == "respond_to_user")
-        assert "message" in resp_tool["input_schema"]["required"]
+    def test_interview_tool_requires_message(self):
+        tool = next(t for t in INTAKE_TOOLS if t["name"] == "interview_client")
+        assert "message" in tool["input_schema"]["required"]
 
-    def test_brief_tool_has_domains_covered(self):
-        brief_tool = next(t for t in INTAKE_TOOLS if t["name"] == "update_design_brief")
-        props = brief_tool["input_schema"]["properties"]
-        assert "domains_covered" in props
+    def test_interview_tool_has_partial_brief(self):
+        tool = next(t for t in INTAKE_TOOLS if t["name"] == "interview_client")
+        props = tool["input_schema"]["properties"]
+        assert "partial_brief_update" in props
+        # partial_brief_update should have brief sub-properties
+        pb_props = props["partial_brief_update"]["properties"]
+        assert "room_type" in pb_props
+        assert "style_profile" in pb_props
 
-    def test_response_tool_has_options(self):
-        resp_tool = next(t for t in INTAKE_TOOLS if t["name"] == "respond_to_user")
-        props = resp_tool["input_schema"]["properties"]
+    def test_interview_tool_has_options_and_open_ended(self):
+        tool = next(t for t in INTAKE_TOOLS if t["name"] == "interview_client")
+        props = tool["input_schema"]["properties"]
         assert "options" in props
-        assert "is_summary" in props
         assert "is_open_ended" in props
 
+    def test_draft_tool_requires_message_and_brief(self):
+        tool = next(t for t in INTAKE_TOOLS if t["name"] == "draft_design_brief")
+        assert "message" in tool["input_schema"]["required"]
+        assert "design_brief" in tool["input_schema"]["required"]
+
+    def test_draft_tool_brief_requires_room_type(self):
+        tool = next(t for t in INTAKE_TOOLS if t["name"] == "draft_design_brief")
+        brief_schema = tool["input_schema"]["properties"]["design_brief"]
+        assert "room_type" in brief_schema["required"]
+
+    def test_draft_tool_has_options(self):
+        tool = next(t for t in INTAKE_TOOLS if t["name"] == "draft_design_brief")
+        props = tool["input_schema"]["properties"]
+        assert "options" in props
+
     def test_brief_properties_have_descriptions(self):
-        """Tool schema properties should have descriptions for better model guidance."""
-        brief_tool = next(t for t in INTAKE_TOOLS if t["name"] == "update_design_brief")
-        props = brief_tool["input_schema"]["properties"]
+        """Brief property schemas should have descriptions for model guidance."""
+        tool = next(t for t in INTAKE_TOOLS if t["name"] == "draft_design_brief")
+        props = tool["input_schema"]["properties"]["design_brief"]["properties"]
         for key in ("room_type", "pain_points", "constraints", "domains_covered"):
             assert "description" in props[key], f"{key} missing description"
 
     def test_style_profile_properties_have_descriptions(self):
         """Style profile sub-properties should have elevation guidance."""
-        brief_tool = next(t for t in INTAKE_TOOLS if t["name"] == "update_design_brief")
-        sp_props = brief_tool["input_schema"]["properties"]["style_profile"]["properties"]
+        tool = next(t for t in INTAKE_TOOLS if t["name"] == "draft_design_brief")
+        sp_props = tool["input_schema"]["properties"]["design_brief"]["properties"][
+            "style_profile"
+        ]["properties"]
         for key in ("lighting", "colors", "textures", "mood", "clutter_level"):
             assert "description" in sp_props[key], f"style_profile.{key} missing description"
 
@@ -662,6 +679,11 @@ class TestModeInstructions:
     def test_all_modes_have_turn_budget_placeholder(self):
         for mode in ("quick", "full", "open"):
             assert "{remaining_turns}" in MODE_INSTRUCTIONS[mode]
+
+    def test_all_modes_have_skill_selection(self):
+        for mode in ("quick", "full", "open"):
+            assert "interview_client" in MODE_INSTRUCTIONS[mode]
+            assert "draft_design_brief" in MODE_INSTRUCTIONS[mode]
 
 
 # === Eval Harness Unit Tests ===
@@ -757,17 +779,13 @@ class TestRunIntakeCoreMocked:
             user_message=message,
         )
 
-    def _mock_response(
+    def _mock_skill_response(
         self,
-        brief_data: dict | None = None,
-        response_data: dict | None = None,
+        skill_name: str,
+        skill_data: dict,
     ) -> MagicMock:
-        """Build a mock Claude response with tool_use blocks."""
-        blocks = []
-        if brief_data is not None:
-            blocks.append(_mock_tool_block("update_design_brief", brief_data))
-        if response_data is not None:
-            blocks.append(_mock_tool_block("respond_to_user", response_data))
+        """Build a mock Claude response with a single skill tool_use block."""
+        blocks = [_mock_tool_block(skill_name, skill_data)]
         resp = MagicMock()
         resp.content = blocks
         resp.usage = MagicMock(input_tokens=500, output_tokens=200)
@@ -775,22 +793,23 @@ class TestRunIntakeCoreMocked:
 
     @patch.dict("os.environ", {"ANTHROPIC_API_KEY": "test-key"})
     @patch("app.activities.intake.anthropic.AsyncAnthropic")
-    def test_returns_complete_output(self, mock_client_cls):
-        """Full response with both tools produces complete IntakeChatOutput."""
-        mock_resp = self._mock_response(
-            brief_data={
-                "room_type": "living room",
-                "style_profile": {"mood": "cozy retreat", "colors": ["warm ivory"]},
-                "domains_covered": ["room_purpose", "style"],
-            },
-            response_data={
+    def test_interview_skill_returns_output(self, mock_client_cls):
+        """Interview skill produces IntakeChatOutput with partial brief."""
+        mock_resp = self._mock_skill_response(
+            "interview_client",
+            {
                 "message": "I can see this is a living room!",
                 "options": [
                     {"number": 1, "label": "Warm & cozy", "value": "warm palette"},
                     {"number": 2, "label": "Cool & modern", "value": "cool palette"},
                 ],
                 "is_open_ended": False,
-                "is_summary": False,
+                "partial_brief_update": {
+                    "room_type": "living room",
+                    "style_profile": {"mood": "cozy retreat", "colors": ["warm ivory"]},
+                    "domains_covered": ["room_purpose", "style"],
+                },
+                "domains_covered": ["room_purpose", "style"],
             },
         )
         mock_instance = MagicMock()
@@ -811,18 +830,19 @@ class TestRunIntakeCoreMocked:
 
     @patch.dict("os.environ", {"ANTHROPIC_API_KEY": "test-key"})
     @patch("app.activities.intake.anthropic.AsyncAnthropic")
-    def test_missing_respond_tool_uses_fallback(self, mock_client_cls):
-        """If model doesn't call respond_to_user, text is extracted as fallback."""
-        # Only brief tool, no respond_to_user
-        brief_block = _mock_tool_block("update_design_brief", {"room_type": "bedroom"})
-        text_block = MagicMock()
-        text_block.type = "text"
-        text_block.text = "Let me ask about your bedroom."
-
-        mock_resp = MagicMock()
-        mock_resp.content = [brief_block, text_block]
-        mock_resp.usage = MagicMock(input_tokens=300, output_tokens=100)
-
+    def test_draft_skill_returns_summary(self, mock_client_cls):
+        """Draft skill produces IntakeChatOutput with is_summary=True and complete brief."""
+        mock_resp = self._mock_skill_response(
+            "draft_design_brief",
+            {
+                "message": "Here's your design summary!",
+                "design_brief": {
+                    "room_type": "kitchen",
+                    "style_profile": {"mood": "bright and functional"},
+                    "domains_covered": list(range(10)),
+                },
+            },
+        )
         mock_instance = MagicMock()
         mock_instance.messages = MagicMock()
         mock_instance.messages.create = AsyncMock(return_value=mock_resp)
@@ -830,14 +850,33 @@ class TestRunIntakeCoreMocked:
 
         result = asyncio.run(_run_intake_core(self._make_input()))
 
-        assert "bedroom" in result.agent_message.lower() or len(result.agent_message) > 0
+        assert result.is_summary is True
         assert result.partial_brief is not None
-        assert result.partial_brief.room_type == "bedroom"
+        assert result.partial_brief.room_type == "kitchen"
 
     @patch.dict("os.environ", {"ANTHROPIC_API_KEY": "test-key"})
     @patch("app.activities.intake.anthropic.AsyncAnthropic")
-    def test_missing_both_tools_uses_fallback(self, mock_client_cls):
-        """If model calls neither tool, fallback message is used."""
+    def test_interview_without_partial_brief(self, mock_client_cls):
+        """Interview skill without partial_brief_update still works."""
+        mock_resp = self._mock_skill_response(
+            "interview_client",
+            {"message": "Tell me about your room."},
+        )
+        mock_instance = MagicMock()
+        mock_instance.messages = MagicMock()
+        mock_instance.messages.create = AsyncMock(return_value=mock_resp)
+        mock_client_cls.return_value = mock_instance
+
+        result = asyncio.run(_run_intake_core(self._make_input()))
+
+        assert result.agent_message == "Tell me about your room."
+        assert result.partial_brief is None
+        assert result.is_summary is False
+
+    @patch.dict("os.environ", {"ANTHROPIC_API_KEY": "test-key"})
+    @patch("app.activities.intake.anthropic.AsyncAnthropic")
+    def test_no_skill_called_uses_fallback(self, mock_client_cls):
+        """If model calls no skill tool, fallback message is used."""
         text_block = MagicMock()
         text_block.type = "text"
         text_block.text = "I need to understand your space."
@@ -854,41 +893,16 @@ class TestRunIntakeCoreMocked:
         result = asyncio.run(_run_intake_core(self._make_input()))
 
         assert result.agent_message  # Should have some message
-        assert result.partial_brief is None  # No brief without tool call
+        assert result.partial_brief is None
         assert result.is_summary is False
-
-    @patch.dict("os.environ", {"ANTHROPIC_API_KEY": "test-key"})
-    @patch("app.activities.intake.anthropic.AsyncAnthropic")
-    def test_summary_turn(self, mock_client_cls):
-        """Summary turn sets is_summary=True and includes progress info."""
-        mock_resp = self._mock_response(
-            brief_data={
-                "room_type": "kitchen",
-                "style_profile": {"mood": "bright and functional"},
-                "domains_covered": list(range(10)),  # all domains
-            },
-            response_data={
-                "message": "Here's your design summary!",
-                "is_summary": True,
-            },
-        )
-        mock_instance = MagicMock()
-        mock_instance.messages = MagicMock()
-        mock_instance.messages.create = AsyncMock(return_value=mock_resp)
-        mock_client_cls.return_value = mock_instance
-
-        result = asyncio.run(_run_intake_core(self._make_input()))
-
-        assert result.is_summary is True
-        assert result.partial_brief is not None
 
     @patch.dict("os.environ", {"ANTHROPIC_API_KEY": "test-key"})
     @patch("app.activities.intake.anthropic.AsyncAnthropic")
     def test_turn_counter_from_history(self, mock_client_cls):
         """Turn number should be based on user messages in history + 1."""
-        mock_resp = self._mock_response(
-            brief_data={"room_type": "living room"},
-            response_data={"message": "Tell me more."},
+        mock_resp = self._mock_skill_response(
+            "interview_client",
+            {"message": "Tell me more."},
         )
         mock_instance = MagicMock()
         mock_instance.messages = MagicMock()
@@ -915,11 +929,12 @@ class TestRunIntakeCoreMocked:
     @patch("app.activities.intake.anthropic.AsyncAnthropic")
     def test_forces_summary_on_final_turn(self, mock_client_cls):
         """Server-side enforcement: is_summary forced True when turn >= max_turns."""
-        mock_resp = self._mock_response(
-            brief_data={"room_type": "living room", "domains_covered": ["style"]},
-            response_data={
+        # Model picks interview on the final turn (shouldn't, but safety net catches it)
+        mock_resp = self._mock_skill_response(
+            "interview_client",
+            {
                 "message": "What about lighting?",
-                "is_summary": False,  # model forgot to summarize
+                "domains_covered": ["style"],
             },
         )
         mock_instance = MagicMock()
@@ -943,19 +958,16 @@ class TestRunIntakeCoreMocked:
         )
         result = asyncio.run(_run_intake_core(input_data))
 
-        # Model said is_summary=False, but server forces True on turn 4
+        # Model used interview, but server forces is_summary=True on turn 4
         assert result.is_summary is True
 
     @patch.dict("os.environ", {"ANTHROPIC_API_KEY": "test-key"})
     @patch("app.activities.intake.anthropic.AsyncAnthropic")
     def test_no_forced_summary_before_max_turns(self, mock_client_cls):
         """Summary should NOT be forced when turns remain."""
-        mock_resp = self._mock_response(
-            brief_data={"room_type": "living room"},
-            response_data={
-                "message": "Tell me about colors.",
-                "is_summary": False,
-            },
+        mock_resp = self._mock_skill_response(
+            "interview_client",
+            {"message": "Tell me about colors."},
         )
         mock_instance = MagicMock()
         mock_instance.messages = MagicMock()
@@ -966,6 +978,48 @@ class TestRunIntakeCoreMocked:
         result = asyncio.run(_run_intake_core(self._make_input()))
 
         assert result.is_summary is False
+
+    @patch.dict("os.environ", {"ANTHROPIC_API_KEY": "test-key"})
+    @patch("app.activities.intake.anthropic.AsyncAnthropic")
+    def test_forced_summary_uses_previous_brief_fallback(self, mock_client_cls):
+        """When forced summary but no brief from this turn, use previous_brief."""
+        # Model calls interview (no partial_brief_update) on the final turn
+        mock_resp = self._mock_skill_response(
+            "interview_client",
+            {"message": "What about lighting?"},
+        )
+        mock_instance = MagicMock()
+        mock_instance.messages = MagicMock()
+        mock_instance.messages.create = AsyncMock(return_value=mock_resp)
+        mock_client_cls.return_value = mock_instance
+
+        # Turn 4 of quick mode, with previous_brief accumulated from earlier turns
+        input_data = IntakeChatInput(
+            mode="quick",
+            project_context={
+                "room_photos": [],
+                "previous_brief": {
+                    "room_type": "bedroom",
+                    "style_profile": {"mood": "calm retreat"},
+                    "pain_points": ["too dark"],
+                },
+            },
+            conversation_history=[
+                ChatMessage(role="user", content="Bedroom"),
+                ChatMessage(role="assistant", content="Nice!"),
+                ChatMessage(role="user", content="Calm"),
+                ChatMessage(role="assistant", content="Great!"),
+                ChatMessage(role="user", content="Very dark"),
+                ChatMessage(role="assistant", content="I see!"),
+            ],
+            user_message="Yes warm lighting",
+        )
+        result = asyncio.run(_run_intake_core(input_data))
+
+        # Forced summary AND previous_brief used as fallback
+        assert result.is_summary is True
+        assert result.partial_brief is not None
+        assert result.partial_brief.room_type == "bedroom"
 
 
 # === Error Handler Tests ===

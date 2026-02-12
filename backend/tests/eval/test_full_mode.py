@@ -8,7 +8,7 @@ Tests verify:
 5. Agent handles ~10 turn conversations gracefully
 
 ALL tests require ANTHROPIC_API_KEY.
-Run with: .venv/bin/python -m pytest tests/test_intake_full_mode.py -x -v -m integration
+Run with: .venv/bin/python -m pytest tests/eval/test_full_mode.py -x -v -m integration
 """
 
 from __future__ import annotations

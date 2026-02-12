@@ -10,7 +10,7 @@ intelligence quality. They test that the intake agent:
 5. Generates appropriate quick-reply options
 
 ALL tests are marked @pytest.mark.integration — they require ANTHROPIC_API_KEY.
-Run with: .venv/bin/python -m pytest tests/test_intake_golden.py -x -v -m integration
+Run with: .venv/bin/python -m pytest tests/eval/test_golden.py -x -v -m integration
 
 The behavior being tested IS Claude's response quality, so mocking
 would defeat the purpose.

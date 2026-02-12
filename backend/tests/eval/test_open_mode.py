@@ -8,7 +8,7 @@ Tests verify:
 5. Agent gracefully handles varied conversation styles
 
 ALL tests require ANTHROPIC_API_KEY.
-Run with: .venv/bin/python -m pytest tests/test_intake_open_mode.py -x -v -m integration
+Run with: .venv/bin/python -m pytest tests/eval/test_open_mode.py -x -v -m integration
 """
 
 from __future__ import annotations

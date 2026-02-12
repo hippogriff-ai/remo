@@ -148,6 +148,86 @@ def evaluate_brief(
     return result
 
 
+_CONVERSATION_CRITERIA = """\
+1. **Probing Quality** (0-5): Did the agent probe beneath surface answers? \
+Did follow-ups diagnose root causes rather than accepting vague responses? \
+0 = accepted all surface answers. 5 = every vague answer got a probing follow-up.
+
+2. **Acknowledgment** (0-5): Did the agent reference specific things the user said? \
+Did it show it was listening, not running a script? \
+0 = generic responses ignoring user input. 5 = every response referenced user's words.
+
+3. **Adaptation** (0-5): Did the agent skip domains already covered? \
+Did it adjust question order based on what was learned? \
+0 = rigid scripted order. 5 = fully adaptive to user's answers.
+
+4. **Translation Visibility** (0-5): Did the agent show design translations \
+so the user could correct them? E.g., "I'm interpreting 'cozy' as warm 2700K \
+lighting with layered textiles — does that match?" \
+0 = no translations shown. 5 = translations shown and confirmed.
+
+5. **Conversational Flow** (0-5): Did the conversation feel natural? \
+Was pacing appropriate? Did transitions between topics feel smooth? \
+0 = robotic or jarring. 5 = natural and engaging."""
+
+_CONVERSATION_RESPONSE_FORMAT = """\
+You MUST respond with EXACTLY this JSON format (no markdown, just JSON):
+{{
+  "probing_quality": <0-5>,
+  "acknowledgment": <0-5>,
+  "adaptation": <0-5>,
+  "translation_visibility": <0-5>,
+  "conversational_flow": <0-5>,
+  "total": <sum of above, 0-25>,
+  "notes": "<1-2 sentences explaining the score>"
+}}"""
+
+_CONVERSATION_PROMPT = (
+    "You are an expert evaluator of design consultation conversations. "
+    "Score this conversation's quality against the rubric below.\n\n"
+    "## Conversation transcript:\n{transcript}\n\n"
+    f"## Rubric:\n{_CONVERSATION_CRITERIA}\n\n"
+    f"## Response format:\n{_CONVERSATION_RESPONSE_FORMAT}"
+)
+
+
+def evaluate_conversation_quality(
+    conversation: list[dict[str, str]],
+) -> dict[str, Any]:
+    """Score conversation quality (supplementary signal, not pass/fail gate).
+
+    5 criteria x 5 pts = 25 total:
+    - Probing Quality, Acknowledgment, Adaptation,
+      Translation Visibility, Conversational Flow
+
+    Returns:
+        Dict with per-criterion scores, total, and notes.
+    """
+    api_key = os.environ.get("ANTHROPIC_API_KEY")
+    if not api_key:
+        raise RuntimeError("ANTHROPIC_API_KEY not set")
+
+    transcript = format_transcript(conversation)
+    prompt = _CONVERSATION_PROMPT.format(transcript=transcript)
+
+    client = anthropic.Anthropic(api_key=api_key)
+    response = client.messages.create(
+        model=EVAL_MODEL,
+        max_tokens=EVAL_MAX_TOKENS,
+        messages=[{"role": "user", "content": prompt}],
+    )
+
+    text = ""
+    for block in response.content:
+        if hasattr(block, "text"):
+            text += block.text
+
+    result = _extract_json(text)
+    if not result:
+        raise ValueError(f"Could not extract JSON from conversation eval: {text[:200]}")
+    return result
+
+
 def score_tag(total: int) -> str:
     """Return the quality tag for a given total score."""
     if total >= 85:
