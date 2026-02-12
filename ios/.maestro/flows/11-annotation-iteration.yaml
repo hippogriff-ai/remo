@@ -22,6 +22,7 @@ appId: com.hippogriff.remo
 - assertVisible: "Design Chat"
 - tapOn:
     id: "chat_skip"
+- tapOn: "Skip"
 - assertVisible: "Choose a Design"
 - tapOn: "Modern Minimalist"
 - tapOn:

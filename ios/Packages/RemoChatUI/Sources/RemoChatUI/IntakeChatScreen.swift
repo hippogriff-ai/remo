@@ -10,6 +10,7 @@ public struct IntakeChatScreen: View {
 
     @State private var inputText = ""
     @State private var isSending = false
+    @State private var showSkipConfirmation = false
     @State private var errorMessage: String?
 
     public init(projectState: ProjectState, client: any WorkflowClientProtocol) {
@@ -96,12 +97,20 @@ public struct IntakeChatScreen: View {
             if projectState.inspirationPhotoCount > 0 {
                 ToolbarItem(placement: .primaryAction) {
                     Button("Skip") {
-                        Task { await skipIntake() }
+                        showSkipConfirmation = true
                     }
                     .font(.subheadline)
                     .accessibilityIdentifier("chat_skip")
                 }
             }
+        }
+        .confirmationDialog("Skip Intake?", isPresented: $showSkipConfirmation, titleVisibility: .visible) {
+            Button("Skip", role: .destructive) {
+                Task { await skipIntake() }
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("Skipping will use your inspiration photos without additional style preferences. This may reduce design quality.")
         }
         .task {
             if projectState.chatMessages.isEmpty { await startConversation() }

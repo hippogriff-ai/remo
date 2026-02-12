@@ -20,10 +20,11 @@ appId: com.hippogriff.remo
 - tapOn:
     id: "scan_skip"
 - tapOn: "Skip"
-# Skip intake to get to selection
+# Skip intake to get to selection (confirm destructive dialog)
 - assertVisible: "Design Chat"
 - tapOn:
     id: "chat_skip"
+- tapOn: "Skip"
 - assertVisible: "Choose a Design"
 - takeScreenshot: 10-start-over-before
 # Tap "Start Over" — triggers confirmation dialog

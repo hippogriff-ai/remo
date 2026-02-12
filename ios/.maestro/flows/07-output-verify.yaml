@@ -9,9 +9,10 @@ appId: com.hippogriff.remo
 - assertVisible:
     id: "output_shopping"
 # Open shopping list
-- tapOn:
-    id: "output_shopping"
-- assertVisible: "Shopping List"
+- tapOn: "View Shopping List"
+- extendedWaitUntil:
+    visible: "Shopping List"
+    timeout: 5000
 - takeScreenshot: 07-output-shopping
 # Dismiss shopping list
 - back

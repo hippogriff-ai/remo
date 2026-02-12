@@ -1,4 +1,7 @@
 import SwiftUI
+#if os(iOS)
+import UIKit
+#endif
 import RemoModels
 import RemoNetworking
 import RemoShoppingList
@@ -11,6 +14,8 @@ public struct OutputScreen: View {
     @State private var showShoppingList = false
     @State private var showRevisionHistory = false
     @State private var savedToPhotos = false
+    @State private var isSaving = false
+    @State private var saveError: String?
     @State private var zoomScale: CGFloat = 1.0
 
     public init(projectState: ProjectState, client: any WorkflowClientProtocol) {
@@ -19,76 +24,74 @@ public struct OutputScreen: View {
     }
 
     public var body: some View {
-        ScrollView {
-            VStack(spacing: 20) {
-                // Final design image (pinch to zoom)
-                DesignImageView(projectState.currentImage)
-                    .aspectRatio(4/3, contentMode: .fit)
-                    .scaleEffect(zoomScale)
-                    .gesture(
-                        MagnifyGesture()
-                            .onChanged { value in
-                                zoomScale = max(1.0, min(3.0, value.magnification))
-                            }
-                            .onEnded { _ in
-                                withAnimation(.spring(response: 0.3)) {
-                                    zoomScale = 1.0
-                                }
-                            }
-                    )
-                    .padding(.horizontal)
-
-                Text("Your Design is Ready!")
-                    .font(.title2.bold())
-
-                if projectState.iterationCount > 0 {
-                    Button {
-                        showRevisionHistory = true
-                    } label: {
-                        Label("\(projectState.iterationCount) revision\(projectState.iterationCount == 1 ? "" : "s")", systemImage: "clock.arrow.circlepath")
-                            .font(.caption)
-                    }
-                }
-
-                // Action buttons
-                VStack(spacing: 12) {
-                    Button {
-                        saveToPhotos()
-                    } label: {
-                        Label(
-                            savedToPhotos ? "Saved!" : "Save to Photos",
-                            systemImage: savedToPhotos ? "checkmark.circle.fill" : "square.and.arrow.down"
-                        )
-                        .frame(maxWidth: .infinity)
-                    }
-                    .buttonStyle(.borderedProminent)
-                    .disabled(savedToPhotos)
-                    .accessibilityLabel(savedToPhotos ? "Design saved to Photos" : "Save to Photos")
-                    .accessibilityIdentifier("output_save")
-
-                    if let imageUrl = projectState.currentImage, let url = URL(string: imageUrl) {
-                        ShareLink(item: url) {
-                            Label("Share Design", systemImage: "square.and.arrow.up")
-                                .frame(maxWidth: .infinity)
+        // Note: Using VStack instead of ScrollView because Maestro's tap simulation
+        // doesn't reliably trigger SwiftUI Button actions inside a ScrollView on iOS 18.
+        VStack(spacing: 20) {
+            // Final design image (pinch to zoom)
+            DesignImageView(projectState.currentImage)
+                .aspectRatio(4/3, contentMode: .fit)
+                .scaleEffect(zoomScale)
+                .gesture(
+                    MagnifyGesture()
+                        .onChanged { value in
+                            zoomScale = max(1.0, min(3.0, value.magnification))
                         }
-                        .buttonStyle(.bordered)
-                        .accessibilityLabel("Share design image")
-                        .accessibilityIdentifier("output_share")
-                    }
+                        .onEnded { _ in
+                            withAnimation(.spring(response: 0.3)) {
+                                zoomScale = 1.0
+                            }
+                        }
+                )
+                .padding(.horizontal)
 
-                    Button {
-                        showShoppingList = true
-                    } label: {
-                        Label("View Shopping List", systemImage: "cart")
+            Text("Your Design is Ready!")
+                .font(.title2.bold())
+
+            if projectState.iterationCount > 0 {
+                Button {
+                    showRevisionHistory = true
+                } label: {
+                    Label("\(projectState.iterationCount) revision\(projectState.iterationCount == 1 ? "" : "s")", systemImage: "clock.arrow.circlepath")
+                        .font(.caption)
+                }
+            }
+
+            // Action buttons
+            VStack(spacing: 12) {
+                Button {
+                    Task { await saveToPhotos() }
+                } label: {
+                    Label(
+                        savedToPhotos ? "Saved!" : (isSaving ? "Saving..." : "Save to Photos"),
+                        systemImage: savedToPhotos ? "checkmark.circle.fill" : "square.and.arrow.down"
+                    )
+                    .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.borderedProminent)
+                .disabled(savedToPhotos || isSaving)
+                .accessibilityLabel(savedToPhotos ? "Design saved to Photos" : "Save to Photos")
+                .accessibilityIdentifier("output_save")
+
+                if let imageUrl = projectState.currentImage, let url = URL(string: imageUrl) {
+                    ShareLink(item: url) {
+                        Label("Share Design", systemImage: "square.and.arrow.up")
                             .frame(maxWidth: .infinity)
                     }
                     .buttonStyle(.bordered)
-                    .accessibilityLabel("View Shopping List")
-                    .accessibilityHint("Browse matching products for your design")
-                    .accessibilityIdentifier("output_shopping")
+                    .accessibilityLabel("Share design image")
+                    .accessibilityIdentifier("output_share")
                 }
-                .padding(.horizontal)
+
+                Button {
+                    showShoppingList = true
+                } label: {
+                    Label("View Shopping List", systemImage: "cart")
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.bordered)
+                .accessibilityIdentifier("output_shopping")
             }
+            .padding(.horizontal)
         }
         .navigationTitle("Complete")
         #if os(iOS)
@@ -104,11 +107,34 @@ public struct OutputScreen: View {
                 RevisionHistoryView(revisions: projectState.revisionHistory)
             }
         }
+        .alert("Save Error", isPresented: .init(get: { saveError != nil }, set: { if !$0 { saveError = nil } })) {
+            Button("OK") { saveError = nil }
+        } message: {
+            Text(saveError ?? "")
+        }
     }
 
-    private func saveToPhotos() {
-        // In P2: save actual image via UIImageWriteToSavedPhotosAlbum
-        savedToPhotos = true
+    private func saveToPhotos() async {
+        guard let imageUrlString = projectState.currentImage,
+              let url = URL(string: imageUrlString) else {
+            saveError = "No image available to save"
+            return
+        }
+        isSaving = true
+        defer { isSaving = false }
+        do {
+            let (data, _) = try await URLSession.shared.data(from: url)
+            #if os(iOS)
+            guard let image = UIImage(data: data) else {
+                saveError = "Could not decode image"
+                return
+            }
+            UIImageWriteToSavedPhotosAlbum(image, nil, nil, nil)
+            #endif
+            savedToPhotos = true
+        } catch {
+            saveError = "Failed to save: \(error.localizedDescription)"
+        }
     }
 }
 

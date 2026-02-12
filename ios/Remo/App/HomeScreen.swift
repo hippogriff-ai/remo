@@ -134,6 +134,10 @@ struct HomeScreen: View {
             guard let index = projects.firstIndex(where: { $0.id == projectId }) else { continue }
             if let state, !state.step.isEmpty {
                 projects[index].state.apply(state)
+                // Remove fully completed projects from the active list
+                if state.step == ProjectStep.completed.rawValue {
+                    purgedIds.insert(projectId)
+                }
             } else if state == nil {
                 purgedIds.insert(projectId)
             }
