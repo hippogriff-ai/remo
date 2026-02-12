@@ -205,7 +205,10 @@ public struct PhotoUploadScreen: View {
             do {
                 try await client.deletePhoto(projectId: projectId, photoId: removedPhoto.photoId)
             } catch is CancellationError {
-                // Ignore
+                // Restore photo — task cancelled before server confirmed deletion
+                withAnimation(.easeOut(duration: 0.2)) {
+                    projectState.photos.append(removedPhoto)
+                }
             } catch {
                 // Restore photo on failure
                 withAnimation(.easeOut(duration: 0.2)) {

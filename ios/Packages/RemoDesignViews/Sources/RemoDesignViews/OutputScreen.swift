@@ -1,6 +1,7 @@
 import SwiftUI
 #if os(iOS)
 import UIKit
+import Photos
 #endif
 import RemoModels
 import RemoNetworking
@@ -129,7 +130,9 @@ public struct OutputScreen: View {
                 saveError = "Could not decode image"
                 return
             }
-            UIImageWriteToSavedPhotosAlbum(image, nil, nil, nil)
+            try await PHPhotoLibrary.shared().performChanges {
+                PHAssetChangeRequest.creationRequestForAsset(from: image)
+            }
             #endif
             savedToPhotos = true
         } catch {
