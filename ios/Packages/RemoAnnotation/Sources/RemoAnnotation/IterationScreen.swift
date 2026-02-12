@@ -140,7 +140,7 @@ public struct IterationScreen: View {
     private func regionEditorRow(at index: Int) -> some View {
         if index < regions.count {
             let color = regionColor(for: index)
-            RegionEditor(region: $regions[index], color: color, onDelete: {
+            RegionEditor(region: $regions[index], displayNumber: index + 1, color: color, onDelete: {
                 snapshotRegions()
                 withAnimation(.easeOut(duration: 0.2)) {
                     guard index < regions.count else { return }
@@ -456,6 +456,7 @@ func computeSnapGuides(
 
 struct RegionEditor: View {
     @Binding var region: AnnotationRegion
+    let displayNumber: Int
     let color: Color
     let onDelete: () -> Void
 
@@ -465,7 +466,7 @@ struct RegionEditor: View {
                 .fill(color)
                 .frame(width: 28, height: 28)
                 .overlay {
-                    Text("\(region.regionId)")
+                    Text("\(displayNumber)")
                         .font(.caption.bold())
                         .foregroundStyle(.white)
                 }

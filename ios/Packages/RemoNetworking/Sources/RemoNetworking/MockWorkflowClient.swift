@@ -112,6 +112,7 @@ public actor MockWorkflowClient: WorkflowClientProtocol {
 
     public func startIntake(projectId: String, mode: String) async throws -> IntakeChatOutput {
         try await simulateDelay()
+        guard states[projectId] != nil else { throw notFound() }
         intakeMessages[projectId] = []
         return IntakeChatOutput(
             agentMessage: "Welcome! Let's design your perfect room. What type of room are we working with?",
