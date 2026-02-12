@@ -34,8 +34,9 @@ Create a refined, team-reviewed implementation plan for the Remo iOS app MVP. Ou
 ## State
 - Done: Product spec, all plans, T0 P0 #2-#8 + #10 (all P0 complete), P1 #11-#12, purge, worker, validation, migration, error handling hardened, validation.py silent failure fixes
 - Done: **T0 code migration complete** — lasso/inpaint/regen → annotation-based edit system. All 13+ files updated (contracts, mock_stubs, worker, workflow, API routes, db, migration, 6 test files). PR self-review complete — added ValueError guards for unknown action types in workflow, mock API sets chat_history_key on revision. 320 tests pass, 0 warnings, ruff clean, format clean, mypy clean.
-- Now: Ready to commit.
-- Next: P2 #13 (wire real activities into workflow).
+- Done: **T3 ALL PHASES COMPLETE (P1 #1-11, P2 #12, P3 #13)** — intake system prompt with full design intelligence, `run_intake_chat` activity (quick/full/open modes), intake eval harness, `generate_shopping_list` activity (5-step pipeline), golden test suite (19 integration tests across 3 modes). 101 total T3 tests (82 unit + 19 integration). 404 total tests pass. See `CONTINUITY-T3.md`.
+- Now: T3 done — awaiting integration test validation (needs ANTHROPIC_API_KEY). T0 ready to commit.
+- Next: T0 P2 #13 (wire real activities).
 
 ## Open Questions
 - Gemini annotation targeting quality pass/fail? (P0 end)
