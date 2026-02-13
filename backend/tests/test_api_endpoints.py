@@ -486,17 +486,17 @@ class TestPhotoDelete:
 
     @pytest.mark.asyncio
     async def test_delete_photo_during_scan_step(self, client, project_id):
-        """Deleting a photo during scan step succeeds and reverses to photos if needed."""
+        """Deleting a room photo during scan step succeeds; step stays at scan (forward-only)."""
         _mock_states[project_id].step = "scan"
         _mock_states[project_id].photos = [
             PhotoData(photo_id="room-1", storage_key="s3://test/room1.jpg", photo_type="room"),
             PhotoData(photo_id="room-2", storage_key="s3://test/room2.jpg", photo_type="room"),
         ]
-        # Delete one room photo — room count drops below 2, step should reverse
+        # Delete one room photo — step stays at scan (matches Temporal forward-only behavior)
         resp = await client.delete(f"/api/v1/projects/{project_id}/photos/room-2")
         assert resp.status_code == 204
         state = (await client.get(f"/api/v1/projects/{project_id}")).json()
-        assert state["step"] == "photos"
+        assert state["step"] == "scan"
         assert len(state["photos"]) == 1
 
     @pytest.mark.asyncio
@@ -901,6 +901,59 @@ class TestIntakeEndpoints:
         assert resp.status_code == 409
         assert resp.json()["error"] == "wrong_step"
         assert "start_intake" in resp.json()["message"]
+
+    @pytest.mark.asyncio
+    async def test_session_recovery_from_client_history(self, client, project_id):
+        """Intake session recovers from client-provided history after API restart."""
+        _mock_states[project_id].step = "intake"
+        # Start and send first message normally
+        await client.post(
+            f"/api/v1/projects/{project_id}/intake/start",
+            json={"mode": "quick"},
+        )
+        resp1 = await client.post(
+            f"/api/v1/projects/{project_id}/intake/message",
+            json={"message": "bedroom"},
+        )
+        assert resp1.status_code == 200
+
+        # Simulate API restart: clear in-memory sessions
+        _intake_sessions.pop(project_id, None)
+
+        # Send next message with client-provided history (iOS resends conversation)
+        resp2 = await client.post(
+            f"/api/v1/projects/{project_id}/intake/message",
+            json={
+                "message": "modern",
+                "conversation_history": [
+                    {"role": "user", "content": "bedroom"},
+                    {"role": "assistant", "content": resp1.json()["agent_message"]},
+                ],
+                "mode": "quick",
+            },
+        )
+        assert resp2.status_code == 200
+        body = resp2.json()
+        # Should be step 3 (open-ended), not step 1 (room type)
+        assert body["progress"] == "Question 3 of 3"
+
+    @pytest.mark.asyncio
+    async def test_session_lost_without_history_returns_409(self, client, project_id):
+        """When session is lost and client sends no history, 409 is returned."""
+        _mock_states[project_id].step = "intake"
+        await client.post(
+            f"/api/v1/projects/{project_id}/intake/start",
+            json={"mode": "quick"},
+        )
+        # Simulate API restart
+        _intake_sessions.pop(project_id, None)
+
+        resp = await client.post(
+            f"/api/v1/projects/{project_id}/intake/message",
+            json={"message": "bedroom"},
+        )
+        assert resp.status_code == 409
+        assert resp.json()["error"] == "wrong_step"
 
 
 class TestMockGenerationStep:
@@ -1447,8 +1500,8 @@ class TestIterationEndpoints:
             json={"feedback": "darker"},
         )
         assert resp.status_code == 422
-        assert resp.json()["error"] == "feedback_too_short"
-        assert "10 characters" in resp.json()["message"]
+        assert resp.json()["error"] == "validation_error"
+        assert "10" in resp.json()["message"]
 
     @pytest.mark.asyncio
     async def test_exact_ten_char_feedback_accepted(self, client, project_id):
@@ -2522,6 +2575,225 @@ class TestFullFlow:
         assert body["shopping_list"] is not None
         assert len(body["shopping_list"]["items"]) >= 1
 
+    @pytest.mark.asyncio
+    @patch("app.api.routes.projects.validate_photo", return_value=_VALID)
+    async def test_error_recovery_flow(self, _mock_val, client):
+        """Full flow: create → progress → error → retry → complete.
+
+        Verifies that an error during generation doesn't corrupt the project
+        state and that retrying allows the flow to complete successfully.
+        Exercises the mock state machine's error recovery path.
+        """
+        from app.models.contracts import WorkflowError
+
+        # 1. Create project and upload photos
+        resp = await client.post("/api/v1/projects", json={"device_fingerprint": "test-err"})
+        pid = resp.json()["project_id"]
+        for i in range(2):
+            await client.post(
+                f"/api/v1/projects/{pid}/photos",
+                files={"file": (f"room_{i}.jpg", io.BytesIO(b"img"), "image/jpeg")},
+            )
+
+        # 2. Skip scan, confirm intake → generation
+        await client.post(f"/api/v1/projects/{pid}/scan/skip")
+        await client.post(f"/api/v1/projects/{pid}/intake/start", json={"mode": "quick"})
+        await client.post(
+            f"/api/v1/projects/{pid}/intake/confirm",
+            json={"brief": {"room_type": "bedroom"}},
+        )
+        body = (await client.get(f"/api/v1/projects/{pid}")).json()
+        assert body["step"] == "selection"  # delay=0 → instant completion
+
+        # 3. Select option → iteration
+        await client.post(f"/api/v1/projects/{pid}/select", json={"index": 0})
+
+        # 4. Inject an error (simulate activity failure)
+        _mock_states[pid].error = WorkflowError(
+            message="Generation failed: GPU timeout",
+            step="iteration",
+            retryable=True,
+        )
+
+        # 5. Verify error blocks approval
+        resp = await client.post(f"/api/v1/projects/{pid}/approve")
+        assert resp.status_code == 409
+        assert resp.json()["error"] == "active_error"
+
+        # 6. Verify error visible in project state
+        body = (await client.get(f"/api/v1/projects/{pid}")).json()
+        assert body["error"] is not None
+        assert body["error"]["retryable"] is True
+
+        # 7. Retry clears the error
+        resp = await client.post(f"/api/v1/projects/{pid}/retry")
+        assert resp.status_code == 200
+        body = (await client.get(f"/api/v1/projects/{pid}")).json()
+        assert body["error"] is None
+        assert body["step"] == "iteration"  # step preserved after retry
+
+        # 8. Approve succeeds after error cleared
+        resp = await client.post(f"/api/v1/projects/{pid}/approve")
+        assert resp.status_code == 200
+        body = (await client.get(f"/api/v1/projects/{pid}")).json()
+        assert body["step"] == "completed"
+        assert body["approved"] is True
+        assert body["shopping_list"] is not None
+
+        # 9. All prior data preserved through error recovery
+        assert len(body["photos"]) == 2
+        assert body["selected_option"] == 0
+
+    @pytest.mark.asyncio
+    @patch("app.api.routes.projects.validate_photo", return_value=_VALID)
+    async def test_start_over_resumption_flow(self, _mock_val, client):
+        """Full flow: create → progress to iteration → start_over → re-progress → complete.
+
+        Verifies that start_over correctly resets design state while preserving
+        photos, and that the user can complete a second pass through the entire
+        flow without any leftover state from the first attempt.
+        """
+        # 1. Create project and upload photos
+        resp = await client.post("/api/v1/projects", json={"device_fingerprint": "test-restart"})
+        pid = resp.json()["project_id"]
+        for i in range(2):
+            await client.post(
+                f"/api/v1/projects/{pid}/photos",
+                files={"file": (f"room_{i}.jpg", io.BytesIO(b"img"), "image/jpeg")},
+            )
+
+        # 2. First pass: scan → intake → confirm → select → iterate
+        await client.post(f"/api/v1/projects/{pid}/scan/skip")
+        await client.post(f"/api/v1/projects/{pid}/intake/start", json={"mode": "quick"})
+        await client.post(
+            f"/api/v1/projects/{pid}/intake/confirm",
+            json={"brief": {"room_type": "living room"}},
+        )
+        await client.post(f"/api/v1/projects/{pid}/select", json={"index": 1})
+        await client.post(
+            f"/api/v1/projects/{pid}/iterate/feedback",
+            json={"feedback": "Make the lighting warmer and add more plants"},
+        )
+
+        # Verify first pass state
+        body = (await client.get(f"/api/v1/projects/{pid}")).json()
+        assert body["step"] == "iteration"
+        assert body["iteration_count"] == 1
+        assert body["selected_option"] == 1
+
+        # 3. Start over — resets design state, preserves photos
+        resp = await client.post(f"/api/v1/projects/{pid}/start-over")
+        assert resp.status_code == 200
+
+        body = (await client.get(f"/api/v1/projects/{pid}")).json()
+        assert body["step"] == "intake"
+        assert body["iteration_count"] == 0
+        assert body["selected_option"] is None
+        assert body["generated_options"] == []
+        assert body["revision_history"] == []
+        assert body["design_brief"] is None
+        assert body["shopping_list"] is None
+        # Photos preserved
+        assert len(body["photos"]) == 2
+
+        # 4. Second pass: intake → confirm → select → approve → completed
+        await client.post(f"/api/v1/projects/{pid}/intake/start", json={"mode": "quick"})
+        await client.post(
+            f"/api/v1/projects/{pid}/intake/confirm",
+            json={"brief": {"room_type": "bedroom", "pain_points": ["too small"]}},
+        )
+        # Select different option this time
+        await client.post(f"/api/v1/projects/{pid}/select", json={"index": 0})
+        await client.post(f"/api/v1/projects/{pid}/approve")
+
+        # 5. Verify second pass completed cleanly
+        body = (await client.get(f"/api/v1/projects/{pid}")).json()
+        assert body["step"] == "completed"
+        assert body["approved"] is True
+        assert body["selected_option"] == 0  # different from first pass
+        assert body["design_brief"]["room_type"] == "bedroom"
+        assert body["iteration_count"] == 0  # no iterations in second pass
+        assert body["revision_history"] == []
+        assert body["shopping_list"] is not None
+        assert len(body["photos"]) == 2  # still preserved
+
+    @pytest.mark.asyncio
+    @patch("app.api.routes.projects.validate_photo", return_value=_VALID)
+    async def test_iteration_cap_then_complete_flow(self, _mock_val, client):
+        """Full flow: create → progress → 5 iterations → auto-approval → approve → complete.
+
+        Verifies the entire journey when a user hits the iteration cap: the step
+        auto-transitions to 'approval', then the user can approve and receive
+        a shopping list. Mixed iteration types (annotation + text feedback) share
+        the same 5-count pool.
+        """
+        # 1. Create project and progress to iteration
+        resp = await client.post("/api/v1/projects", json={"device_fingerprint": "test-cap"})
+        pid = resp.json()["project_id"]
+        for i in range(2):
+            await client.post(
+                f"/api/v1/projects/{pid}/photos",
+                files={"file": (f"room_{i}.jpg", io.BytesIO(b"img"), "image/jpeg")},
+            )
+        await client.post(f"/api/v1/projects/{pid}/scan/skip")
+        await client.post(f"/api/v1/projects/{pid}/intake/start", json={"mode": "quick"})
+        await client.post(
+            f"/api/v1/projects/{pid}/intake/confirm",
+            json={"brief": {"room_type": "living room"}},
+        )
+        await client.post(f"/api/v1/projects/{pid}/select", json={"index": 0})
+
+        # 2. Do 5 mixed iterations: 3 text feedback + 2 annotation
+        for i in range(3):
+            resp = await client.post(
+                f"/api/v1/projects/{pid}/iterate/feedback",
+                json={"feedback": f"Text feedback round {i + 1} with enough detail"},
+            )
+            assert resp.status_code == 200
+
+        for i in range(2):
+            resp = await client.post(
+                f"/api/v1/projects/{pid}/iterate/annotate",
+                json={
+                    "annotations": [
+                        {
+                            "region_id": 1,
+                            "center_x": 0.3 + i * 0.2,
+                            "center_y": 0.5,
+                            "radius": 0.1,
+                            "instruction": f"Annotation edit round {i + 4} with detail",
+                        }
+                    ]
+                },
+            )
+            assert resp.status_code == 200
+
+        # 3. Verify auto-transition to approval
+        body = (await client.get(f"/api/v1/projects/{pid}")).json()
+        assert body["step"] == "approval"
+        assert body["iteration_count"] == 5
+        assert len(body["revision_history"]) == 5
+        # Verify mixed types
+        types = [r["type"] for r in body["revision_history"]]
+        assert types == ["feedback", "feedback", "feedback", "annotation", "annotation"]
+
+        # 4. Further iterations blocked
+        resp = await client.post(
+            f"/api/v1/projects/{pid}/iterate/feedback",
+            json={"feedback": "This should be blocked by the iteration cap"},
+        )
+        assert resp.status_code == 409
+
+        # 5. Approve from forced-approval step
+        resp = await client.post(f"/api/v1/projects/{pid}/approve")
+        assert resp.status_code == 200
+
+        body = (await client.get(f"/api/v1/projects/{pid}")).json()
+        assert body["step"] == "completed"
+        assert body["shopping_list"] is not None
+        assert body["approved"] is True
+        assert len(body["photos"]) == 2
+
 
 class TestRealIntakeWiring:
     """INT-2: Verify real intake agent wiring via _real_intake_message.
@@ -2546,6 +2818,10 @@ class TestRealIntakeWiring:
         with (
             patch.object(_projects_mod.settings, "use_mock_activities", False),
             patch("app.activities.intake._run_intake_core", mock_core),
+            patch(
+                "app.utils.r2.generate_presigned_url",
+                side_effect=lambda key: f"https://r2.example.com/{key}",
+            ),
         ):
             yield mock_core
 
@@ -2594,10 +2870,12 @@ class TestRealIntakeWiring:
         assert call_args.user_message == "living room"
         assert call_args.conversation_history == []  # first message, no history yet
         assert call_args.project_context["room_photos"] == [
-            "photos/room-1.jpg",
-            "photos/room-2.jpg",
+            "https://r2.example.com/photos/room-1.jpg",
+            "https://r2.example.com/photos/room-2.jpg",
         ]
-        assert call_args.project_context["inspiration_photos"] == ["photos/inspo-1.jpg"]
+        assert call_args.project_context["inspiration_photos"] == [
+            "https://r2.example.com/photos/inspo-1.jpg",
+        ]
         assert len(call_args.project_context["inspiration_notes"]) == 1
         # photo_index is within inspiration photos (not all photos)
         assert call_args.project_context["inspiration_notes"][0]["photo_index"] == 0
@@ -2741,3 +3019,208 @@ class TestRealIntakeWiring:
 
         session = _intake_sessions[pid]
         assert len(session.history) == 0  # nothing appended on error
+
+
+class TestForceFailureEndpoint:
+    """POST /api/v1/debug/force-failure — error injection for E2E-11.
+
+    The endpoint has 3 branches:
+    1. Non-development environment → 403
+    2. Real activities (use_mock_activities=False) → 409
+    3. Happy path → touch sentinel file → 200
+    """
+
+    @pytest.mark.asyncio
+    async def test_force_failure_returns_200_in_dev(self, client):
+        """Happy path: arms the sentinel file in development mode."""
+        import tempfile
+        from pathlib import Path
+
+        sentinel = Path(tempfile.gettempdir()) / "remo-force-failure"
+        sentinel.unlink(missing_ok=True)
+
+        resp = await client.post("/api/v1/debug/force-failure")
+        assert resp.status_code == 200
+        assert resp.json() == {"status": "ok"}
+        assert sentinel.exists()
+
+        # Cleanup
+        sentinel.unlink(missing_ok=True)
+
+    @pytest.mark.asyncio
+    async def test_force_failure_idempotent(self, client):
+        """Calling twice doesn't fail — sentinel .touch() is idempotent."""
+        import tempfile
+        from pathlib import Path
+
+        sentinel = Path(tempfile.gettempdir()) / "remo-force-failure"
+        sentinel.unlink(missing_ok=True)
+
+        resp1 = await client.post("/api/v1/debug/force-failure")
+        resp2 = await client.post("/api/v1/debug/force-failure")
+        assert resp1.status_code == 200
+        assert resp2.status_code == 200
+
+        sentinel.unlink(missing_ok=True)
+
+    @pytest.mark.asyncio
+    async def test_force_failure_blocked_outside_development(self, client):
+        """Returns 403 when environment is not 'development'."""
+        with patch.object(_projects_mod.settings, "environment", "production"):
+            resp = await client.post("/api/v1/debug/force-failure")
+        assert resp.status_code == 403
+        assert resp.json()["error"] == "forbidden"
+
+    @pytest.mark.asyncio
+    async def test_force_failure_blocked_with_real_activities(self, client):
+        """Returns 409 when use_mock_activities is False (real AI mode)."""
+        with patch.object(_projects_mod.settings, "use_mock_activities", False):
+            resp = await client.post("/api/v1/debug/force-failure")
+        assert resp.status_code == 409
+        assert resp.json()["error"] == "not_applicable"
+
+
+class TestEdgeCases:
+    """Edge cases found by mock/Temporal parity audit."""
+
+    @pytest.mark.asyncio
+    async def test_second_scan_upload_overwrites_first(self, client, project_id):
+        """Uploading scan data a second time overwrites the first — no error.
+
+        User may rescan their room to improve accuracy. The API should
+        silently accept the new data rather than blocking the re-upload.
+        """
+        _mock_states[project_id].step = "scan"
+
+        # First scan
+        scan1 = {"room": {"width": 4.0, "length": 5.0, "height": 2.7}}
+        resp = await client.post(f"/api/v1/projects/{project_id}/scan", json=scan1)
+        assert resp.status_code == 200
+
+        # Project transitions to intake — set back to scan for re-scan
+        _mock_states[project_id].step = "scan"
+
+        # Second scan with different dimensions
+        scan2 = {"room": {"width": 6.0, "length": 8.0, "height": 3.0}}
+        resp = await client.post(f"/api/v1/projects/{project_id}/scan", json=scan2)
+        assert resp.status_code == 200
+
+        body = (await client.get(f"/api/v1/projects/{project_id}")).json()
+        # Second scan data wins
+        assert body["scan_data"]["room_dimensions"]["width_m"] == 6.0
+        assert body["scan_data"]["room_dimensions"]["length_m"] == 8.0
+
+    @pytest.mark.asyncio
+    async def test_intake_step4_returns_summary_again(self, client, project_id):
+        """Sending a 4th+ intake message returns the same summary (mock behavior).
+
+        After the 3-step mock conversation produces a summary, further messages
+        should still get a response (summary with partial brief). This is how
+        the "I want to change something" correction flow works in mock mode.
+        """
+        _mock_states[project_id].step = "intake"
+
+        await client.post(f"/api/v1/projects/{project_id}/intake/start", json={"mode": "quick"})
+        await client.post(
+            f"/api/v1/projects/{project_id}/intake/message",
+            json={"message": "living room"},
+        )
+        await client.post(
+            f"/api/v1/projects/{project_id}/intake/message",
+            json={"message": "modern"},
+        )
+        resp3 = await client.post(
+            f"/api/v1/projects/{project_id}/intake/message",
+            json={"message": "Replace the couch"},
+        )
+        assert resp3.json()["is_summary"] is True
+
+        # 4th message — still works, returns summary
+        resp4 = await client.post(
+            f"/api/v1/projects/{project_id}/intake/message",
+            json={"message": "Actually, also add more plants"},
+        )
+        assert resp4.status_code == 200
+        assert resp4.json()["is_summary"] is True
+        assert resp4.json()["partial_brief"] is not None
+
+    @pytest.mark.asyncio
+    @patch(
+        "app.api.routes.projects.validate_photo",
+        return_value=ValidatePhotoOutput(
+            passed=True,
+            failures=[],
+            messages=["OK"],
+        ),
+    )
+    async def test_delete_room_photo_during_scan_keeps_step(self, _mock_val, client, project_id):
+        """Deleting a room photo during scan keeps step at scan (forward-only).
+
+        User has 2 room photos → auto-transitions to scan → deletes 1 room photo
+        → only 1 room photo remains → step stays at "scan" because the workflow
+        state machine is forward-only (matches Temporal behavior).
+        """
+        # Upload 2 room photos to get to scan
+        for i in range(2):
+            await client.post(
+                f"/api/v1/projects/{project_id}/photos",
+                files={"file": (f"room_{i}.jpg", io.BytesIO(b"img"), "image/jpeg")},
+            )
+        assert _mock_states[project_id].step == "scan"
+        photo_ids = [p.photo_id for p in _mock_states[project_id].photos]
+        assert len(photo_ids) == 2
+
+        # Delete one room photo → step stays at scan (forward-only)
+        resp = await client.delete(f"/api/v1/projects/{project_id}/photos/{photo_ids[0]}")
+        assert resp.status_code == 204
+        body = (await client.get(f"/api/v1/projects/{project_id}")).json()
+        assert body["step"] == "scan"
+        assert len(body["photos"]) == 1
+
+    @pytest.mark.asyncio
+    @patch(
+        "app.api.routes.projects.validate_photo",
+        return_value=ValidatePhotoOutput(
+            passed=True,
+            failures=[],
+            messages=["OK"],
+        ),
+    )
+    async def test_delete_room_photo_with_inspirations_during_scan(
+        self, _mock_val, client, project_id
+    ):
+        """Deleting 1 of 2 room photos during scan keeps step at scan (forward-only).
+
+        Even though only 1 room photo remains (below the 2-photo auto-transition
+        threshold), the workflow state machine is forward-only — it never regresses.
+        This matches Temporal behavior.
+        """
+        # Upload 2 room photos
+        for i in range(2):
+            await client.post(
+                f"/api/v1/projects/{project_id}/photos",
+                files={"file": (f"room_{i}.jpg", io.BytesIO(b"img"), "image/jpeg")},
+            )
+        assert _mock_states[project_id].step == "scan"
+
+        # Add an inspiration photo during scan
+        await client.post(
+            f"/api/v1/projects/{project_id}/photos",
+            files={"file": ("inspo.jpg", io.BytesIO(b"img"), "image/jpeg")},
+            params={"photo_type": "inspiration"},
+        )
+        assert _mock_states[project_id].step == "scan"  # still in scan
+
+        # Delete one room photo — step stays at scan (forward-only)
+        room_photos = [p for p in _mock_states[project_id].photos if p.photo_type == "room"]
+        resp = await client.delete(
+            f"/api/v1/projects/{project_id}/photos/{room_photos[0].photo_id}"
+        )
+        assert resp.status_code == 204
+
+        body = (await client.get(f"/api/v1/projects/{project_id}")).json()
+        assert body["step"] == "scan"  # forward-only: step never regresses
+        # 1 room + 1 inspiration = 2 total, but only 1 room
+        assert len(body["photos"]) == 2
+        room_count = sum(1 for p in body["photos"] if p["photo_type"] == "room")
+        assert room_count == 1

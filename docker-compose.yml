@@ -18,12 +18,11 @@ services:
   temporal:
     image: temporalio/auto-setup:latest
     environment:
-      DB: postgresql
+      DB: postgres12
       DB_PORT: 5432
       POSTGRES_USER: remo
       POSTGRES_PWD: remo_dev
       POSTGRES_SEEDS: postgres
-      DYNAMIC_CONFIG_FILE_PATH: ""
     ports:
       - "7233:7233"
     depends_on:
@@ -48,6 +47,15 @@ services:
       DATABASE_URL: "postgresql+asyncpg://remo:remo_dev@postgres:5432/remo"
       TEMPORAL_ADDRESS: "temporal:7233"
       TEMPORAL_NAMESPACE: "default"
+      USE_TEMPORAL: "true"
+      USE_MOCK_ACTIVITIES: "${USE_MOCK_ACTIVITIES:-true}"
+      ANTHROPIC_API_KEY: "${ANTHROPIC_API_KEY:-}"
+      GOOGLE_AI_API_KEY: "${GOOGLE_AI_API_KEY:-}"
+      EXA_API_KEY: "${EXA_API_KEY:-}"
+      R2_ACCOUNT_ID: "${R2_ACCOUNT_ID:-}"
+      R2_ACCESS_KEY_ID: "${R2_ACCESS_KEY_ID:-}"
+      R2_SECRET_ACCESS_KEY: "${R2_SECRET_ACCESS_KEY:-}"
+      R2_BUCKET_NAME: "${R2_BUCKET_NAME:-remo-images}"
       ENVIRONMENT: "development"
     ports:
       - "8000:8000"
@@ -70,6 +78,14 @@ services:
       DATABASE_URL: "postgresql+asyncpg://remo:remo_dev@postgres:5432/remo"
       TEMPORAL_ADDRESS: "temporal:7233"
       TEMPORAL_NAMESPACE: "default"
+      USE_MOCK_ACTIVITIES: "${USE_MOCK_ACTIVITIES:-true}"
+      ANTHROPIC_API_KEY: "${ANTHROPIC_API_KEY:-}"
+      GOOGLE_AI_API_KEY: "${GOOGLE_AI_API_KEY:-}"
+      EXA_API_KEY: "${EXA_API_KEY:-}"
+      R2_ACCOUNT_ID: "${R2_ACCOUNT_ID:-}"
+      R2_ACCESS_KEY_ID: "${R2_ACCESS_KEY_ID:-}"
+      R2_SECRET_ACCESS_KEY: "${R2_SECRET_ACCESS_KEY:-}"
+      R2_BUCKET_NAME: "${R2_BUCKET_NAME:-remo-images}"
       ENVIRONMENT: "development"
     depends_on:
       postgres:

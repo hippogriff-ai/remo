@@ -481,7 +481,7 @@ def build_brief(brief_data: dict[str, Any]) -> DesignBrief:
                 )
             )
 
-    # Merge lifestyle into occupants until T0 adds a dedicated field to DesignBrief
+    # Merge lifestyle into occupants for downstream compat (generate.py reads brief.occupants)
     occupants = brief_data.get("occupants")
     lifestyle = brief_data.get("lifestyle")
     if lifestyle and occupants:
@@ -519,7 +519,7 @@ async def _run_intake_core(input: IntakeChatInput) -> IntakeChatOutput:
     """Core intake logic — callable from both the Temporal activity and tests.
 
     Server-side turn counter prevents the model from miscounting.
-    Both update_design_brief and respond_to_user tools are called every turn.
+    The model calls exactly one skill tool per turn: interview_client or draft_design_brief.
     """
     if not input.user_message.strip():
         raise ApplicationError("User message cannot be empty", non_retryable=True)

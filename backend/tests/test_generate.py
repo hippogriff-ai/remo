@@ -232,11 +232,11 @@ def _mock_gemini_response(with_image: bool = True) -> MagicMock:
 
 
 class TestDownloadImage:
-    """Tests for _download_image with mocked httpx."""
+    """Tests for download_image with mocked httpx."""
 
     @pytest.mark.asyncio
     async def test_download_success(self):
-        from app.activities.generate import _download_image
+        from app.utils.http import download_image
 
         img = _make_test_image()
         img_bytes = _image_bytes(img)
@@ -253,14 +253,14 @@ class TestDownloadImage:
             mock_client.__aexit__ = AsyncMock(return_value=False)
             mock_async_client.return_value = mock_client
 
-            result = await _download_image("https://example.com/test.png")
+            result = await download_image("https://example.com/test.png")
             assert result.size == (100, 100)
 
     @pytest.mark.asyncio
     async def test_download_404_non_retryable(self):
         from temporalio.exceptions import ApplicationError
 
-        from app.activities.generate import _download_image
+        from app.utils.http import download_image
 
         mock_response = MagicMock()
         mock_response.status_code = 404
@@ -274,14 +274,14 @@ class TestDownloadImage:
             mock_async_client.return_value = mock_client
 
             with pytest.raises(ApplicationError) as exc_info:
-                await _download_image("https://example.com/missing.png")
+                await download_image("https://example.com/missing.png")
             assert exc_info.value.non_retryable
 
     @pytest.mark.asyncio
     async def test_download_500_retryable(self):
         from temporalio.exceptions import ApplicationError
 
-        from app.activities.generate import _download_image
+        from app.utils.http import download_image
 
         mock_response = MagicMock()
         mock_response.status_code = 500
@@ -295,14 +295,14 @@ class TestDownloadImage:
             mock_async_client.return_value = mock_client
 
             with pytest.raises(ApplicationError) as exc_info:
-                await _download_image("https://example.com/error.png")
+                await download_image("https://example.com/error.png")
             assert not exc_info.value.non_retryable
 
     @pytest.mark.asyncio
     async def test_download_wrong_content_type(self):
         from temporalio.exceptions import ApplicationError
 
-        from app.activities.generate import _download_image
+        from app.utils.http import download_image
 
         mock_response = MagicMock()
         mock_response.status_code = 200
@@ -317,14 +317,14 @@ class TestDownloadImage:
             mock_async_client.return_value = mock_client
 
             with pytest.raises(ApplicationError, match="Expected image"):
-                await _download_image("https://example.com/page.html")
+                await download_image("https://example.com/page.html")
 
     @pytest.mark.asyncio
     async def test_download_timeout_retryable(self):
         import httpx
         from temporalio.exceptions import ApplicationError
 
-        from app.activities.generate import _download_image
+        from app.utils.http import download_image
 
         with patch("httpx.AsyncClient") as mock_async_client:
             mock_client = AsyncMock()
@@ -334,7 +334,7 @@ class TestDownloadImage:
             mock_async_client.return_value = mock_client
 
             with pytest.raises(ApplicationError) as exc_info:
-                await _download_image("https://example.com/slow.png")
+                await download_image("https://example.com/slow.png")
             assert not exc_info.value.non_retryable
 
 
@@ -390,6 +390,15 @@ class TestGenerateSingleOption:
 class TestGenerateDesignsActivity:
     """Tests for the full generate_designs activity with mocks."""
 
+    @pytest.fixture(autouse=True)
+    def _mock_r2_resolve(self):
+        """Mock R2 URL resolution so tests don't need real R2 credentials."""
+        with patch(
+            "app.utils.r2.generate_presigned_url",
+            side_effect=lambda key: f"https://r2.example.com/{key}",
+        ):
+            yield
+
     @pytest.mark.asyncio
     async def test_error_on_rate_limit(self):
         from temporalio.exceptions import ApplicationError
@@ -400,7 +409,7 @@ class TestGenerateDesignsActivity:
 
         with (
             patch(
-                "app.activities.generate._download_images",
+                "app.activities.generate.download_images",
                 new_callable=AsyncMock,
                 return_value=[_make_test_image()],
             ),
@@ -424,7 +433,7 @@ class TestGenerateDesignsActivity:
 
         with (
             patch(
-                "app.activities.generate._download_images",
+                "app.activities.generate.download_images",
                 new_callable=AsyncMock,
                 return_value=[_make_test_image()],
             ),
@@ -447,7 +456,7 @@ class TestGenerateDesignsActivity:
 
         with (
             patch(
-                "app.activities.generate._download_images",
+                "app.activities.generate.download_images",
                 new_callable=AsyncMock,
                 side_effect=[[_make_test_image()], []],
             ),
@@ -479,7 +488,7 @@ class TestGenerateDesignsActivity:
 
         with (
             patch(
-                "app.activities.generate._download_images",
+                "app.activities.generate.download_images",
                 new_callable=AsyncMock,
                 side_effect=[[], []],
             ),
@@ -497,7 +506,7 @@ class TestGenerateDesignsActivity:
 
         with (
             patch(
-                "app.activities.generate._download_images",
+                "app.activities.generate.download_images",
                 new_callable=AsyncMock,
                 return_value=[_make_test_image()],
             ),
@@ -520,7 +529,7 @@ class TestGenerateDesignsActivity:
 
         with (
             patch(
-                "app.activities.generate._download_images",
+                "app.activities.generate.download_images",
                 new_callable=AsyncMock,
                 side_effect=ApplicationError("custom", non_retryable=True),
             ),
@@ -530,11 +539,11 @@ class TestGenerateDesignsActivity:
 
 
 class TestDownloadImages:
-    """Tests for _download_images concurrent helper."""
+    """Tests for download_images concurrent helper."""
 
     @pytest.mark.asyncio
     async def test_downloads_multiple(self):
-        from app.activities.generate import _download_images
+        from app.utils.http import download_images
 
         img_bytes = _image_bytes(_make_test_image())
         mock_response = MagicMock()
@@ -549,14 +558,14 @@ class TestDownloadImages:
             mock_client.__aexit__ = AsyncMock(return_value=False)
             mock_async_client.return_value = mock_client
 
-            results = await _download_images(["https://a.com/1.png", "https://a.com/2.png"])
+            results = await download_images(["https://a.com/1.png", "https://a.com/2.png"])
             assert len(results) == 2
 
     @pytest.mark.asyncio
     async def test_downloads_empty_list(self):
-        from app.activities.generate import _download_images
+        from app.utils.http import download_images
 
-        results = await _download_images([])
+        results = await download_images([])
         assert results == []
 
 
@@ -611,6 +620,15 @@ class TestGenerateSingleOptionWithInspiration:
 class TestImageCountTruncation:
     """Tests for input image truncation to model limit."""
 
+    @pytest.fixture(autouse=True)
+    def _mock_r2_resolve(self):
+        """Mock R2 URL resolution so tests don't need real R2 credentials."""
+        with patch(
+            "app.utils.r2.generate_presigned_url",
+            side_effect=lambda key: f"https://r2.example.com/{key}",
+        ):
+            yield
+
     @pytest.mark.asyncio
     async def test_truncates_inspiration_when_over_limit(self):
         from app.activities.generate import generate_designs
@@ -622,7 +640,7 @@ class TestImageCountTruncation:
 
         with (
             patch(
-                "app.activities.generate._download_images",
+                "app.activities.generate.download_images",
                 new_callable=AsyncMock,
                 side_effect=lambda urls: [_make_test_image() for _ in urls],
             ),

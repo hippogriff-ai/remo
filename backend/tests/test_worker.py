@@ -21,8 +21,8 @@ class TestActivityRegistration:
     """Verify that the correct activities are registered with the worker."""
 
     def test_all_activities_registered(self) -> None:
-        """All 4 activities (3 mock + 1 real purge) should be in the ACTIVITIES list."""
-        assert len(ACTIVITIES) == 4
+        """All 5 activities (4 mock + 1 real purge) should be in the ACTIVITIES list."""
+        assert len(ACTIVITIES) == 5
 
     def test_generate_designs_registered(self) -> None:
         """generate_designs activity should be registered."""
@@ -153,12 +153,13 @@ class TestLoadActivities:
         with patch("app.worker.settings") as mock_settings:
             mock_settings.use_mock_activities = True
             activities = _load_activities()
-        assert len(activities) == 4
+        assert len(activities) == 5
         # Check all loaded activities have @activity.defn names
         names = [getattr(a, "__temporal_activity_definition").name for a in activities]
         assert "generate_designs" in names
         assert "edit_design" in names
         assert "generate_shopping_list" in names
+        assert "load_style_skill" in names
         assert "purge_project_data" in names
 
     def test_real_branch_loads_real_modules(self) -> None:
@@ -166,11 +167,12 @@ class TestLoadActivities:
         with patch("app.worker.settings") as mock_settings:
             mock_settings.use_mock_activities = False
             activities = _load_activities()
-        assert len(activities) == 4
+        assert len(activities) == 5
         names = [getattr(a, "__temporal_activity_definition").name for a in activities]
         assert "generate_designs" in names
         assert "edit_design" in names
         assert "generate_shopping_list" in names
+        assert "load_style_skill" in names
         assert "purge_project_data" in names
         # Verify these come from the real modules, not mock_stubs
         from app.activities import edit, generate, shopping
@@ -364,6 +366,89 @@ class TestConfigureLogging:
         bound = structlog.get_logger().bind()
         class_name = type(bound).__name__
         assert "Info" in class_name, f"Expected filtering at INFO, got {class_name}"
+
+    def test_log_file_creates_tee_writer(self, monkeypatch, tmp_path) -> None:
+        """PRE-3: LOG_FILE setting enables dual output (stdout + file)."""
+        import structlog
+
+        log_path = str(tmp_path / "test.log")
+        monkeypatch.setenv("LOG_FILE", log_path)
+
+        from app.config import Settings
+
+        fresh_settings = Settings()
+        monkeypatch.setattr("app.logging.settings", fresh_settings)
+
+        from app.logging import configure_logging
+
+        configure_logging()
+
+        from app.logging import _TeeWriter
+
+        config = structlog.get_config()
+        factory = config["logger_factory"]
+        # PrintLoggerFactory._file should be a _TeeWriter instance
+        assert isinstance(factory._file, _TeeWriter)
+
+    def test_tee_writer_writes_to_both_stdout_and_file(self, tmp_path, capsys) -> None:
+        """PRE-3: _TeeWriter writes to both stdout and the log file."""
+        from app.logging import _TeeWriter
+
+        log_path = str(tmp_path / "tee.log")
+        writer = _TeeWriter(log_path)
+        writer.write("hello from tee\n")
+        writer.flush()
+
+        with open(log_path) as f:
+            content = f.read()
+        assert "hello from tee" in content
+
+        captured = capsys.readouterr()
+        assert "hello from tee" in captured.out
+
+    def test_tee_writer_degrades_on_bad_path(self, capsys) -> None:
+        """PRE-3: _TeeWriter falls back to stdout-only when file path is invalid."""
+        from app.logging import _TeeWriter
+
+        writer = _TeeWriter("/nonexistent/dir/impossible.log")
+        # Should not raise — degrades gracefully
+        writer.write("still works\n")
+        writer.flush()
+        captured = capsys.readouterr()
+        assert "still works" in captured.out
+        assert "WARNING" in captured.err  # stderr warning about bad path
+
+    def test_tee_writer_disables_file_on_write_error(self, tmp_path, capsys) -> None:
+        """PRE-3: _TeeWriter disables file logging when write fails."""
+        from app.logging import _TeeWriter
+
+        log_path = str(tmp_path / "fragile.log")
+        writer = _TeeWriter(log_path)
+        writer.write("before\n")
+        # Simulate I/O error by closing the file handle
+        writer._file.close()
+        # Next write should disable file logging, not crash
+        writer.write("after\n")
+        assert writer._file is None  # file logging disabled
+        captured = capsys.readouterr()
+        assert "WARNING" in captured.err
+        assert "write failed" in captured.err.lower()
+
+    def test_tee_writer_flush_error_disables_file(self, tmp_path, capsys) -> None:
+        """PRE-3: _TeeWriter.flush() disables file logging on I/O error."""
+        from app.logging import _TeeWriter
+
+        log_path = str(tmp_path / "flush_fail.log")
+        writer = _TeeWriter(log_path)
+        writer.write("data\n")
+        assert writer._file is not None
+        # Close underlying file to trigger ValueError on flush
+        writer._file.close()
+        writer.flush()
+        assert writer._file is None  # file logging disabled after flush error
+        captured = capsys.readouterr()
+        assert "WARNING" in captured.err
+        assert "flush failed" in captured.err.lower()
 
     def test_console_renderer_in_development(self, monkeypatch) -> None:
         """Development environment uses ConsoleRenderer for human-readable output."""

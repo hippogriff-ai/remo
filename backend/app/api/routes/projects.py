@@ -1,7 +1,10 @@
 """Project API endpoints — thin proxy to Temporal workflow.
 
-Mock mode: returns realistic stub data so T1 (iOS) can develop against it.
-Real mode (P2): forwards signals/queries to Temporal.
+Mock mode (use_temporal=False): returns realistic stub data so T1 (iOS)
+can develop against it without real infrastructure.
+
+Temporal mode (use_temporal=True): forwards signals/queries to Temporal
+workflows. State lives in Temporal, not in-memory.
 """
 
 import asyncio
@@ -11,7 +14,7 @@ from dataclasses import dataclass, field
 from typing import Literal
 
 import structlog
-from fastapi import APIRouter, UploadFile
+from fastapi import APIRouter, Request, UploadFile
 from fastapi.responses import JSONResponse
 
 from app.activities.validation import validate_photo
@@ -52,7 +55,18 @@ router = APIRouter(tags=["projects"])
 MAX_PHOTO_BYTES = 20 * 1024 * 1024  # 20 MB
 MAX_INSPIRATION_PHOTOS = 3
 
-# In-memory mock state store (replaced by Temporal in P2)
+
+def _r2_configured() -> bool:
+    """Check if all required R2 credentials are available for photo storage."""
+    return bool(
+        settings.r2_account_id
+        and settings.r2_access_key_id
+        and settings.r2_secret_access_key
+        and settings.r2_bucket_name
+    )
+
+
+# In-memory mock state store (used when use_temporal=False)
 _mock_states: dict[str, WorkflowState] = {}
 
 
@@ -173,14 +187,95 @@ def _apply_revision(
         state.step = "approval"
 
 
+# ---------------------------------------------------------------------------
+# Temporal helpers — used only when settings.use_temporal is True
+# ---------------------------------------------------------------------------
+
+
+async def _query_temporal_state(request: Request, project_id: str) -> WorkflowState | None:
+    """Query workflow state from Temporal. Returns None if workflow not found."""
+    from temporalio.service import RPCError, RPCStatusCode
+
+    from app.workflows.design_project import DesignProjectWorkflow
+
+    client = request.app.state.temporal_client
+    handle = client.get_workflow_handle(project_id)
+    try:
+        state: WorkflowState = await handle.query(DesignProjectWorkflow.get_state)
+        return state
+    except RPCError as e:
+        if e.status == RPCStatusCode.NOT_FOUND:
+            return None
+        logger.error(
+            "temporal_query_failed",
+            project_id=project_id,
+            rpc_status=e.status.name if e.status else "UNKNOWN",
+        )
+        raise
+
+
+async def _signal_workflow(request: Request, project_id: str, signal, *args) -> JSONResponse | None:
+    """Send a signal to the Temporal workflow.
+
+    Returns None on success, or a JSONResponse (404) if the workflow is not found.
+    """
+    from temporalio.service import RPCError, RPCStatusCode
+
+    client = request.app.state.temporal_client
+    handle = client.get_workflow_handle(project_id)
+    signal_name = getattr(signal, "__name__", str(signal))
+    try:
+        if args:
+            await handle.signal(signal, *args)
+        else:
+            await handle.signal(signal)
+        return None
+    except RPCError as e:
+        if e.status == RPCStatusCode.NOT_FOUND:
+            return _error(404, *_NOT_FOUND)
+        logger.error(
+            "temporal_signal_failed",
+            project_id=project_id,
+            signal=signal_name,
+            rpc_status=e.status.name if e.status else "UNKNOWN",
+        )
+        raise
+
+
+async def _resolve_state(request: Request, project_id: str) -> WorkflowState | None:
+    """Get project state from either Temporal or mock store."""
+    if settings.use_temporal:
+        return await _query_temporal_state(request, project_id)
+    return _get_state(project_id)
+
+
 # --- Project lifecycle ---
 
 
 @router.post("/projects", status_code=201, response_model=CreateProjectResponse)
-async def create_project(body: CreateProjectRequest) -> CreateProjectResponse:
+async def create_project(body: CreateProjectRequest, request: Request) -> CreateProjectResponse:
     """Start a new design project. Creates a Temporal workflow."""
     project_id = str(uuid.uuid4())
-    _mock_states[project_id] = WorkflowState(step="photos")
+
+    if settings.use_temporal:
+        from temporalio.service import RPCError
+
+        from app.workflows.design_project import DesignProjectWorkflow
+
+        client = request.app.state.temporal_client
+        try:
+            await client.start_workflow(
+                DesignProjectWorkflow.run,
+                project_id,
+                id=project_id,
+                task_queue=settings.temporal_task_queue,
+            )
+        except RPCError:
+            logger.exception("workflow_start_failed", project_id=project_id)
+            raise
+    else:
+        _mock_states[project_id] = WorkflowState(step="photos")
+
     logger.info("project_created", project_id=project_id, has_lidar=body.has_lidar)
     return CreateProjectResponse(project_id=project_id)
 
@@ -190,9 +285,9 @@ async def create_project(body: CreateProjectRequest) -> CreateProjectResponse:
     response_model=WorkflowState,
     responses={404: {"model": ErrorResponse}},
 )
-async def get_project_state(project_id: str):
+async def get_project_state(project_id: str, request: Request):
     """Query current workflow state. iOS polls this endpoint."""
-    state = _get_state(project_id)
+    state = await _resolve_state(request, project_id)
     if state is None:
         return _error(404, *_NOT_FOUND)
     return state
@@ -203,14 +298,21 @@ async def get_project_state(project_id: str):
     status_code=204,
     responses={404: {"model": ErrorResponse}},
 )
-async def delete_project(project_id: str):
+async def delete_project(project_id: str, request: Request):
     """Cancel project and purge data."""
-    if project_id not in _mock_states:
-        return _error(404, *_NOT_FOUND)
-    del _mock_states[project_id]
+    if settings.use_temporal:
+        from app.workflows.design_project import DesignProjectWorkflow
+
+        if err := await _signal_workflow(request, project_id, DesignProjectWorkflow.cancel_project):
+            return err
+    else:
+        if project_id not in _mock_states:
+            return _error(404, *_NOT_FOUND)
+        del _mock_states[project_id]
+        _mock_pending_generation.pop(project_id, None)
+        _mock_pending_shopping.pop(project_id, None)
+
     _intake_sessions.pop(project_id, None)
-    _mock_pending_generation.pop(project_id, None)
-    _mock_pending_shopping.pop(project_id, None)
     logger.info("project_deleted", project_id=project_id)
 
 
@@ -230,11 +332,12 @@ async def delete_project(project_id: str):
 async def upload_photo(
     project_id: str,
     file: UploadFile,
+    request: Request,
     photo_type: Literal["room", "inspiration"] = "room",
     note: str | None = None,
 ):
-    """Upload photo -> validate -> add to state if valid."""
-    state = _get_state(project_id)
+    """Upload photo -> validate -> store (R2 in Temporal mode) -> add to state."""
+    state = await _resolve_state(request, project_id)
     if err := _check_step(state, ("photos", "scan"), "upload photos"):
         return err
     assert state is not None  # guaranteed by _check_step's 404 path
@@ -276,17 +379,61 @@ async def upload_photo(
     photo_id = str(uuid.uuid4())
 
     if validation.passed:
+        storage_key = f"projects/{project_id}/photos/{photo_type}_{photo_id}.jpg"
         photo = PhotoData(
             photo_id=photo_id,
-            storage_key=f"projects/{project_id}/photos/{photo_type}_{len(state.photos)}.jpg",
+            storage_key=storage_key,
             photo_type=photo_type,
             note=note,
         )
-        state.photos.append(photo)
-        # Auto-transition to scan after minimum room photos (mirrors workflow behavior)
-        room_count = sum(1 for p in state.photos if p.photo_type == "room")
-        if room_count >= 2 and state.step == "photos":
-            state.step = "scan"
+
+        if settings.use_temporal:
+            from app.workflows.design_project import DesignProjectWorkflow
+
+            if _r2_configured():
+                from app.utils.r2 import delete_object, upload_object
+
+                content_type = file.content_type or "image/jpeg"
+                try:
+                    await asyncio.to_thread(upload_object, storage_key, image_data, content_type)
+                except Exception:
+                    logger.exception(
+                        "r2_upload_failed",
+                        storage_key=storage_key,
+                        project_id=project_id,
+                        content_type=content_type,
+                        size_bytes=len(image_data),
+                    )
+                    raise
+            else:
+                logger.warning(
+                    "r2_not_configured_skipping_upload",
+                    storage_key=storage_key,
+                    project_id=project_id,
+                )
+            if err := await _signal_workflow(
+                request, project_id, DesignProjectWorkflow.add_photo, photo
+            ):
+                if _r2_configured():
+                    # Rollback: remove orphaned R2 object if signal failed
+                    from app.utils.r2 import delete_object
+
+                    try:
+                        await asyncio.to_thread(delete_object, storage_key)
+                    except Exception:
+                        logger.error(
+                            "r2_rollback_failed",
+                            storage_key=storage_key,
+                            project_id=project_id,
+                            exc_info=True,
+                        )
+                return err
+        else:
+            state.photos.append(photo)
+            # Auto-transition to scan after minimum room photos (mirrors workflow behavior)
+            room_count = sum(1 for p in state.photos if p.photo_type == "room")
+            if room_count >= 2 and state.step == "photos":
+                state.step = "scan"
 
     logger.info(
         "photo_uploaded",
@@ -308,22 +455,34 @@ async def upload_photo(
     status_code=204,
     responses={404: {"model": ErrorResponse}, 409: {"model": ErrorResponse}},
 )
-async def delete_photo(project_id: str, photo_id: str):
+async def delete_photo(project_id: str, photo_id: str, request: Request):
     """Remove a photo from the project."""
-    state = _get_state(project_id)
+    state = await _resolve_state(request, project_id)
     if err := _check_step(state, ("photos", "scan"), "delete photo"):
         return err
     assert state is not None
-    for i, photo in enumerate(state.photos):
-        if photo.photo_id == photo_id:
-            state.photos.pop(i)
-            # Reverse auto-transition if room count drops below threshold
-            room_count = sum(1 for p in state.photos if p.photo_type == "room")
-            if room_count < 2 and state.step == "scan":
-                state.step = "photos"
-            logger.info("photo_deleted", project_id=project_id, photo_id=photo_id)
-            return  # 204 implicit
-    return _error(404, "photo_not_found", f"Photo {photo_id} not found")
+
+    # Verify photo exists in state before signaling
+    photo_exists = any(p.photo_id == photo_id for p in state.photos)
+    if not photo_exists:
+        return _error(404, "photo_not_found", f"Photo {photo_id} not found")
+
+    if settings.use_temporal:
+        from app.workflows.design_project import DesignProjectWorkflow
+
+        # R2 object is NOT deleted here — purge_project_data activity handles R2 cleanup
+        # on project delete/abandon. Individual photo removal only updates workflow state.
+        if err := await _signal_workflow(
+            request, project_id, DesignProjectWorkflow.remove_photo, photo_id
+        ):
+            return err
+    else:
+        for i, photo in enumerate(state.photos):
+            if photo.photo_id == photo_id:
+                state.photos.pop(i)
+                break
+
+    logger.info("photo_deleted", project_id=project_id, photo_id=photo_id)
 
 
 # --- Scan ---
@@ -338,9 +497,9 @@ async def delete_photo(project_id: str, photo_id: str):
         422: {"model": ErrorResponse},
     },
 )
-async def upload_scan(project_id: str, body: dict):
+async def upload_scan(project_id: str, body: dict, request: Request):
     """Upload LiDAR scan data -> parse dimensions -> store -> signal workflow."""
-    state = _get_state(project_id)
+    state = await _resolve_state(request, project_id)
     if err := _check_step(state, "scan", "upload scan"):
         return err
     assert state is not None
@@ -351,11 +510,22 @@ async def upload_scan(project_id: str, body: dict):
         logger.warning("scan_parse_failed", project_id=project_id, error=str(exc))
         return _error(422, "invalid_scan_data", str(exc))
 
-    state.scan_data = ScanData(
+    scan_data = ScanData(
         storage_key=f"projects/{project_id}/lidar/scan.json",
         room_dimensions=dimensions,
     )
-    state.step = "intake"
+
+    if settings.use_temporal:
+        from app.workflows.design_project import DesignProjectWorkflow
+
+        if err := await _signal_workflow(
+            request, project_id, DesignProjectWorkflow.complete_scan, scan_data
+        ):
+            return err
+    else:
+        state.scan_data = scan_data
+        state.step = "intake"
+
     logger.info(
         "scan_uploaded",
         project_id=project_id,
@@ -371,13 +541,21 @@ async def upload_scan(project_id: str, body: dict):
     response_model=ActionResponse,
     responses={404: {"model": ErrorResponse}, 409: {"model": ErrorResponse}},
 )
-async def skip_scan(project_id: str):
+async def skip_scan(project_id: str, request: Request):
     """Skip LiDAR scan -> signal workflow."""
-    state = _get_state(project_id)
+    state = await _resolve_state(request, project_id)
     if err := _check_step(state, "scan", "skip scan"):
         return err
     assert state is not None
-    state.step = "intake"
+
+    if settings.use_temporal:
+        from app.workflows.design_project import DesignProjectWorkflow
+
+        if err := await _signal_workflow(request, project_id, DesignProjectWorkflow.skip_scan):
+            return err
+    else:
+        state.step = "intake"
+
     return ActionResponse()
 
 
@@ -389,13 +567,13 @@ async def skip_scan(project_id: str):
     response_model=IntakeChatOutput,
     responses={404: {"model": ErrorResponse}, 409: {"model": ErrorResponse}},
 )
-async def start_intake(project_id: str, body: IntakeStartRequest):
+async def start_intake(project_id: str, body: IntakeStartRequest, request: Request):
     """Begin intake conversation with selected mode.
 
     Returns a static welcome message and initializes conversation tracking.
     The first real agent call happens on send_intake_message.
     """
-    state = _get_state(project_id)
+    state = await _resolve_state(request, project_id)
     if err := _check_step(state, "intake", "start intake"):
         return err
     assert state is not None
@@ -421,17 +599,24 @@ async def start_intake(project_id: str, body: IntakeStartRequest):
         500: {"model": ErrorResponse},
     },
 )
-async def send_intake_message(project_id: str, body: IntakeMessageRequest):
+async def send_intake_message(project_id: str, body: IntakeMessageRequest, request: Request):
     """Send user message to intake agent.
 
     When use_mock_activities=False, calls T3's _run_intake_core with the
     project context and accumulated conversation history.
     When use_mock_activities=True, returns canned mock responses.
     """
-    state = _get_state(project_id)
+    state = await _resolve_state(request, project_id)
     if err := _check_step(state, "intake", "send intake message"):
         return err
     assert state is not None
+
+    # Reconstruct session from client-provided history if API restarted mid-conversation
+    if project_id not in _intake_sessions and body.conversation_history:
+        _intake_sessions[project_id] = _IntakeSession(
+            mode=body.mode or "quick",
+            history=list(body.conversation_history),
+        )
 
     if not settings.use_mock_activities:
         return await _real_intake_message(project_id, state, body.message)
@@ -499,10 +684,19 @@ async def _real_intake_message(
 
     # photo_index must match the index within inspiration_photos (not all photos),
     # since T3's build_messages enumerates inspiration_photo_urls with its own index.
+    from app.utils.r2 import generate_presigned_url
+
     inspiration_photos = [p for p in state.photos if p.photo_type == "inspiration"]
+    room_keys = [p.storage_key for p in state.photos if p.photo_type == "room"]
+    inspo_keys = [p.storage_key for p in inspiration_photos]
+
+    # Convert storage keys to pre-signed HTTPS URLs for the Claude vision API
+    room_urls = [await asyncio.to_thread(generate_presigned_url, k) for k in room_keys]
+    inspo_urls = [await asyncio.to_thread(generate_presigned_url, k) for k in inspo_keys]
+
     project_context: dict = {
-        "room_photos": [p.storage_key for p in state.photos if p.photo_type == "room"],
-        "inspiration_photos": [p.storage_key for p in inspiration_photos],
+        "room_photos": room_urls,
+        "inspiration_photos": inspo_urls,
         "inspiration_notes": [
             {"photo_index": i, "note": p.note} for i, p in enumerate(inspiration_photos) if p.note
         ],
@@ -538,18 +732,28 @@ async def _real_intake_message(
     response_model=ActionResponse,
     responses={404: {"model": ErrorResponse}, 409: {"model": ErrorResponse}},
 )
-async def confirm_intake(project_id: str, body: IntakeConfirmRequest):
+async def confirm_intake(project_id: str, body: IntakeConfirmRequest, request: Request):
     """Confirm design brief and move to generation."""
-    state = _get_state(project_id)
+    state = await _resolve_state(request, project_id)
     if err := _check_step(state, "intake", "confirm intake"):
         return err
     assert state is not None
-    state.design_brief = body.brief
-    state.step = "generation"
-    _mock_pending_generation[project_id] = (
-        time.monotonic() + MOCK_GENERATION_DELAY,
-        _mock_options(project_id, "Modern Minimalist", "Warm Contemporary"),
-    )
+
+    if settings.use_temporal:
+        from app.workflows.design_project import DesignProjectWorkflow
+
+        if err := await _signal_workflow(
+            request, project_id, DesignProjectWorkflow.complete_intake, body.brief
+        ):
+            return err
+    else:
+        state.design_brief = body.brief
+        state.step = "generation"
+        _mock_pending_generation[project_id] = (
+            time.monotonic() + MOCK_GENERATION_DELAY,
+            _mock_options(project_id, "Modern Minimalist", "Warm Contemporary"),
+        )
+
     return ActionResponse()
 
 
@@ -562,13 +766,13 @@ async def confirm_intake(project_id: str, body: IntakeConfirmRequest):
         422: {"model": ErrorResponse},
     },
 )
-async def skip_intake(project_id: str):
+async def skip_intake(project_id: str, request: Request):
     """Skip intake and use defaults.
 
     INTAKE-3a: skipping is only allowed if at least 1 inspiration photo
     was uploaded — without inspiration, the generator has no style signal.
     """
-    state = _get_state(project_id)
+    state = await _resolve_state(request, project_id)
     if err := _check_step(state, "intake", "skip intake"):
         return err
     assert state is not None
@@ -579,11 +783,19 @@ async def skip_intake(project_id: str):
             "intake_required",
             "Intake is required when no inspiration photos are uploaded",
         )
-    state.step = "generation"
-    _mock_pending_generation[project_id] = (
-        time.monotonic() + MOCK_GENERATION_DELAY,
-        _mock_options(project_id, "Design Option A", "Design Option B"),
-    )
+
+    if settings.use_temporal:
+        from app.workflows.design_project import DesignProjectWorkflow
+
+        if err := await _signal_workflow(request, project_id, DesignProjectWorkflow.skip_intake):
+            return err
+    else:
+        state.step = "generation"
+        _mock_pending_generation[project_id] = (
+            time.monotonic() + MOCK_GENERATION_DELAY,
+            _mock_options(project_id, "Design Option A", "Design Option B"),
+        )
+
     return ActionResponse()
 
 
@@ -599,17 +811,27 @@ async def skip_intake(project_id: str):
         422: {"model": ErrorResponse},
     },
 )
-async def select_option(project_id: str, body: SelectOptionRequest):
+async def select_option(project_id: str, body: SelectOptionRequest, request: Request):
     """Select one of the generated design options."""
-    state = _get_state(project_id)
+    state = await _resolve_state(request, project_id)
     if err := _check_step(state, "selection", "select"):
         return err
     assert state is not None
     if body.index >= len(state.generated_options):
         return _error(422, "invalid_selection", f"Option index {body.index} out of range")
-    state.selected_option = body.index
-    state.current_image = state.generated_options[body.index].image_url
-    state.step = "iteration"
+
+    if settings.use_temporal:
+        from app.workflows.design_project import DesignProjectWorkflow
+
+        if err := await _signal_workflow(
+            request, project_id, DesignProjectWorkflow.select_option, body.index
+        ):
+            return err
+    else:
+        state.selected_option = body.index
+        state.current_image = state.generated_options[body.index].image_url
+        state.step = "iteration"
+
     return ActionResponse()
 
 
@@ -618,28 +840,36 @@ async def select_option(project_id: str, body: SelectOptionRequest):
     response_model=ActionResponse,
     responses={404: {"model": ErrorResponse}, 409: {"model": ErrorResponse}},
 )
-async def start_over(project_id: str):
+async def start_over(project_id: str, request: Request):
     """Go back to intake and start the design process over."""
-    state = _get_state(project_id)
+    state = await _resolve_state(request, project_id)
     if err := _check_step(state, None, "start over"):
         return err
     assert state is not None
-    if state.approved or state.step in ("shopping", "completed"):
+    if state.approved or state.step in ("shopping", "completed", "abandoned", "cancelled"):
         return _error(409, "wrong_step", f"Cannot start over in step '{state.step}'")
-    state.generated_options = []
-    state.selected_option = None
-    state.current_image = None
-    state.design_brief = None
-    state.revision_history = []
-    state.iteration_count = 0
-    state.approved = False
-    state.shopping_list = None
-    state.error = None
-    state.chat_history_key = None
-    state.step = "intake"
+
+    if settings.use_temporal:
+        from app.workflows.design_project import DesignProjectWorkflow
+
+        if err := await _signal_workflow(request, project_id, DesignProjectWorkflow.start_over):
+            return err
+    else:
+        state.generated_options = []
+        state.selected_option = None
+        state.current_image = None
+        state.design_brief = None
+        state.revision_history = []
+        state.iteration_count = 0
+        state.approved = False
+        state.shopping_list = None
+        state.error = None
+        state.chat_history_key = None
+        state.step = "intake"
+        _mock_pending_generation.pop(project_id, None)
+        _mock_pending_shopping.pop(project_id, None)
+
     _intake_sessions.pop(project_id, None)
-    _mock_pending_generation.pop(project_id, None)
-    _mock_pending_shopping.pop(project_id, None)
     return ActionResponse()
 
 
@@ -651,14 +881,28 @@ async def start_over(project_id: str):
     response_model=ActionResponse,
     responses={404: {"model": ErrorResponse}, 409: {"model": ErrorResponse}},
 )
-async def submit_annotation_edit(project_id: str, body: AnnotationEditRequest):
+async def submit_annotation_edit(project_id: str, body: AnnotationEditRequest, request: Request):
     """Submit annotation-based edit (numbered circles on design)."""
-    state = _get_state(project_id)
+    state = await _resolve_state(request, project_id)
     if err := _check_step(state, "iteration", "submit annotation edit"):
         return err
     assert state is not None
-    instructions = [a.instruction for a in body.annotations]
-    _apply_revision(state, project_id, "annotation", instructions=instructions)
+
+    if settings.use_temporal:
+        from app.workflows.design_project import DesignProjectWorkflow
+
+        annotations_dicts = [a.model_dump() for a in body.annotations]
+        if err := await _signal_workflow(
+            request,
+            project_id,
+            DesignProjectWorkflow.submit_annotation_edit,
+            annotations_dicts,
+        ):
+            return err
+    else:
+        instructions = [a.instruction for a in body.annotations]
+        _apply_revision(state, project_id, "annotation", instructions=instructions)
+
     return ActionResponse()
 
 
@@ -671,20 +915,27 @@ async def submit_annotation_edit(project_id: str, body: AnnotationEditRequest):
         422: {"model": ErrorResponse},
     },
 )
-async def submit_text_feedback(project_id: str, body: TextFeedbackRequest):
+async def submit_text_feedback(project_id: str, body: TextFeedbackRequest, request: Request):
     """Submit text feedback for design revision."""
-    state = _get_state(project_id)
+    state = await _resolve_state(request, project_id)
     if err := _check_step(state, "iteration", "submit feedback"):
         return err
     assert state is not None
-    # REGEN-2: enforce 10-char minimum for text feedback
-    if len(body.feedback) < 10:
-        return _error(
-            422,
-            "feedback_too_short",
-            "Please provide more detail (at least 10 characters)",
-        )
-    _apply_revision(state, project_id, "feedback", instructions=[body.feedback])
+    # REGEN-2: 10-char minimum enforced by TextFeedbackRequest(min_length=10)
+
+    if settings.use_temporal:
+        from app.workflows.design_project import DesignProjectWorkflow
+
+        if err := await _signal_workflow(
+            request,
+            project_id,
+            DesignProjectWorkflow.submit_text_feedback,
+            body.feedback,
+        ):
+            return err
+    else:
+        _apply_revision(state, project_id, "feedback", instructions=[body.feedback])
+
     return ActionResponse()
 
 
@@ -696,9 +947,9 @@ async def submit_text_feedback(project_id: str, body: TextFeedbackRequest):
     response_model=ActionResponse,
     responses={404: {"model": ErrorResponse}, 409: {"model": ErrorResponse}},
 )
-async def approve_design(project_id: str):
+async def approve_design(project_id: str, request: Request):
     """Approve the current design and trigger shopping list generation."""
-    state = _get_state(project_id)
+    state = await _resolve_state(request, project_id)
     if err := _check_step(state, ("iteration", "approval"), "approve"):
         return err
     assert state is not None
@@ -706,49 +957,55 @@ async def approve_design(project_id: str):
     # User must call retry_failed_step first.
     if state.error is not None:
         return _error(409, "active_error", "Resolve the error before approving")
-    state.approved = True
-    # Transition to shopping step with simulated delay (mirrors GAP-5 generation pattern).
-    # iOS polls GET /projects/{id} and sees step="shopping" with shopping_list=None,
-    # then on next poll after delay, sees step="completed" with shopping_list populated.
-    shopping_list = GenerateShoppingListOutput(
-        items=[
-            ProductMatch(
-                category_group="Furniture",
-                product_name="Mock Accent Chair",
-                retailer="Mock Store",
-                price_cents=24999,
-                product_url="https://example.com/accent-chair",
-                image_url="https://example.com/images/accent-chair.jpg",
-                confidence_score=0.92,
-                why_matched="Matches modern minimalist style",
-                fit_status="may_not_fit",
-                fit_detail="Measure doorway width before ordering",
-                dimensions='32"W x 28"D x 31"H',
-            ),
-            ProductMatch(
-                category_group="Lighting",
-                product_name="Mock Floor Lamp",
-                retailer="Mock Store",
-                price_cents=8999,
-                product_url="https://example.com/floor-lamp",
-                confidence_score=0.85,
-                why_matched="Complements room ambiance",
-            ),
-        ],
-        unmatched=[
-            UnmatchedItem(
-                category="Rug",
-                search_keywords="modern geometric area rug 5x7",
-                google_shopping_url="https://www.google.com/search?tbm=shop&q=modern+geometric+rug+5x7",
-            ),
-        ],
-        total_estimated_cost_cents=33998,
-    )
-    _mock_pending_shopping[project_id] = (
-        time.monotonic() + MOCK_SHOPPING_DELAY,
-        shopping_list,
-    )
-    state.step = "shopping"
+
+    if settings.use_temporal:
+        from app.workflows.design_project import DesignProjectWorkflow
+
+        if err := await _signal_workflow(request, project_id, DesignProjectWorkflow.approve_design):
+            return err
+    else:
+        state.approved = True
+        # Transition to shopping step with simulated delay (mirrors GAP-5 generation pattern).
+        shopping_list = GenerateShoppingListOutput(
+            items=[
+                ProductMatch(
+                    category_group="Furniture",
+                    product_name="Mock Accent Chair",
+                    retailer="Mock Store",
+                    price_cents=24999,
+                    product_url="https://example.com/accent-chair",
+                    image_url="https://example.com/images/accent-chair.jpg",
+                    confidence_score=0.92,
+                    why_matched="Matches modern minimalist style",
+                    fit_status="may_not_fit",
+                    fit_detail="Measure doorway width before ordering",
+                    dimensions='32"W x 28"D x 31"H',
+                ),
+                ProductMatch(
+                    category_group="Lighting",
+                    product_name="Mock Floor Lamp",
+                    retailer="Mock Store",
+                    price_cents=8999,
+                    product_url="https://example.com/floor-lamp",
+                    confidence_score=0.85,
+                    why_matched="Complements room ambiance",
+                ),
+            ],
+            unmatched=[
+                UnmatchedItem(
+                    category="Rug",
+                    search_keywords="modern geometric area rug 5x7",
+                    google_shopping_url="https://www.google.com/search?tbm=shop&q=modern+geometric+rug+5x7",
+                ),
+            ],
+            total_estimated_cost_cents=33998,
+        )
+        _mock_pending_shopping[project_id] = (
+            time.monotonic() + MOCK_SHOPPING_DELAY,
+            shopping_list,
+        )
+        state.step = "shopping"
+
     return ActionResponse()
 
 
@@ -760,11 +1017,48 @@ async def approve_design(project_id: str):
     response_model=ActionResponse,
     responses={404: {"model": ErrorResponse}},
 )
-async def retry_failed_step(project_id: str):
+async def retry_failed_step(project_id: str, request: Request):
     """Clear error and retry the failed step."""
-    state = _get_state(project_id)
+    state = await _resolve_state(request, project_id)
     if err := _check_step(state, None, "retry"):
         return err
     assert state is not None
-    state.error = None
+
+    if settings.use_temporal:
+        from app.workflows.design_project import DesignProjectWorkflow
+
+        if err := await _signal_workflow(
+            request, project_id, DesignProjectWorkflow.retry_failed_step
+        ):
+            return err
+    else:
+        state.error = None
+
+    return ActionResponse()
+
+
+# ---------------------------------------------------------------------------
+# Debug endpoint — development only
+# ---------------------------------------------------------------------------
+
+
+@router.post("/debug/force-failure", response_model=ActionResponse)
+async def force_failure():
+    """Arm a one-shot failure in the next generate_designs call.
+
+    Only available in development. Used by E2E-11 to test the
+    error → retry cycle without real AI API failures.
+    """
+    if settings.environment != "development":
+        return _error(403, "forbidden", "Debug endpoints disabled outside development")
+    if not settings.use_mock_activities:
+        return _error(
+            409,
+            "not_applicable",
+            "Error injection only works with mock activities",
+        )
+
+    from app.activities.mock_stubs import FORCE_FAILURE_SENTINEL
+
+    FORCE_FAILURE_SENTINEL.touch()
     return ActionResponse()

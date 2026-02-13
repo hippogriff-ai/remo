@@ -31,6 +31,7 @@ def _load_activities() -> list:
             edit_design,
             generate_designs,
             generate_shopping_list,
+            load_style_skill,
         )
     else:
         try:
@@ -42,8 +43,17 @@ def _load_activities() -> list:
                 f"Failed to import real activity modules (USE_MOCK_ACTIVITIES=false): {exc}. "
                 "Set USE_MOCK_ACTIVITIES=true for mock stubs."
             ) from exc
+        # Real load_style_skill not yet implemented (T3-owned).
+        # Use mock stub so the activity is registered for workflow calls.
+        from app.activities.mock_stubs import load_style_skill
 
-    return [generate_designs, edit_design, generate_shopping_list, purge_project_data]
+    return [
+        generate_designs,
+        edit_design,
+        generate_shopping_list,
+        load_style_skill,
+        purge_project_data,
+    ]
 
 
 ACTIVITIES = _load_activities()

@@ -287,12 +287,12 @@ class TestEditDesignActivity:
 
         with (
             patch(
-                "app.activities.edit._download_image",
+                "app.activities.edit.download_image",
                 new_callable=AsyncMock,
                 return_value=_make_test_image(),
             ),
             patch(
-                "app.activities.edit._download_images",
+                "app.activities.edit.download_images",
                 new_callable=AsyncMock,
                 side_effect=[[_make_test_image()], []],
             ),
@@ -328,12 +328,12 @@ class TestEditDesignActivity:
 
         with (
             patch(
-                "app.activities.edit._download_image",
+                "app.activities.edit.download_image",
                 new_callable=AsyncMock,
                 return_value=_make_test_image(),
             ),
             patch(
-                "app.activities.edit._download_images",
+                "app.activities.edit.download_images",
                 new_callable=AsyncMock,
                 side_effect=[[_make_test_image()], []],
             ),
@@ -372,7 +372,7 @@ class TestEditDesignActivity:
 
         with (
             patch(
-                "app.activities.edit._download_image",
+                "app.activities.edit.download_image",
                 new_callable=AsyncMock,
                 return_value=_make_test_image(),
             ),
@@ -409,7 +409,7 @@ class TestEditDesignActivity:
 
         with (
             patch(
-                "app.activities.edit._download_image",
+                "app.activities.edit.download_image",
                 new_callable=AsyncMock,
                 side_effect=Exception("429 RESOURCE_EXHAUSTED"),
             ),
@@ -433,7 +433,7 @@ class TestEditDesignActivity:
 
         with (
             patch(
-                "app.activities.edit._download_image",
+                "app.activities.edit.download_image",
                 new_callable=AsyncMock,
                 side_effect=Exception("SAFETY block triggered"),
             ),
@@ -456,7 +456,7 @@ class TestEditDesignActivity:
         )
 
         with patch(
-            "app.activities.edit._download_image",
+            "app.activities.edit.download_image",
             new_callable=AsyncMock,
             side_effect=Exception("400 thought signature validation failed"),
         ):
@@ -478,7 +478,7 @@ class TestEditDesignActivity:
         )
 
         with patch(
-            "app.activities.edit._download_image",
+            "app.activities.edit.download_image",
             new_callable=AsyncMock,
             side_effect=RuntimeError("unexpected network glitch"),
         ):
@@ -512,12 +512,12 @@ class TestEditDesignActivity:
 
         with (
             patch(
-                "app.activities.edit._download_image",
+                "app.activities.edit.download_image",
                 new_callable=AsyncMock,
                 return_value=_make_test_image(),
             ),
             patch(
-                "app.activities.edit._download_images",
+                "app.activities.edit.download_images",
                 new_callable=AsyncMock,
                 side_effect=[[_make_test_image()], []],
             ),
@@ -565,12 +565,12 @@ class TestEditDesignActivity:
 
         with (
             patch(
-                "app.activities.edit._download_image",
+                "app.activities.edit.download_image",
                 new_callable=AsyncMock,
                 return_value=_make_test_image(),
             ),
             patch(
-                "app.activities.edit._download_images",
+                "app.activities.edit.download_images",
                 new_callable=AsyncMock,
                 side_effect=[[_make_test_image()], []],
             ),
@@ -618,12 +618,12 @@ class TestEditDesignActivity:
 
         with (
             patch(
-                "app.activities.edit._download_image",
+                "app.activities.edit.download_image",
                 new_callable=AsyncMock,
                 return_value=_make_test_image(),
             ),
             patch(
-                "app.activities.edit._download_images",
+                "app.activities.edit.download_images",
                 new_callable=AsyncMock,
                 side_effect=[[_make_test_image()], []],
             ),
@@ -663,7 +663,7 @@ class TestEditDesignActivity:
 
         with (
             patch(
-                "app.activities.edit._download_image",
+                "app.activities.edit.download_image",
                 new_callable=AsyncMock,
                 return_value=_make_test_image(),
             ),
@@ -728,7 +728,7 @@ class TestEditDesignActivity:
 
         with (
             patch(
-                "app.activities.edit._download_image",
+                "app.activities.edit.download_image",
                 new_callable=AsyncMock,
                 return_value=_make_test_image(),
             ),
@@ -780,7 +780,7 @@ class TestEditDesignActivity:
 
         with (
             patch(
-                "app.activities.edit._download_image",
+                "app.activities.edit.download_image",
                 new_callable=AsyncMock,
                 return_value=_make_test_image(),
             ),
@@ -839,7 +839,7 @@ class TestEditDesignActivity:
 
         with (
             patch(
-                "app.activities.edit._download_image",
+                "app.activities.edit.download_image",
                 new_callable=AsyncMock,
                 return_value=_make_test_image(),
             ),
@@ -865,7 +865,7 @@ class TestEditDesignActivity:
         )
 
         with patch(
-            "app.activities.edit._download_image",
+            "app.activities.edit.download_image",
             new_callable=AsyncMock,
             side_effect=ApplicationError("custom error", non_retryable=True),
         ):
@@ -875,11 +875,11 @@ class TestEditDesignActivity:
 
 
 class TestDownloadImageEdit:
-    """Tests for _download_image within edit.py."""
+    """Tests for download_image (shared HTTP helper)."""
 
     @pytest.mark.asyncio
     async def test_download_success(self):
-        from app.activities.edit import _download_image
+        from app.utils.http import download_image
 
         img_bytes = _image_bytes(_make_test_image())
         mock_response = MagicMock()
@@ -894,14 +894,14 @@ class TestDownloadImageEdit:
             mock_client.__aexit__ = AsyncMock(return_value=False)
             mock_async_client.return_value = mock_client
 
-            result = await _download_image("https://example.com/test.png")
+            result = await download_image("https://example.com/test.png")
             assert result.size == (100, 100)
 
     @pytest.mark.asyncio
     async def test_download_404_non_retryable(self):
         from temporalio.exceptions import ApplicationError
 
-        from app.activities.edit import _download_image
+        from app.utils.http import download_image
 
         mock_response = MagicMock()
         mock_response.status_code = 404
@@ -915,14 +915,14 @@ class TestDownloadImageEdit:
             mock_async_client.return_value = mock_client
 
             with pytest.raises(ApplicationError) as exc_info:
-                await _download_image("https://example.com/missing.png")
+                await download_image("https://example.com/missing.png")
             assert exc_info.value.non_retryable
 
     @pytest.mark.asyncio
     async def test_download_500_retryable(self):
         from temporalio.exceptions import ApplicationError
 
-        from app.activities.edit import _download_image
+        from app.utils.http import download_image
 
         mock_response = MagicMock()
         mock_response.status_code = 500
@@ -936,14 +936,14 @@ class TestDownloadImageEdit:
             mock_async_client.return_value = mock_client
 
             with pytest.raises(ApplicationError) as exc_info:
-                await _download_image("https://example.com/error.png")
+                await download_image("https://example.com/error.png")
             assert not exc_info.value.non_retryable
 
     @pytest.mark.asyncio
     async def test_download_wrong_content_type(self):
         from temporalio.exceptions import ApplicationError
 
-        from app.activities.edit import _download_image
+        from app.utils.http import download_image
 
         mock_response = MagicMock()
         mock_response.status_code = 200
@@ -958,14 +958,14 @@ class TestDownloadImageEdit:
             mock_async_client.return_value = mock_client
 
             with pytest.raises(ApplicationError, match="Expected image"):
-                await _download_image("https://example.com/page.html")
+                await download_image("https://example.com/page.html")
 
     @pytest.mark.asyncio
     async def test_download_timeout_retryable(self):
         import httpx
         from temporalio.exceptions import ApplicationError
 
-        from app.activities.edit import _download_image
+        from app.utils.http import download_image
 
         with patch("httpx.AsyncClient") as mock_async_client:
             mock_client = AsyncMock()
@@ -975,16 +975,16 @@ class TestDownloadImageEdit:
             mock_async_client.return_value = mock_client
 
             with pytest.raises(ApplicationError) as exc_info:
-                await _download_image("https://example.com/slow.png")
+                await download_image("https://example.com/slow.png")
             assert not exc_info.value.non_retryable
 
 
 class TestDownloadImages:
-    """Tests for _download_images concurrent helper."""
+    """Tests for download_images concurrent helper."""
 
     @pytest.mark.asyncio
     async def test_downloads_multiple(self):
-        from app.activities.edit import _download_images
+        from app.utils.http import download_images
 
         img_bytes = _image_bytes(_make_test_image())
         mock_response = MagicMock()
@@ -999,14 +999,14 @@ class TestDownloadImages:
             mock_client.__aexit__ = AsyncMock(return_value=False)
             mock_async_client.return_value = mock_client
 
-            results = await _download_images(["https://a.com/1.png", "https://a.com/2.png"])
+            results = await download_images(["https://a.com/1.png", "https://a.com/2.png"])
             assert len(results) == 2
 
     @pytest.mark.asyncio
     async def test_downloads_empty_list(self):
-        from app.activities.edit import _download_images
+        from app.utils.http import download_images
 
-        results = await _download_images([])
+        results = await download_images([])
         assert results == []
 
 
@@ -1055,12 +1055,12 @@ class TestBootstrapWithInspirationImages:
 
         with (
             patch(
-                "app.activities.edit._download_image",
+                "app.activities.edit.download_image",
                 new_callable=AsyncMock,
                 return_value=_make_test_image(),
             ),
             patch(
-                "app.activities.edit._download_images",
+                "app.activities.edit.download_images",
                 new_callable=AsyncMock,
                 side_effect=[[_make_test_image()], [_make_test_image(50, 50)]],
             ),

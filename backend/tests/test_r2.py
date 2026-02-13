@@ -265,3 +265,51 @@ class TestClientSingleton:
             r2.upload_object("key2", b"data2")
 
             assert mock_build.call_count == 2
+
+
+class TestResolveUrl:
+    """Tests for resolve_url — storage key → presigned URL passthrough."""
+
+    def test_storage_key_is_resolved(self, mock_s3):
+        """Storage key (no protocol) is converted to a presigned URL."""
+        mock_s3.generate_presigned_url.return_value = "https://r2.example.com/signed"
+        result = r2.resolve_url("projects/abc/photos/room_0.jpg")
+        assert result == "https://r2.example.com/signed"
+        mock_s3.generate_presigned_url.assert_called_once()
+
+    def test_https_url_passes_through(self, mock_s3):
+        """HTTPS URL is returned unchanged — no presigned URL generated."""
+        result = r2.resolve_url("https://example.com/image.jpg")
+        assert result == "https://example.com/image.jpg"
+        mock_s3.generate_presigned_url.assert_not_called()
+
+    def test_http_url_passes_through(self, mock_s3):
+        """HTTP URL is returned unchanged."""
+        result = r2.resolve_url("http://localhost:8000/image.jpg")
+        assert result == "http://localhost:8000/image.jpg"
+        mock_s3.generate_presigned_url.assert_not_called()
+
+
+class TestResolveUrls:
+    """Tests for resolve_urls — batch storage key → presigned URL."""
+
+    def test_mixed_keys_and_urls(self, mock_s3):
+        """Mix of storage keys and URLs are resolved correctly."""
+        mock_s3.generate_presigned_url.return_value = "https://r2.example.com/signed"
+        result = r2.resolve_urls(
+            [
+                "projects/abc/photos/room_0.jpg",
+                "https://existing.com/image.jpg",
+            ]
+        )
+        assert result == [
+            "https://r2.example.com/signed",
+            "https://existing.com/image.jpg",
+        ]
+        # Only the storage key triggered a presigned URL call
+        assert mock_s3.generate_presigned_url.call_count == 1
+
+    def test_empty_list(self, mock_s3):
+        """Empty list returns empty list."""
+        assert r2.resolve_urls([]) == []
+        mock_s3.generate_presigned_url.assert_not_called()

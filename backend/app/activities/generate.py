@@ -11,10 +11,6 @@ import asyncio
 import io
 import re
 from pathlib import Path
-from typing import TYPE_CHECKING
-
-if TYPE_CHECKING:
-    import httpx
 
 import structlog
 from PIL import Image
@@ -36,13 +32,11 @@ from app.utils.gemini_chat import (
     extract_text,
     get_client,
 )
+from app.utils.http import download_images
 
 logger = structlog.get_logger()
 
 PROMPTS_DIR = Path(__file__).parent.parent.parent / "prompts"
-
-# NOTE: Download helpers (_fetch_image, _download_image, _download_images)
-# are duplicated in edit.py — extract to shared utility in P2.
 
 
 def _load_prompt(name: str) -> str:
@@ -121,68 +115,6 @@ def _extract_project_id(urls: list[str]) -> str:
     )
 
 
-async def _fetch_image(client: httpx.AsyncClient, url: str) -> Image.Image:
-    """Fetch and validate a single image using the given HTTP client."""
-    import httpx
-
-    try:
-        response = await client.get(url, timeout=30)
-    except httpx.TimeoutException as exc:
-        raise ApplicationError(
-            f"Timeout downloading image: {url[:100]}",
-            non_retryable=False,
-        ) from exc
-    except httpx.RequestError as exc:
-        raise ApplicationError(
-            f"Network error downloading image: {url[:100]}: {type(exc).__name__}",
-            non_retryable=False,
-        ) from exc
-
-    if response.status_code >= 400:
-        # 429 is retryable (throttling); other 4xx are non-retryable client errors
-        is_non_retryable = response.status_code < 500 and response.status_code != 429
-        raise ApplicationError(
-            f"HTTP {response.status_code} downloading image: {url[:100]}",
-            non_retryable=is_non_retryable,
-        )
-
-    content_type = response.headers.get("content-type", "")
-    if content_type and not content_type.startswith("image/"):
-        raise ApplicationError(
-            f"Expected image content-type, got: {content_type}",
-            non_retryable=True,
-        )
-
-    try:
-        img = Image.open(io.BytesIO(response.content))
-        img.load()  # Force full decode to catch truncation
-    except Exception as exc:
-        raise ApplicationError(
-            f"Downloaded image is corrupt: {url[:100]}",
-            non_retryable=True,
-        ) from exc
-    return img
-
-
-async def _download_image(url: str) -> Image.Image:
-    """Download an image from a URL."""
-    import httpx
-
-    async with httpx.AsyncClient() as client:
-        return await _fetch_image(client, url)
-
-
-async def _download_images(urls: list[str]) -> list[Image.Image]:
-    """Download multiple images concurrently with a shared HTTP client."""
-    if not urls:
-        return []
-    import httpx
-
-    async with httpx.AsyncClient() as client:
-        tasks = [_fetch_image(client, url) for url in urls]
-        return await asyncio.gather(*tasks)
-
-
 def _upload_image(image: Image.Image, project_id: str, filename: str) -> str:
     """Upload a PIL Image to R2 and return the presigned URL."""
     from app.utils.r2 import generate_presigned_url, upload_object
@@ -200,8 +132,29 @@ async def _generate_single_option(
     room_images: list[Image.Image],
     inspiration_images: list[Image.Image],
     option_index: int,
+    source_urls: list[str] | None = None,
 ) -> Image.Image:
     """Generate a single design option via standalone Gemini call."""
+    from app.utils.llm_cache import get_cached_bytes, set_cached_bytes
+
+    # Dev/test cache: avoid redundant Gemini calls when prompt/inputs
+    # haven't changed. Key includes prompt text, source URLs (stable R2 keys),
+    # and option index to prevent cross-project collisions.
+    # Will be removed in production (real users never send identical inputs).
+    cache_key = [
+        prompt,
+        str(len(room_images)),
+        str(len(inspiration_images)),
+        str(option_index),
+        *(source_urls or []),
+    ]
+    cached_png = get_cached_bytes("gemini_gen", cache_key)
+    if cached_png:
+        try:
+            return Image.open(io.BytesIO(cached_png))
+        except Exception:
+            logger.warning("gemini_cache_corrupt", option=option_index)
+            # Fall through to real Gemini call
 
     client = get_client()
 
@@ -253,6 +206,11 @@ async def _generate_single_option(
             non_retryable=False,
         )
 
+    # Save to dev/test cache for reuse in subsequent runs
+    buf = io.BytesIO()
+    result_image.save(buf, format="PNG")
+    set_cached_bytes("gemini_gen", cache_key, buf.getvalue())
+
     return result_image
 
 
@@ -265,14 +223,20 @@ async def generate_designs(input: GenerateDesignsInput) -> GenerateDesignsOutput
         num_inspiration_photos=len(input.inspiration_photo_urls),
     )
 
-    # Extract project_id from R2 URL path pattern: projects/{id}/...
+    # Extract project_id from R2 key/URL path pattern: projects/{id}/...
     project_id = _extract_project_id(input.room_photo_urls)
+
+    # Resolve R2 storage keys to presigned URLs (pass through existing URLs)
+    from app.utils.r2 import resolve_urls
+
+    room_urls = await asyncio.to_thread(resolve_urls, input.room_photo_urls)
+    inspiration_urls = await asyncio.to_thread(resolve_urls, input.inspiration_photo_urls)
 
     try:
         # Download source images
         room_images, inspiration_images = await asyncio.gather(
-            _download_images(input.room_photo_urls),
-            _download_images(input.inspiration_photo_urls),
+            download_images(room_urls),
+            download_images(inspiration_urls),
         )
 
         if not room_images:
@@ -303,9 +267,11 @@ async def generate_designs(input: GenerateDesignsInput) -> GenerateDesignsOutput
         prompt = _build_generation_prompt(input.design_brief, input.inspiration_notes)
 
         # Generate 2 options in parallel
+        # Pass original R2 keys (stable, not presigned) for cache key identity
+        source_urls = input.room_photo_urls + input.inspiration_photo_urls
         option_0, option_1 = await asyncio.gather(
-            _generate_single_option(prompt, room_images, inspiration_images, 0),
-            _generate_single_option(prompt, room_images, inspiration_images, 1),
+            _generate_single_option(prompt, room_images, inspiration_images, 0, source_urls),
+            _generate_single_option(prompt, room_images, inspiration_images, 1, source_urls),
         )
 
         # Upload to R2 (sync boto3 calls run in thread pool)

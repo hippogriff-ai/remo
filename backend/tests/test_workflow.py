@@ -48,6 +48,35 @@ ALL_ACTIVITIES = [
 pytestmark = pytest.mark.asyncio(loop_scope="module")
 
 
+# ---------------------------------------------------------------------------
+# Unit tests for private helpers (no Temporal needed)
+# ---------------------------------------------------------------------------
+
+
+class TestEditInputGuards:
+    """Verify ValueError guards on _edit_input and _extract_instructions."""
+
+    def _make_workflow(self) -> DesignProjectWorkflow:
+        wf = DesignProjectWorkflow.__new__(DesignProjectWorkflow)
+        wf.__init__()
+        wf._project_id = "test-proj"
+        wf.current_image = "https://example.com/img.png"
+        wf.photos = [PhotoData(photo_id="r1", storage_key="k1", photo_type="room")]
+        wf.design_brief = None
+        wf.chat_history_key = None
+        return wf
+
+    def test_edit_input_rejects_unknown_action_type(self) -> None:
+        wf = self._make_workflow()
+        with pytest.raises(ValueError, match="Unknown edit action type"):
+            wf._edit_input("bogus", "payload")
+
+    def test_extract_instructions_rejects_unknown_action_type(self) -> None:
+        wf = self._make_workflow()
+        with pytest.raises(ValueError, match="Unknown edit action type"):
+            wf._extract_instructions("bogus", "payload")
+
+
 @pytest.fixture(scope="module")
 async def workflow_env():
     """Module-scoped time-skipping environment — one JVM for all workflow tests."""
@@ -696,6 +725,48 @@ class TestRemovePhoto:
 
             state = await handle.query(DesignProjectWorkflow.get_state)
             assert len(state.photos) == 1
+
+    async def test_remove_photo_during_scan_does_not_regress_step(self, workflow_env, tq):
+        """Removing a photo during scan does NOT regress step back to 'photos'.
+
+        The workflow's step model is forward-only: once _run_phases advances
+        past the >= 2 room-photo wait, it never re-evaluates that condition.
+        This codifies the expected Temporal behavior (differs from mock API,
+        which does regress scan→photos when room count drops below 2).
+        """
+        async with Worker(
+            workflow_env.client,
+            task_queue=tq,
+            workflows=[DesignProjectWorkflow],
+            activities=ALL_ACTIVITIES,
+        ):
+            handle = await _start_workflow(workflow_env, tq)
+            photo_a = PhotoData(
+                photo_id="scan-keep",
+                storage_key="photos/a.jpg",
+                photo_type="room",
+            )
+            photo_b = PhotoData(
+                photo_id="scan-remove",
+                storage_key="photos/b.jpg",
+                photo_type="room",
+            )
+            await handle.signal(DesignProjectWorkflow.add_photo, photo_a)
+            await handle.signal(DesignProjectWorkflow.add_photo, photo_b)
+            await asyncio.sleep(0.5)
+
+            state = await handle.query(DesignProjectWorkflow.get_state)
+            assert state.step == "scan"
+            assert len(state.photos) == 2
+
+            # Remove one room photo — drops below 2
+            await handle.signal(DesignProjectWorkflow.remove_photo, "scan-remove")
+            await asyncio.sleep(0.3)
+
+            state = await handle.query(DesignProjectWorkflow.get_state)
+            assert len(state.photos) == 1
+            # Key assertion: step stays "scan", does NOT regress to "photos"
+            assert state.step == "scan"
 
 
 class TestScanPhase:

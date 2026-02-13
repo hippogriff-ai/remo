@@ -22,13 +22,17 @@ class Settings(BaseSettings):
     # AI APIs
     anthropic_api_key: str = ""
     google_ai_api_key: str = ""
+    vertex_ai_api_key: str = ""
     exa_api_key: str = ""
+    gemini_model: str = "gemini-3-pro-image-preview"
 
     # App
     environment: str = "development"
     log_level: str = "INFO"
+    log_file: str = ""
     presigned_url_expiry_seconds: int = 3600
     use_mock_activities: bool = True
+    use_temporal: bool = False
 
 
 settings = Settings()

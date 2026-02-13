@@ -184,9 +184,22 @@ async def extract_items(
     original_room_photo_urls: list[str],
     design_brief: DesignBrief | None,
     revision_history: list[RevisionRecord],
+    *,
+    source_urls: list[str] | None = None,
 ) -> list[dict[str, Any]]:
     """Step 1: Extract purchasable items from the design image."""
+    from app.utils.llm_cache import get_cached, set_cached
+
     prompt_text = _load_extraction_prompt(design_brief, revision_history)
+
+    # Dev/test cache: use stable R2 keys (not presigned URLs) to prevent
+    # cache misses when signatures rotate. Will be removed in production.
+    stable_urls = source_urls or [design_image_url, *original_room_photo_urls]
+    cache_key = [prompt_text, *stable_urls]
+    cached = get_cached("claude_extraction", cache_key)
+    if cached and isinstance(cached, list):
+        return cached  # type: ignore[no-any-return]
+
     messages = _build_extraction_messages(design_image_url, original_room_photo_urls, prompt_text)
 
     response = await client.messages.create(
@@ -209,7 +222,11 @@ async def extract_items(
 
     data = _extract_json(text)
     raw_items: list[dict[str, Any]] = data.get("items") or []
-    return _validate_extracted_items(raw_items)
+    result = _validate_extracted_items(raw_items)
+
+    # Save to dev/test cache
+    set_cached("claude_extraction", cache_key, result)
+    return result
 
 
 _REQUIRED_ITEM_FIELDS = {"category", "description"}
@@ -323,6 +340,23 @@ def _build_search_queries(item: dict[str, Any]) -> list[str]:
 EXA_MAX_RETRIES = 1
 EXA_RETRY_DELAY = 1.0
 
+# File-based Exa cache: set EXA_CACHE_DIR to a directory path to enable.
+# First call with a query → real Exa API call, result saved to cache.
+# Subsequent calls with the same query → loaded from cache, no API call.
+_EXA_CACHE_DIR: str | None = os.environ.get("EXA_CACHE_DIR")
+
+
+def _exa_cache_path(query: str, num_results: int) -> Path | None:
+    """Return cache file path for a query, or None if caching is disabled."""
+    if not _EXA_CACHE_DIR:
+        return None
+    import hashlib
+
+    key = hashlib.sha256(f"{query}:{num_results}".encode()).hexdigest()[:16]
+    cache_dir = Path(_EXA_CACHE_DIR)
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    return cache_dir / f"exa_{key}.json"
+
 
 async def _search_exa(
     http_client: httpx.AsyncClient,
@@ -335,7 +369,20 @@ async def _search_exa(
     Requests page text (truncated to 1000 chars) so the scoring model
     can compare actual product descriptions rather than guessing from titles.
     Retries once on transient failures (429, 500+) with a short backoff.
+
+    When EXA_CACHE_DIR is set, results are cached to disk per query and
+    reused on subsequent calls to avoid redundant API costs.
     """
+    # Check cache first
+    cache_file = _exa_cache_path(query, num_results)
+    if cache_file and cache_file.exists():
+        try:
+            cached = json.loads(cache_file.read_text())
+            log.info("exa_cache_hit", query=query[:80])
+            return cached  # type: ignore[no-any-return]
+        except (json.JSONDecodeError, OSError):
+            pass  # Cache corrupt — fall through to real call
+
     payload = {
         "query": query,
         "type": "neural",
@@ -366,6 +413,13 @@ async def _search_exa(
         if resp.status_code == 200:
             data = resp.json()
             results: list[dict[str, Any]] = data.get("results", [])
+            # Save to cache if enabled
+            if cache_file:
+                try:
+                    cache_file.write_text(json.dumps(results))
+                    log.info("exa_cache_saved", query=query[:80])
+                except OSError:
+                    pass
             return results
 
         # Retry on transient errors (429 rate limit, 500+ server errors)
@@ -503,7 +557,22 @@ async def score_product(
     design_brief: DesignBrief | None,
 ) -> dict[str, Any]:
     """Score a single product against an item using the rubric."""
+    from app.utils.llm_cache import get_cached, set_cached
+
     prompt = _build_scoring_prompt(item, product, design_brief)
+
+    # Dev/test cache: avoid redundant Claude scoring calls when prompt
+    # hasn't changed. Will be removed in production.
+    cache_key = [prompt]
+    cached = get_cached("claude_scoring", cache_key)
+    if cached and isinstance(cached, dict):
+        # Restore product metadata (not included in scored output)
+        cached["product_url"] = product.get("url", "")
+        cached["product_name"] = product.get("title", "Unknown")
+        cached["image_url"] = product.get("image")
+        if "price_cents" not in cached:
+            cached["price_cents"] = _price_to_cents(_extract_price_text(product))
+        return cached  # type: ignore[no-any-return]
 
     response = await client.messages.create(
         model=SCORING_MODEL,
@@ -519,6 +588,9 @@ async def score_product(
     scores = _extract_json(text)
     if not scores:
         scores = {"weighted_total": 0.0, "why_matched": "Scoring failed"}
+
+    # Save to dev/test cache (core scores only, not product metadata)
+    set_cached("claude_scoring", cache_key, scores)
 
     scores["product_url"] = product.get("url", "")
     scores["product_name"] = product.get("title", "Unknown")
@@ -823,9 +895,16 @@ async def generate_shopping_list(
         raise ApplicationError("EXA_API_KEY not set", non_retryable=True)
 
     client = anthropic.AsyncAnthropic(api_key=anthropic_key)
+
+    # Resolve R2 storage keys to presigned URLs (pass through existing URLs)
+    from app.utils.r2 import resolve_url, resolve_urls
+
+    design_image_url = resolve_url(input.design_image_url)
+    original_room_photo_urls = resolve_urls(input.original_room_photo_urls)
+
     has_brief = input.design_brief is not None
     num_revisions = len(input.revision_history)
-    num_photos = len(input.original_room_photo_urls)
+    num_photos = len(original_room_photo_urls)
 
     log.info(
         "shopping_pipeline_start",
@@ -839,10 +918,11 @@ async def generate_shopping_list(
     try:
         items = await extract_items(
             client,
-            input.design_image_url,
-            input.original_room_photo_urls,
+            design_image_url,
+            original_room_photo_urls,
             input.design_brief,
             input.revision_history,
+            source_urls=[input.design_image_url, *input.original_room_photo_urls],
         )
     except anthropic.RateLimitError as e:
         log.warning("shopping_extraction_rate_limited")

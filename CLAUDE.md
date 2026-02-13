@@ -8,7 +8,7 @@ Remo is an AI-powered room redesign iOS app. Users photograph a room, describe t
 
 ## Status
 
-T0 (Platform) P0+P1 complete, P2 integration in progress. Backend has 807 passing tests, 0 warnings, ruff clean, ruff format clean, mypy clean. Real T2/T3 activities are wired into the workflow (INT-1 through INT-4, INT-6, GAP-5 done). Quality sweep complete (IMP-3 through IMP-33). See `CONTINUITY.md` for current state.
+T0 (Platform) P0+P1 complete, P2 integration done. All T0-owned modules at 100% coverage, ruff/mypy clean. Full pipeline verified end-to-end with real AI (Claude Opus, Gemini 3 Pro, Exa). Golden path test: 216s. LLM response caching for dev/test. See `CONTINUITY.md` for current state.
 
 ## Development Commands
 
@@ -77,7 +77,7 @@ Key rule: API layer never calls AI APIs (except sync photo validation). Workflow
 |-------|------|
 | iOS | SwiftUI (iOS 17+), local SPM packages, `@Observable` |
 | Backend | Python 3.12+, FastAPI, Temporal (`temporalio`) |
-| Image gen | Gemini 3 Pro Image or Gemini 2.5 Flash Image (P0 spike picks winner) |
+| Image gen | Gemini 3 Pro Image (`gemini-3-pro-image-preview`, configurable via `GEMINI_MODEL`) |
 | AI chat/scoring | Claude Opus 4.6 via raw `anthropic` SDK with tool use (no framework) |
 | Photo validation | Claude Haiku 4.5 (sync in API handler) |
 | Product search | Exa API |
@@ -92,7 +92,7 @@ backend/
   app/
     models/contracts.py        # ALL Pydantic models (T0 owns exclusively, frozen)
     models/db.py               # SQLAlchemy models (9 tables)
-    api/routes/projects.py     # FastAPI endpoints (17 endpoints, mock state store, multi-step intake conversation, real intake agent wiring)
+    api/routes/projects.py     # FastAPI endpoints (mock state store, multi-step intake conversation, real intake agent wiring)
     api/routes/health.py       # Health check endpoint (version, environment, service status)
     workflows/design_project.py # Temporal workflow (12 signals, 1 query)
     activities/mock_stubs.py   # Mock activities (T0-owned, swapped in P2)
@@ -105,7 +105,7 @@ backend/
     main.py                    # FastAPI app (request ID middleware, error handlers)
     worker.py                  # Temporal worker entrypoint
   migrations/versions/         # Alembic (001_initial_schema.py)
-  tests/                       # 792 tests across 11 test files (module-scoped Temporal fixture)
+  tests/                       # pytest suite (module-scoped Temporal fixture)
 ios/                           # (T1-owned, not yet scaffolded in this worktree)
 ```
 

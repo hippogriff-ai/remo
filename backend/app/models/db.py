@@ -171,6 +171,7 @@ class ShoppingList(Base):
         ForeignKey("generated_images.id"), nullable=True
     )
     total_estimated_cost_cents: Mapped[int] = mapped_column(Integer, nullable=False)
+    cost_breakdown: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     project: Mapped["Project"] = relationship(back_populates="shopping_list")
