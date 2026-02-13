@@ -125,6 +125,10 @@ public struct IntakeChatScreen: View {
             ScrollViewReader { proxy in
                 ScrollView {
                     LazyVStack(spacing: 12) {
+                        if projectState.chatMessages.isEmpty {
+                            ProgressView("Starting conversation...")
+                                .padding(.top, 48)
+                        }
                         ForEach(Array(projectState.chatMessages.enumerated()), id: \.offset) { index, message in
                             ChatBubble(message: message)
                                 .id(index)
