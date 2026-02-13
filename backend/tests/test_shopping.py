@@ -29,14 +29,18 @@ from app.activities.shopping import (
     _build_fit_detail,
     _build_scoring_prompt,
     _build_search_queries,
+    _compute_room_constraints,
     _extract_json,
     _extract_price_text,
     _extract_retailer,
+    _format_room_constraints_for_prompt,
     _google_shopping_url,
     _load_extraction_prompt,
     _load_scoring_prompt,
     _num_results_for_item,
+    _parse_product_dims_cm,
     _price_to_cents,
+    _room_size_label,
     _search_exa,
     _strip_code_fence,
     _validate_extracted_items,
@@ -50,12 +54,100 @@ from app.activities.shopping import (
 )
 from app.models.contracts import (
     DesignBrief,
+    FurnitureObservation,
     GenerateShoppingListInput,
     ProductMatch,
+    RoomAnalysis,
+    RoomContext,
     RoomDimensions,
     StyleProfile,
     UnmatchedItem,
 )
+
+# === Room Constraints Tests ===
+
+
+class TestComputeRoomConstraints:
+    def test_standard_room(self):
+        """4.5m x 6m room should produce reasonable furniture limits."""
+        dims = RoomDimensions(width_m=4.5, length_m=6.0, height_m=2.7)
+        c = _compute_room_constraints(dims)
+        # Sofa: (600-120)*0.75 = 360cm ≈ 142"
+        assert float(c["sofa"]["max_width_cm"]) > 300
+        assert float(c["sofa"]["max_width_cm"]) < 400
+        # Coffee table: ~2/3 of sofa
+        assert float(c["coffee_table"]["max_width_cm"]) < float(c["sofa"]["max_width_cm"])
+        # Rug dimensions present
+        assert "width_cm" in c["rug"]
+        assert "length_cm" in c["rug"]
+        # Floor lamp: (270-30) = 240cm
+        assert float(c["floor_lamp"]["max_height_cm"]) == 240
+
+    def test_small_room(self):
+        """3m x 3.5m room should produce smaller constraints."""
+        dims = RoomDimensions(width_m=3.0, length_m=3.5, height_m=2.4)
+        c = _compute_room_constraints(dims)
+        # Sofa: (350-120)*0.75 = 172.5cm ≈ 68"
+        assert float(c["sofa"]["max_width_cm"]) < 200
+        # Dining table: 350-180 = 170cm
+        assert float(c["dining_table"]["max_length_cm"]) == 170
+
+
+class TestFormatRoomConstraints:
+    def test_with_lidar(self):
+        dims = RoomDimensions(width_m=4.0, length_m=5.0, height_m=2.5)
+        text = _format_room_constraints_for_prompt(None, dims)
+        assert "4.0m x 5.0m" in text
+        assert "LiDAR scan" in text
+        assert "Sofa" in text
+
+    def test_photo_only(self):
+        analysis = RoomAnalysis(estimated_dimensions="approximately 12x15 feet")
+        ctx = RoomContext(photo_analysis=analysis, enrichment_sources=["photos"])
+        text = _format_room_constraints_for_prompt(ctx, None)
+        assert "approximately 12x15 feet" in text
+        assert "photo analysis" in text.lower()
+
+    def test_with_lidar_and_context(self):
+        """LiDAR should take precedence over photo analysis."""
+        dims = RoomDimensions(width_m=4.0, length_m=5.0, height_m=2.5)
+        analysis = RoomAnalysis(estimated_dimensions="approximately 12x15 feet")
+        ctx = RoomContext(
+            photo_analysis=analysis,
+            room_dimensions=dims,
+            enrichment_sources=["photos", "lidar"],
+        )
+        text = _format_room_constraints_for_prompt(ctx, dims)
+        assert "LiDAR scan" in text
+        assert "Per-category size limits" in text
+
+    def test_includes_furniture_observations(self):
+        dims = RoomDimensions(width_m=4.0, length_m=5.0, height_m=2.5)
+        analysis = RoomAnalysis(
+            furniture=[
+                FurnitureObservation(item="gray sofa", condition="worn", keep_candidate=True),
+                FurnitureObservation(item="bookshelf", condition="good"),
+            ]
+        )
+        ctx = RoomContext(photo_analysis=analysis, enrichment_sources=["photos"])
+        text = _format_room_constraints_for_prompt(ctx, dims)
+        assert "gray sofa (worn) [keep]" in text
+        assert "bookshelf (good)" in text
+
+    def test_no_dimensions_no_context(self):
+        text = _format_room_constraints_for_prompt(None, None)
+        assert "No room dimensions available" in text
+
+    def test_extraction_prompt_includes_room_constraints(self):
+        dims = RoomDimensions(width_m=4.0, length_m=5.0, height_m=2.5)
+        prompt = _load_extraction_prompt(None, [], room_dimensions=dims)
+        assert "Per-category size limits" in prompt
+        assert "Sofa" in prompt
+
+    def test_extraction_prompt_without_context(self):
+        prompt = _load_extraction_prompt(None, [])
+        assert "No room dimensions available" in prompt
+
 
 # === Search Query Building Tests ===
 
@@ -176,6 +268,58 @@ class TestBuildSearchQueries:
         queries = _build_search_queries(item)
         assert any("cozy reading chair" in q for q in queries)  # source_ref
         assert any("tufted linen wingback" in q for q in queries)  # description
+
+    def test_search_queries_with_room_dims(self):
+        """Primary furniture gets a size-constrained query when room dims available."""
+        dims = RoomDimensions(width_m=4.0, length_m=5.0, height_m=2.7)
+        item = {
+            "source_tag": "IMAGE_ONLY",
+            "category": "Sofa",
+            "material": "velvet",
+            "color": "navy",
+            "style": "modern",
+        }
+        queries = _build_search_queries(item, room_dimensions=dims)
+        constrained = [q for q in queries if "under" in q and "inches" in q]
+        assert len(constrained) == 1, f"Expected one constrained query, got: {queries}"
+        assert "medium room" in constrained[0]
+
+    def test_search_queries_without_room_dims(self):
+        """No constrained query when room_dimensions is None."""
+        item = {
+            "source_tag": "IMAGE_ONLY",
+            "category": "Sofa",
+            "material": "velvet",
+            "color": "navy",
+            "style": "modern",
+        }
+        queries = _build_search_queries(item, room_dimensions=None)
+        constrained = [q for q in queries if "under" in q and "inches" in q]
+        assert len(constrained) == 0
+
+
+class TestRoomSizeLabel:
+    def test_small_room(self):
+        dims = RoomDimensions(width_m=3.0, length_m=4.0, height_m=2.5)  # 12 sqm
+        assert _room_size_label(dims) == "small"
+
+    def test_medium_room(self):
+        dims = RoomDimensions(width_m=4.0, length_m=5.0, height_m=2.7)  # 20 sqm
+        assert _room_size_label(dims) == "medium"
+
+    def test_large_room(self):
+        dims = RoomDimensions(width_m=6.0, length_m=7.0, height_m=3.0)  # 42 sqm
+        assert _room_size_label(dims) == "large"
+
+    def test_boundary_15_sqm(self):
+        """Exactly 15 sqm is medium (lower bound inclusive)."""
+        dims = RoomDimensions(width_m=3.0, length_m=5.0, height_m=2.5)  # 15 sqm
+        assert _room_size_label(dims) == "medium"
+
+    def test_boundary_25_sqm(self):
+        """Exactly 25 sqm is medium (upper bound inclusive)."""
+        dims = RoomDimensions(width_m=5.0, length_m=5.0, height_m=2.7)  # 25 sqm
+        assert _room_size_label(dims) == "medium"
 
 
 # === Search Priority Tests ===
@@ -567,6 +711,32 @@ class TestBuildScoringPrompt:
         assert "Lamp" in prompt
         assert "IKEA Lamp" in prompt
 
+    def test_default_weights_without_lidar(self):
+        """Without room_dimensions, uses default weights (dim=0.1)."""
+        item = {"category": "Sofa", "description": "velvet sofa"}
+        product = {"title": "Sofa", "url": "https://example.com"}
+        prompt = _build_scoring_prompt(item, product, None, room_dimensions=None)
+        assert "weight: 0.3" in prompt  # category default
+        assert "weight: 0.1" in prompt  # dimensions default
+
+    def test_lidar_weights_with_room_dims(self):
+        """With room_dimensions, dimensions weight increases to 0.2."""
+        dims = RoomDimensions(width_m=4.0, length_m=5.0, height_m=2.7)
+        item = {"category": "Sofa", "description": "velvet sofa"}
+        product = {"title": "Sofa", "url": "https://example.com"}
+        prompt = _build_scoring_prompt(item, product, None, room_dimensions=dims)
+        assert "weight: 0.25" in prompt  # category lidar
+        assert "weight: 0.2)" in prompt  # dimensions lidar
+        assert "LiDAR-measured" in prompt
+        assert "4.0m" in prompt
+
+    def test_no_room_dimensions_section_without_lidar(self):
+        """Without room_dimensions, no room dims section in prompt."""
+        item = {"category": "Sofa", "description": "velvet sofa"}
+        product = {"title": "Sofa", "url": "https://example.com"}
+        prompt = _build_scoring_prompt(item, product, None, room_dimensions=None)
+        assert "LiDAR-measured" not in prompt
+
 
 # === Extraction Message Building Tests ===
 
@@ -603,6 +773,33 @@ class TestBuildExtractionMessages:
 # === Dimension Filtering Tests ===
 
 
+class TestParseDims:
+    def test_inches(self):
+        result = _parse_product_dims_cm("84x36x32 inches")
+        assert result is not None
+        w, d, h = result
+        assert abs(w - 84 * 2.54) < 0.1
+        assert abs(d - 36 * 2.54) < 0.1
+        assert abs(h - 32 * 2.54) < 0.1
+
+    def test_cm(self):
+        result = _parse_product_dims_cm("213x91cm")
+        assert result is not None
+        w, d, _ = result
+        assert abs(w - 213) < 0.1
+        assert abs(d - 91) < 0.1
+
+    def test_two_dims(self):
+        result = _parse_product_dims_cm("8x10")
+        assert result is not None
+        assert result[2] == 0.0  # no third dimension
+
+    def test_none(self):
+        assert _parse_product_dims_cm(None) is None
+        assert _parse_product_dims_cm("") is None
+        assert _parse_product_dims_cm("no dims here") is None
+
+
 class TestDimensionFiltering:
     def test_passthrough_without_lidar(self):
         items = [{"category": "Sofa"}]
@@ -610,13 +807,67 @@ class TestDimensionFiltering:
         result = filter_by_dimensions(items, scored, None)
         assert result == scored
 
-    def test_passthrough_with_lidar(self):
-        """Dimension filtering is a pass-through for now (P2+ enhancement)."""
+    def test_annotates_fits(self):
+        """Product within constraint gets room_fit='fits'."""
+        dims = RoomDimensions(width_m=4.5, length_m=6.0, height_m=2.7)
+        items = [{"category": "Sofa"}]
+        # Sofa max: (600-120)*0.75 = 360cm ≈ 142". Product is 80" ≈ 203cm.
+        scored = [[{"weighted_total": 0.8, "dimensions": "80x36x32 inches"}]]
+        result = filter_by_dimensions(items, scored, dims)
+        assert result[0][0]["room_fit"] == "fits"
+
+    def test_annotates_tight(self):
+        """Product near limit gets room_fit='tight'."""
+        dims = RoomDimensions(width_m=3.0, length_m=3.5, height_m=2.4)
+        items = [{"category": "Sofa"}]
+        # Sofa max: (350-120)*0.75 = 172.5cm ≈ 68". Product is 72" ≈ 183cm → ~106% → tight
+        scored = [[{"weighted_total": 0.8, "dimensions": "72x36x32 inches"}]]
+        result = filter_by_dimensions(items, scored, dims)
+        assert result[0][0]["room_fit"] == "tight"
+
+    def test_annotates_too_large(self):
+        """Product exceeding limit gets room_fit='too_large'."""
+        dims = RoomDimensions(width_m=3.0, length_m=3.5, height_m=2.4)
+        items = [{"category": "Sofa"}]
+        # Sofa max: 172.5cm ≈ 68". Product is 96" ≈ 244cm → ~141% → too_large
+        scored = [[{"weighted_total": 0.8, "dimensions": "96x40x34 inches"}]]
+        result = filter_by_dimensions(items, scored, dims)
+        assert result[0][0]["room_fit"] == "too_large"
+        assert "exceeds" in result[0][0]["room_fit_detail"]
+
+    def test_passthrough_no_dims_on_product(self):
+        """Products without parseable dimensions pass through unchanged."""
+        dims = RoomDimensions(width_m=4.0, length_m=5.0, height_m=2.7)
         items = [{"category": "Sofa"}]
         scored = [[{"weighted_total": 0.8}]]
-        dims = RoomDimensions(width_m=4.0, length_m=5.0, height_m=2.7)
         result = filter_by_dimensions(items, scored, dims)
-        assert result == scored
+        assert "room_fit" not in result[0][0]
+
+    def test_unknown_category_passes_through(self):
+        """Items with unmapped categories are not annotated."""
+        dims = RoomDimensions(width_m=4.0, length_m=5.0, height_m=2.7)
+        items = [{"category": "Wall art"}]
+        scored = [[{"weighted_total": 0.8, "dimensions": "24x36 inches"}]]
+        result = filter_by_dimensions(items, scored, dims)
+        assert "room_fit" not in result[0][0]
+
+    def test_confidence_downgrades_on_too_large(self):
+        """too_large products get fit_status downgraded in confidence filtering."""
+        items = [{"category": "Sofa"}]
+        scored = [
+            [
+                {
+                    "weighted_total": 0.9,
+                    "product_url": "https://example.com/sofa",
+                    "product_name": "Big Sofa",
+                    "room_fit": "too_large",
+                    "room_fit_detail": '96" exceeds 68" limit',
+                }
+            ]
+        ]
+        matched, _, _ = apply_confidence_filtering(items, scored)
+        assert len(matched) == 1
+        assert matched[0].fit_status == "tight"  # downgraded from "fits"
 
 
 # === Code Fence Stripping Tests ===

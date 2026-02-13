@@ -122,6 +122,12 @@ Apply these rules based on the detected room type:
 
 ---
 
+## ROOM ANALYSIS (when available)
+
+{room_analysis_section}
+
+---
+
 ## BEHAVIORAL RULES
 
 {mode_instructions}

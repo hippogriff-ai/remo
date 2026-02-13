@@ -32,6 +32,7 @@ from app.models.contracts import (
     GenerateShoppingListOutput,
     ProductMatch,
     RevisionRecord,
+    RoomContext,
     RoomDimensions,
     UnmatchedItem,
 )
@@ -121,6 +122,124 @@ def _extract_json(text: str) -> dict[str, Any]:
     return {}
 
 
+# === Room Constraints (shared by extraction, search, scoring, filtering) ===
+
+
+def _compute_room_constraints(
+    room_dimensions: RoomDimensions,
+) -> dict[str, dict[str, str]]:
+    """Compute per-category max sizes from room measurements.
+
+    Uses standard interior design proportions to derive furniture size limits
+    from LiDAR-measured (or photo-estimated) room dimensions.
+    """
+    width = room_dimensions.width_m
+    length = room_dimensions.length_m
+    height = room_dimensions.height_m
+    longer_cm = max(width, length) * 100
+    shorter_cm = min(width, length) * 100
+    h_cm = height * 100
+
+    # Sofa: max ~75% of longer usable wall (minus 1.2m traffic clearance)
+    usable_wall_cm = longer_cm - 120
+    sofa_max_cm = max(0, usable_wall_cm * 0.75)
+
+    # Coffee table: ~2/3 of max sofa width
+    coffee_max_cm = sofa_max_cm * 0.67
+
+    # Rug: ~80% of shorter wall × ~70% of longer wall
+    rug_w_cm = shorter_cm * 0.80
+    rug_l_cm = longer_cm * 0.70
+
+    # Dining table: room minus 1.8m clearance (90cm per side for chairs)
+    dining_l_cm = max(0, longer_cm - 180)
+
+    # Lighting: floor lamp = ceiling height - 30cm
+    lamp_max_cm = max(0, h_cm - 30)
+
+    return {
+        "sofa": {"max_width_cm": f"{sofa_max_cm:.0f}", "inches": f"{sofa_max_cm / 2.54:.0f}"},
+        "coffee_table": {
+            "max_width_cm": f"{coffee_max_cm:.0f}",
+            "inches": f"{coffee_max_cm / 2.54:.0f}",
+        },
+        "rug": {
+            "width_cm": f"{rug_w_cm:.0f}",
+            "length_cm": f"{rug_l_cm:.0f}",
+            "inches": f"{rug_w_cm / 2.54:.0f}x{rug_l_cm / 2.54:.0f}",
+        },
+        "dining_table": {
+            "max_length_cm": f"{dining_l_cm:.0f}",
+            "inches": f"{dining_l_cm / 2.54:.0f}",
+        },
+        "floor_lamp": {
+            "max_height_cm": f"{lamp_max_cm:.0f}",
+            "inches": f"{lamp_max_cm / 2.54:.0f}",
+        },
+    }
+
+
+def _format_room_constraints_for_prompt(
+    room_context: RoomContext | None,
+    room_dimensions: RoomDimensions | None,
+) -> str:
+    """Format room constraints for prompt injection.
+
+    Uses LiDAR dimensions when available, falls back to photo-estimated dimensions.
+    Includes furniture observations from photo analysis if present.
+    """
+    if room_dimensions is None and (room_context is None or room_context.room_dimensions is None):
+        # Try photo-estimated dimensions as last resort
+        if (
+            room_context
+            and room_context.photo_analysis
+            and room_context.photo_analysis.estimated_dimensions
+        ):
+            return (
+                f"Estimated room size: {room_context.photo_analysis.estimated_dimensions} "
+                "(from photo analysis — approximate, use for general sizing only)"
+            )
+        return "No room dimensions available."
+
+    # Use LiDAR dims preferentially, then context dims
+    dims = room_dimensions or (room_context.room_dimensions if room_context else None)
+    if dims is None:
+        return "No room dimensions available."
+
+    constraints = _compute_room_constraints(dims)
+    source = "LiDAR scan" if room_dimensions else "photo analysis"
+
+    lines = [
+        f"Room: {dims.width_m:.1f}m x {dims.length_m:.1f}m, "
+        f"ceiling {dims.height_m:.1f}m ({source})",
+        "",
+        "Per-category size limits:",
+        f'- Sofa: max ~{constraints["sofa"]["inches"]}" wide',
+        f'- Coffee table: max ~{constraints["coffee_table"]["inches"]}" wide',
+        f'- Rug: ~{constraints["rug"]["inches"]}" area',
+        f'- Dining table: max ~{constraints["dining_table"]["inches"]}" long',
+        f'- Floor lamp: max ~{constraints["floor_lamp"]["inches"]}" tall',
+    ]
+
+    # Include furniture observations from photo analysis
+    if room_context and room_context.photo_analysis:
+        analysis = room_context.photo_analysis
+        if analysis.furniture:
+            furniture_notes = []
+            for f in analysis.furniture:
+                desc = f.item
+                if f.condition:
+                    desc += f" ({f.condition})"
+                if f.keep_candidate:
+                    desc += " [keep]"
+                furniture_notes.append(desc)
+            if furniture_notes:
+                lines.append("")
+                lines.append("Detected furniture: " + "; ".join(furniture_notes))
+
+    return "\n".join(lines)
+
+
 # === Step 1: Item Extraction ===
 
 _extraction_prompt_cache: str | None = None
@@ -129,6 +248,8 @@ _extraction_prompt_cache: str | None = None
 def _load_extraction_prompt(
     design_brief: DesignBrief | None,
     revision_history: list[RevisionRecord],
+    room_context: RoomContext | None = None,
+    room_dimensions: RoomDimensions | None = None,
 ) -> str:
     """Load and fill the item extraction prompt template (template cached)."""
     global _extraction_prompt_cache  # noqa: PLW0603
@@ -148,10 +269,13 @@ def _load_extraction_prompt(
             )
         iterations_text = "\n".join(iterations)
 
+    room_constraints = _format_room_constraints_for_prompt(room_context, room_dimensions)
+
     return template.format(
         design_brief=brief_text,
         iteration_history=iterations_text,
         keep_items=json.dumps(keep_items),
+        room_constraints=room_constraints,
     )
 
 
@@ -186,11 +310,15 @@ async def extract_items(
     revision_history: list[RevisionRecord],
     *,
     source_urls: list[str] | None = None,
+    room_context: RoomContext | None = None,
+    room_dimensions: RoomDimensions | None = None,
 ) -> list[dict[str, Any]]:
     """Step 1: Extract purchasable items from the design image."""
     from app.utils.llm_cache import get_cached, set_cached
 
-    prompt_text = _load_extraction_prompt(design_brief, revision_history)
+    prompt_text = _load_extraction_prompt(
+        design_brief, revision_history, room_context, room_dimensions
+    )
 
     # Dev/test cache: use stable R2 keys (not presigned URLs) to prevent
     # cache misses when signatures rotate. Will be removed in production.
@@ -293,7 +421,20 @@ def _num_results_for_item(item: dict[str, Any]) -> int:
     return _PRIORITY_NUM_RESULTS.get(item.get("search_priority", "MEDIUM"), 3)
 
 
-def _build_search_queries(item: dict[str, Any]) -> list[str]:
+def _room_size_label(room_dimensions: RoomDimensions) -> str:
+    """Classify room as small/medium/large based on floor area."""
+    area_sqm = room_dimensions.width_m * room_dimensions.length_m
+    if area_sqm < 15:
+        return "small"
+    elif area_sqm <= 25:
+        return "medium"
+    return "large"
+
+
+def _build_search_queries(
+    item: dict[str, Any],
+    room_dimensions: RoomDimensions | None = None,
+) -> list[str]:
     """Build source-aware search queries for an extracted item.
 
     Queries include "buy" to steer Exa toward product pages (not blogs/reviews).
@@ -304,6 +445,9 @@ def _build_search_queries(item: dict[str, Any]) -> list[str]:
 
     All tags get a description-based query when available, since the
     extraction prompt produces rich professional descriptions.
+
+    When room_dimensions are available, adds a size-constrained query for
+    primary furniture categories (sofa, table, rug, cabinet).
     """
     tag = item.get("source_tag", "IMAGE_ONLY")
     category = item.get("category", "")
@@ -333,6 +477,20 @@ def _build_search_queries(item: dict[str, Any]) -> list[str]:
 
     if dims:
         queries.append(f"{category} {dims}")
+
+    # Room-aware constrained query for primary furniture
+    if room_dimensions is not None:
+        constraint_key = _match_category(item)
+        if constraint_key:
+            constraints = _compute_room_constraints(room_dimensions)
+            cat_constraint = constraints.get(constraint_key)
+            if cat_constraint:
+                max_inches = cat_constraint.get("inches", "")
+                size_label = _room_size_label(room_dimensions)
+                if max_inches:
+                    queries.append(
+                        f"{category} {material} under {max_inches} inches {size_label} room"
+                    )
 
     return [q.strip() for q in queries if q.strip()]
 
@@ -444,9 +602,10 @@ async def search_products_for_item(
     http_client: httpx.AsyncClient,
     item: dict[str, Any],
     exa_api_key: str,
+    room_dimensions: RoomDimensions | None = None,
 ) -> list[dict[str, Any]]:
     """Search Exa for products matching a single extracted item."""
-    queries = _build_search_queries(item)
+    queries = _build_search_queries(item, room_dimensions=room_dimensions)
     num_results = _num_results_for_item(item)
     tasks = [_search_exa(http_client, q, exa_api_key, num_results) for q in queries]
     all_results = await asyncio.gather(*tasks, return_exceptions=True)
@@ -467,10 +626,16 @@ async def search_products_for_item(
 async def search_all_items(
     items: list[dict[str, Any]],
     exa_api_key: str,
+    room_dimensions: RoomDimensions | None = None,
 ) -> list[list[dict[str, Any]]]:
     """Step 2: Search Exa for products for all items (parallelized)."""
     async with httpx.AsyncClient() as http_client:
-        tasks = [search_products_for_item(http_client, item, exa_api_key) for item in items]
+        tasks = [
+            search_products_for_item(
+                http_client, item, exa_api_key, room_dimensions=room_dimensions
+            )
+            for item in items
+        ]
         return await asyncio.gather(*tasks)
 
 
@@ -505,6 +670,21 @@ def _price_to_cents(price_text: str) -> int:
         return 0
 
 
+SCORING_WEIGHTS_DEFAULT = {
+    "category": 0.30,
+    "material": 0.20,
+    "color": 0.20,
+    "style": 0.20,
+    "dimensions": 0.10,
+}
+SCORING_WEIGHTS_LIDAR = {
+    "category": 0.25,
+    "material": 0.20,
+    "color": 0.18,
+    "style": 0.17,
+    "dimensions": 0.20,
+}
+
 _scoring_prompt_cache: str | None = None
 
 
@@ -520,9 +700,12 @@ def _build_scoring_prompt(
     item: dict[str, Any],
     product: dict[str, Any],
     design_brief: DesignBrief | None,
+    room_dimensions: RoomDimensions | None = None,
 ) -> str:
     """Fill scoring prompt template for a specific item-product pair."""
     template = _load_scoring_prompt()
+
+    weights = SCORING_WEIGHTS_LIDAR if room_dimensions else SCORING_WEIGHTS_DEFAULT
 
     style_mood = ""
     color_palette = ""
@@ -532,6 +715,18 @@ def _build_scoring_prompt(
         if design_brief.style_profile:
             style_mood = design_brief.style_profile.mood or ""
             color_palette = ", ".join(design_brief.style_profile.colors)
+
+    room_dims_section = ""
+    if room_dimensions:
+        room_dims_section = (
+            f"\n## Room Dimensions (LiDAR-measured)\n"
+            f"- Width: {room_dimensions.width_m:.1f}m "
+            f'({room_dimensions.width_m / 0.0254:.0f}")\n'
+            f"- Length: {room_dimensions.length_m:.1f}m "
+            f'({room_dimensions.length_m / 0.0254:.0f}")\n'
+            f"- Height: {room_dimensions.height_m:.1f}m "
+            f'({room_dimensions.height_m / 0.0254:.0f}")\n'
+        )
 
     return template.format(
         item_category=item.get("category", ""),
@@ -547,6 +742,17 @@ def _build_scoring_prompt(
         product_description=product.get("text", product.get("title", "")),
         product_price=_extract_price_text(product),
         product_url=product.get("url", ""),
+        w_category=weights["category"],
+        w_material=weights["material"],
+        w_color=weights["color"],
+        w_style=weights["style"],
+        w_dimensions=weights["dimensions"],
+        room_dimensions_section=room_dims_section,
+        weighted_total_formula=(
+            f"cat*{weights['category']} + mat*{weights['material']} + "
+            f"col*{weights['color']} + sty*{weights['style']} + "
+            f"dim*{weights['dimensions']}"
+        ),
     )
 
 
@@ -555,11 +761,12 @@ async def score_product(
     item: dict[str, Any],
     product: dict[str, Any],
     design_brief: DesignBrief | None,
+    room_dimensions: RoomDimensions | None = None,
 ) -> dict[str, Any]:
     """Score a single product against an item using the rubric."""
     from app.utils.llm_cache import get_cached, set_cached
 
-    prompt = _build_scoring_prompt(item, product, design_brief)
+    prompt = _build_scoring_prompt(item, product, design_brief, room_dimensions=room_dimensions)
 
     # Dev/test cache: avoid redundant Claude scoring calls when prompt
     # hasn't changed. Will be removed in production.
@@ -608,6 +815,7 @@ async def score_all_products(
     items: list[dict[str, Any]],
     search_results: list[list[dict[str, Any]]],
     design_brief: DesignBrief | None,
+    room_dimensions: RoomDimensions | None = None,
 ) -> list[list[dict[str, Any]]]:
     """Step 3: Score all products for all items (parallelized with semaphore).
 
@@ -622,7 +830,9 @@ async def score_all_products(
 
     async def _score_limited(item: dict[str, Any], product: dict[str, Any]) -> dict[str, Any]:
         async with semaphore:
-            return await score_product(client, item, product, design_brief)
+            return await score_product(
+                client, item, product, design_brief, room_dimensions=room_dimensions
+            )
 
     # Flatten all item-product pairs, tracking which item each belongs to
     tasks: list[asyncio.Task[dict[str, Any]]] = []
@@ -696,18 +906,119 @@ async def score_all_products(
 
 # === Step 4: Dimension Filtering ===
 
+_DIMS_RE = re.compile(
+    r"(\d+(?:\.\d+)?)\s*[xX×]\s*(\d+(?:\.\d+)?)"
+    r"(?:\s*[xX×]\s*(\d+(?:\.\d+)?))?"
+    r"\s*(in(?:ches?)?|cm|\")?",
+)
+
+# Map extracted item categories to constraint keys from _compute_room_constraints
+_CATEGORY_TO_CONSTRAINT: dict[str, str] = {
+    "sofa": "sofa",
+    "sectional": "sofa",
+    "accent chair": "sofa",
+    "coffee table": "coffee_table",
+    "side table": "coffee_table",
+    "console": "coffee_table",
+    "dining table": "dining_table",
+    "rug": "rug",
+    "floor lamp": "floor_lamp",
+}
+
+
+def _parse_product_dims_cm(dims_str: str | None) -> tuple[float, float, float] | None:
+    """Parse product dimension string into (width_cm, depth_cm, height_cm).
+
+    Handles formats like "84x36x32 inches", "213x91cm", "8x10".
+    Assumes inches for furniture dimensions when no unit specified.
+    """
+    if not dims_str:
+        return None
+    match = _DIMS_RE.search(dims_str)
+    if not match:
+        return None
+
+    d1 = float(match.group(1))
+    d2 = float(match.group(2))
+    d3 = float(match.group(3)) if match.group(3) else 0.0
+    unit = (match.group(4) or "").lower().strip()
+
+    is_cm = unit.startswith("cm")
+    factor = 1.0 if is_cm else 2.54  # default to inches
+
+    return (d1 * factor, d2 * factor, d3 * factor)
+
+
+def _match_category(item: dict[str, Any]) -> str | None:
+    """Map an extracted item's category to a constraint key."""
+    cat = (item.get("category") or "").lower()
+    for keyword, constraint_key in _CATEGORY_TO_CONSTRAINT.items():
+        if keyword in cat:
+            return constraint_key
+    return None
+
 
 def filter_by_dimensions(
     items: list[dict[str, Any]],
     scored_products: list[list[dict[str, Any]]],
     room_dimensions: RoomDimensions | None,
 ) -> list[list[dict[str, Any]]]:
-    """Step 4: Filter products by room dimensions if LiDAR data available."""
+    """Step 4: Annotate products with room fit assessment.
+
+    Does NOT remove products — only adds room_fit and room_fit_detail fields.
+    Products without parseable dimensions pass through unchanged.
+    """
     if room_dimensions is None:
         return scored_products
-    # Dimension filtering is a P2+ enhancement.
-    # For now, pass through — the scoring rubric's dimension criterion
-    # already penalizes size mismatches.
+
+    constraints = _compute_room_constraints(room_dimensions)
+
+    for item_idx, item_scores in enumerate(scored_products):
+        if item_idx >= len(items):
+            break
+        constraint_key = _match_category(items[item_idx])
+        if constraint_key is None:
+            continue
+
+        constraint = constraints.get(constraint_key)
+        if constraint is None:
+            continue
+
+        # Get the max dimension for this category
+        max_cm = float(
+            constraint.get("max_width_cm")
+            or constraint.get("max_length_cm")
+            or constraint.get("max_height_cm")
+            or "0"
+        )
+        if max_cm <= 0:
+            continue
+
+        for product in item_scores:
+            product_dims_str = product.get("dimensions") or product.get("estimated_dimensions")
+            parsed = _parse_product_dims_cm(product_dims_str)
+            if parsed is None:
+                continue
+
+            largest_dim = max(parsed)
+            ratio = largest_dim / max_cm if max_cm > 0 else 0
+
+            if ratio <= 1.0:
+                product["room_fit"] = "fits"
+                product["room_fit_detail"] = (
+                    f'{largest_dim / 2.54:.0f}" within {max_cm / 2.54:.0f}" limit'
+                )
+            elif ratio <= 1.15:
+                product["room_fit"] = "tight"
+                product["room_fit_detail"] = (
+                    f'{largest_dim / 2.54:.0f}" near {max_cm / 2.54:.0f}" limit'
+                )
+            else:
+                product["room_fit"] = "too_large"
+                product["room_fit_detail"] = (
+                    f'{largest_dim / 2.54:.0f}" exceeds {max_cm / 2.54:.0f}" limit'
+                )
+
     return scored_products
 
 
@@ -808,6 +1119,14 @@ def apply_confidence_filtering(
         elif confidence >= 0.5:
             fit_status = "tight"
             fit_detail = _build_fit_detail(best)
+
+        # Downgrade fit_status if product exceeds room dimensions
+        room_fit = best.get("room_fit")
+        if room_fit == "too_large":
+            fit_status = "tight"
+            fit_detail = best.get("room_fit_detail", fit_detail)
+        elif room_fit == "tight" and fit_status == "fits":
+            fit_detail = best.get("room_fit_detail")
 
         matched.append(
             ProductMatch(
@@ -923,6 +1242,8 @@ async def generate_shopping_list(
             input.design_brief,
             input.revision_history,
             source_urls=[input.design_image_url, *input.original_room_photo_urls],
+            room_context=input.room_context,
+            room_dimensions=input.room_dimensions,
         )
     except anthropic.RateLimitError as e:
         log.warning("shopping_extraction_rate_limited")
@@ -945,7 +1266,9 @@ async def generate_shopping_list(
 
     # Step 2: Search products
     try:
-        search_results = await search_all_items(items, exa_key)
+        search_results = await search_all_items(
+            items, exa_key, room_dimensions=input.room_dimensions
+        )
     except Exception as e:
         log.error("shopping_search_failed", error=str(e))
         raise ApplicationError(f"Exa search failed: {e}", non_retryable=False) from e
@@ -956,7 +1279,13 @@ async def generate_shopping_list(
     # Step 3: Score products (individual failures handled inside score_all_products;
     # these handlers catch errors from the gather setup or unexpected propagation)
     try:
-        scored = await score_all_products(client, items, search_results, input.design_brief)
+        scored = await score_all_products(
+            client,
+            items,
+            search_results,
+            input.design_brief,
+            room_dimensions=input.room_dimensions,
+        )
     except anthropic.RateLimitError as e:
         log.warning("shopping_scoring_rate_limited")
         raise ApplicationError(

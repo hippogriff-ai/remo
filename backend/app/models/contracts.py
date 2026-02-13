@@ -118,6 +118,11 @@ class DesignBrief(BaseModel):
     inspiration_notes: list[InspirationNote] = []
     style_skills_used: list[str] = []  # skill_ids loaded during intake
     renovation_intent: RenovationIntent | None = None  # populated by intake agent
+    # Designer Brain enhancement (additive, Phase 1a)
+    emotional_drivers: list[str] = []  # "started WFH, room feels oppressive"
+    usage_patterns: str | None = None  # "couple WFH Mon-Fri, host dinners monthly"
+    renovation_willingness: str | None = None  # "repaint yes, replace flooring no"
+    room_analysis_hypothesis: str | None = None  # preserved from photo analysis
 
 
 class RoomDimensions(BaseModel):
@@ -200,6 +205,77 @@ class ScanData(BaseModel):
     room_dimensions: RoomDimensions | None = None
 
 
+# === Room Analysis (Designer Brain) ===
+
+
+class LightingAssessment(BaseModel):
+    """Structured lighting observations from room photos."""
+
+    natural_light_direction: str | None = None  # "south-facing windows"
+    natural_light_intensity: str | None = None  # "abundant" / "moderate" / "limited"
+    window_coverage: str | None = None  # "full wall" / "single window"
+    existing_artificial: str | None = None  # "single overhead" / "layered"
+    lighting_gaps: list[str] = []  # ["dark reading corner", "no task lighting"]
+
+
+class FurnitureObservation(BaseModel):
+    """Single piece of furniture observed in room photos."""
+
+    item: str  # "L-shaped gray sectional"
+    condition: str | None = None  # "good" / "worn" / "dated"
+    placement_note: str | None = None  # "faces wall instead of window"
+    keep_candidate: bool = False  # designer thinks worth keeping
+
+
+class BehavioralSignal(BaseModel):
+    """Inference about lifestyle from room evidence."""
+
+    observation: str  # "books stacked on floor near armchair"
+    inference: str  # "active reader lacking storage"
+    design_implication: str | None = None  # "add reading nook with task lighting"
+
+
+class RoomAnalysis(BaseModel):
+    """Pre-intake photo analysis — the designer's first 5 minutes of observation."""
+
+    # Identity & space
+    room_type: str | None = None
+    room_type_confidence: float = Field(ge=0, le=1, default=0.5)
+    estimated_dimensions: str | None = None  # "approximately 12x15 feet"
+    layout_pattern: str | None = None  # "open plan" / "L-shaped"
+
+    # Observations
+    lighting: LightingAssessment | None = None
+    furniture: list[FurnitureObservation] = []
+    architectural_features: list[str] = []  # ["crown molding", "bay window"]
+    flooring: str | None = None  # "hardwood, good condition"
+    existing_palette: list[str] = []  # ["cool gray walls", "warm oak floors"]
+    overall_warmth: str | None = None  # "cool" / "warm" / "neutral" / "mixed"
+    circulation_issues: list[str] = []  # ["path to window blocked by ottoman"]
+
+    # Inferences
+    style_signals: list[str] = []  # ["mid-century legs", "warm neutral palette"]
+    behavioral_signals: list[BehavioralSignal] = []
+    tensions: list[str] = []  # ["beautiful moldings with flat-pack furniture"]
+
+    # Synthesis
+    hypothesis: str | None = None  # "lived-in family room, good bones, poor lighting"
+    strengths: list[str] = []
+    opportunities: list[str] = []
+    uncertain_aspects: list[str] = []  # ["lighting warmer than photos suggest"]
+
+    # Meta
+    photo_count: int = 0
+
+
+class RoomContext(BaseModel):
+    """Progressive room understanding that enriches over time."""
+
+    photo_analysis: RoomAnalysis | None = None
+    room_dimensions: RoomDimensions | None = None
+    enrichment_sources: list[str] = []  # ["photos", "lidar"]
+
+
 # === Activity Input/Output ===
 
 
@@ -237,6 +313,7 @@ class GenerateShoppingListInput(BaseModel):
     design_brief: DesignBrief | None = None
     revision_history: list[RevisionRecord] = []
     room_dimensions: RoomDimensions | None = None
+    room_context: RoomContext | None = None
 
 
 class GenerateShoppingListOutput(BaseModel):
@@ -276,6 +353,20 @@ class LoadSkillOutput(BaseModel):
     not_found: list[str] = []  # skill IDs that couldn't be loaded
 
 
+class AnalyzeRoomPhotosInput(BaseModel):
+    """Input for the read_the_room photo analysis activity."""
+
+    room_photo_urls: list[str]
+    inspiration_photo_urls: list[str] = []
+    inspiration_notes: list[InspirationNote] = []
+
+
+class AnalyzeRoomPhotosOutput(BaseModel):
+    """Output from the read_the_room photo analysis activity."""
+
+    analysis: RoomAnalysis
+
+
 class ValidatePhotoInput(BaseModel):
     image_data: bytes
     photo_type: Literal["room", "inspiration"]
@@ -304,6 +395,9 @@ class WorkflowState(BaseModel):
     approved: bool = False
     error: WorkflowError | None = None
     chat_history_key: str | None = None
+    # Designer Brain enhancement (additive, Phase 1a)
+    room_analysis: RoomAnalysis | None = None
+    room_context: RoomContext | None = None
 
 
 # === API Request/Response Models ===

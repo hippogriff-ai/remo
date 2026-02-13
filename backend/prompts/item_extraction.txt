@@ -13,6 +13,9 @@ You are a professional interior design product specialist. Your task is to ident
 5. **Keep items** — items the user wants to KEEP from the original room (DO NOT include these):
 {keep_items}
 
+6. **Room constraints** (from LiDAR scan and/or photo analysis):
+{room_constraints}
+
 ## Your Task
 
 Identify 6-10 purchasable items visible in the design image. For each item:

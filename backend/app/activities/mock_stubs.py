@@ -13,17 +13,23 @@ from temporalio import activity
 from temporalio.exceptions import ApplicationError
 
 from app.models.contracts import (
+    AnalyzeRoomPhotosInput,
+    AnalyzeRoomPhotosOutput,
+    BehavioralSignal,
     CostBreakdown,
     DesignOption,
     EditDesignInput,
     EditDesignOutput,
+    FurnitureObservation,
     GenerateDesignsInput,
     GenerateDesignsOutput,
     GenerateShoppingListInput,
     GenerateShoppingListOutput,
+    LightingAssessment,
     LoadSkillInput,
     LoadSkillOutput,
     ProductMatch,
+    RoomAnalysis,
     StyleSkillPack,
 )
 
@@ -75,6 +81,56 @@ async def generate_shopping_list(
             total_low_cents=9999,
             total_high_cents=12000,
         ),
+    )
+
+
+@activity.defn
+async def analyze_room_photos(
+    input: AnalyzeRoomPhotosInput,
+) -> AnalyzeRoomPhotosOutput:
+    """Mock room analysis — returns realistic stub for testing."""
+    return AnalyzeRoomPhotosOutput(
+        analysis=RoomAnalysis(
+            room_type="living room",
+            room_type_confidence=0.85,
+            estimated_dimensions="approximately 12x15 feet",
+            layout_pattern="open plan",
+            lighting=LightingAssessment(
+                natural_light_direction="south-facing windows",
+                natural_light_intensity="abundant",
+                window_coverage="full wall",
+                existing_artificial="layered",
+            ),
+            furniture=[
+                FurnitureObservation(
+                    item="L-shaped gray sectional",
+                    condition="good",
+                    placement_note="faces window",
+                    keep_candidate=True,
+                ),
+                FurnitureObservation(
+                    item="wooden coffee table",
+                    condition="worn",
+                ),
+            ],
+            architectural_features=["crown molding", "bay window"],
+            flooring="hardwood, good condition",
+            existing_palette=["cool gray walls", "warm oak floors"],
+            overall_warmth="mixed",
+            style_signals=["mid-century elements", "warm palette"],
+            behavioral_signals=[
+                BehavioralSignal(
+                    observation="books stacked by armchair",
+                    inference="active reader",
+                    design_implication="add reading nook with task lighting",
+                )
+            ],
+            hypothesis="Well-lit family space with good bones and mixed warmth",
+            strengths=["abundant natural light", "good proportions"],
+            opportunities=["consolidate furniture", "warm up palette"],
+            uncertain_aspects=["ceiling height from photos", "actual paint finish"],
+            photo_count=len(input.room_photo_urls),
+        )
     )
 
 

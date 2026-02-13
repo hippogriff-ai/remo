@@ -703,6 +703,10 @@ async def _real_intake_message(
     }
     if session.last_partial_brief is not None:
         project_context["previous_brief"] = session.last_partial_brief.model_dump()
+    if state.room_analysis is not None:
+        project_context["room_analysis"] = state.room_analysis.model_dump()
+    if state.room_context is not None:
+        project_context["room_context"] = state.room_context.model_dump()
 
     intake_input = IntakeChatInput(
         mode=session.mode,

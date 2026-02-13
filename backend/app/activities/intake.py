@@ -132,6 +132,35 @@ _BRIEF_PROPERTIES: dict[str, Any] = {
             "texture, furniture, clutter, mood, lifestyle, constraints"
         ),
     },
+    "emotional_drivers": {
+        "type": "array",
+        "items": {"type": "string"},
+        "description": (
+            "Why this project now — emotional motivations. "
+            "E.g., 'started WFH, room feels oppressive'"
+        ),
+    },
+    "usage_patterns": {
+        "type": "string",
+        "description": (
+            "Detailed who/when/what usage patterns. "
+            "E.g., 'couple WFH Mon-Fri, host dinners monthly'"
+        ),
+    },
+    "renovation_willingness": {
+        "type": "string",
+        "description": (
+            "Scope signals for what the user will change. "
+            "E.g., 'repaint yes, fixtures maybe, tile no'"
+        ),
+    },
+    "room_analysis_hypothesis": {
+        "type": "string",
+        "description": (
+            "Preserved or updated hypothesis from photo analysis. "
+            "Track how your understanding evolved during the conversation."
+        ),
+    },
 }
 
 _OPTIONS_SCHEMA: dict[str, Any] = {
@@ -314,11 +343,14 @@ def load_system_prompt(
     mode: str,
     turn_number: int,
     previous_brief: dict[str, Any] | None = None,
+    room_analysis: dict[str, Any] | None = None,
 ) -> str:
     """Load and customize the system prompt for the given mode and turn.
 
     If previous_brief is provided (from an earlier turn), it's injected as
     structured context so the model never loses gathered information.
+    If room_analysis is provided (from eager photo analysis), it's injected
+    as pre-observation context so the agent starts with a hypothesis.
     """
     global _system_prompt_cache  # noqa: PLW0603
     if _system_prompt_cache is None:
@@ -332,6 +364,10 @@ def load_system_prompt(
     mode_text = mode_text.format(remaining_turns=remaining)
 
     prompt = template.replace("{mode_instructions}", mode_text)
+
+    # Inject room analysis context if available
+    analysis_section = _format_room_analysis_section(room_analysis)
+    prompt = prompt.replace("{room_analysis_section}", analysis_section)
 
     # Inject previous brief context so the model builds on prior turns
     if previous_brief and turn_number > 1:
@@ -378,6 +414,124 @@ def _format_brief_context(brief: dict[str, Any]) -> str:
         lines.append(f"- Domains covered: {', '.join(brief['domains_covered'])}")
 
     return "\n".join(lines) if lines else "No information gathered yet."
+
+
+def _format_room_analysis_section(analysis: dict[str, Any] | None) -> str:
+    """Format room analysis into a prompt section for the intake agent.
+
+    When analysis is available, injects the hypothesis, observations, and
+    uncertain aspects so the agent starts with pre-formed understanding.
+    When absent, provides a minimal fallback instruction.
+    """
+    if not analysis:
+        return (
+            "No pre-analysis available for this room. Start from your "
+            "own observations of any room photos provided."
+        )
+
+    lines = [
+        "Your design team has already analyzed the room photos before "
+        "this conversation. Here is what was observed:\n"
+    ]
+
+    if analysis.get("room_type"):
+        conf = analysis.get("room_type_confidence", 0.5)
+        lines.append(f"**Room type**: {analysis['room_type']} (confidence: {conf:.0%})")
+
+    if analysis.get("hypothesis"):
+        lines.append(f"\n**Hypothesis**: {analysis['hypothesis']}")
+
+    if analysis.get("estimated_dimensions"):
+        lines.append(f"**Dimensions**: {analysis['estimated_dimensions']}")
+
+    if analysis.get("layout_pattern"):
+        lines.append(f"**Layout**: {analysis['layout_pattern']}")
+
+    lighting = analysis.get("lighting")
+    if isinstance(lighting, dict):
+        parts = []
+        if lighting.get("natural_light_intensity"):
+            parts.append(lighting["natural_light_intensity"])
+        if lighting.get("natural_light_direction"):
+            parts.append(lighting["natural_light_direction"])
+        if lighting.get("existing_artificial"):
+            parts.append(f"artificial: {lighting['existing_artificial']}")
+        if parts:
+            lines.append(f"**Lighting**: {', '.join(parts)}")
+        gaps = lighting.get("lighting_gaps", [])
+        if gaps:
+            lines.append(f"**Lighting gaps**: {', '.join(gaps)}")
+
+    furniture = analysis.get("furniture", [])
+    if furniture:
+        items = []
+        for f in furniture:
+            if isinstance(f, dict) and f.get("item"):
+                desc = f["item"]
+                if f.get("condition"):
+                    desc += f" ({f['condition']})"
+                if f.get("keep_candidate"):
+                    desc += " [keep]"
+                items.append(desc)
+        if items:
+            lines.append(f"**Furniture**: {'; '.join(items)}")
+
+    if analysis.get("architectural_features"):
+        lines.append("**Architecture**: " + ", ".join(analysis["architectural_features"]))
+
+    if analysis.get("style_signals"):
+        lines.append("**Style signals**: " + ", ".join(analysis["style_signals"]))
+
+    behavioral = analysis.get("behavioral_signals", [])
+    if behavioral:
+        for sig in behavioral:
+            if isinstance(sig, dict):
+                obs = sig.get("observation", "")
+                inf = sig.get("inference", "")
+                lines.append(f"**Behavioral signal**: {obs} → {inf}")
+
+    if analysis.get("tensions"):
+        lines.append("**Tensions**: " + "; ".join(analysis["tensions"]))
+
+    if analysis.get("strengths"):
+        lines.append("**Strengths**: " + ", ".join(analysis["strengths"]))
+
+    if analysis.get("opportunities"):
+        lines.append("**Opportunities**: " + ", ".join(analysis["opportunities"]))
+
+    uncertain = analysis.get("uncertain_aspects", [])
+    if uncertain:
+        lines.append(f"\n**Uncertain (probe these)**: {', '.join(uncertain)}")
+
+    lines.append(
+        "\n### Using This Analysis\n"
+        "- You already know the room type and basic layout. "
+        "Do NOT re-ask these.\n"
+        "- Start by confirming your understanding and probing "
+        "the highest-uncertainty aspects.\n"
+        "- Pre-populate room_type, lighting, and furniture domains "
+        "from the analysis.\n"
+        "- Reference specific observations: 'I noticed the sofa "
+        "faces away from the window — is that intentional?'\n"
+        "- The hypothesis is your starting point, not gospel. "
+        "Update it as the user provides corrections."
+    )
+
+    lines.append(
+        "\n### HYPOTHESIS CORRECTIONS\n"
+        "When the user contradicts your room analysis:\n"
+        "- Acknowledge warmly: 'Good to know — photos can be "
+        "misleading about [aspect]'\n"
+        "- Update your mental model immediately — do not carry "
+        "forward invalidated assumptions\n"
+        "- Use the correction as a learning signal: if they "
+        "corrected lighting, they care deeply about it — "
+        "probe deeper\n"
+        "- NEVER say 'but the photos show...' or imply the user "
+        "is wrong about their own space"
+    )
+
+    return "\n".join(lines)
 
 
 def build_messages(
@@ -481,22 +635,19 @@ def build_brief(brief_data: dict[str, Any]) -> DesignBrief:
                 )
             )
 
-    # Merge lifestyle into occupants for downstream compat (generate.py reads brief.occupants)
-    occupants = brief_data.get("occupants")
-    lifestyle = brief_data.get("lifestyle")
-    if lifestyle and occupants:
-        occupants = f"{occupants} — {lifestyle}"
-    elif lifestyle:
-        occupants = lifestyle
-
     return DesignBrief(
         room_type=brief_data.get("room_type", ""),
-        occupants=occupants,
+        occupants=brief_data.get("occupants"),
+        lifestyle=brief_data.get("lifestyle"),
         pain_points=brief_data.get("pain_points", []),
         keep_items=brief_data.get("keep_items", []),
         style_profile=style_profile,
         constraints=brief_data.get("constraints", []),
         inspiration_notes=inspiration_notes,
+        emotional_drivers=brief_data.get("emotional_drivers", []),
+        usage_patterns=brief_data.get("usage_patterns"),
+        renovation_willingness=brief_data.get("renovation_willingness"),
+        room_analysis_hypothesis=brief_data.get("room_analysis_hypothesis"),
     )
 
 
@@ -531,9 +682,10 @@ async def _run_intake_core(input: IntakeChatInput) -> IntakeChatOutput:
     # Server-side turn counter (count user messages in history + this one)
     turn_number = len([m for m in input.conversation_history if m.role == "user"]) + 1
 
-    # Extract previous brief from project context for accumulation safety
+    # Extract previous brief and room analysis from project context
     previous_brief: dict[str, Any] | None = input.project_context.get("previous_brief")
-    system_prompt = load_system_prompt(input.mode, turn_number, previous_brief)
+    room_analysis: dict[str, Any] | None = input.project_context.get("room_analysis")
+    system_prompt = load_system_prompt(input.mode, turn_number, previous_brief, room_analysis)
 
     # Extract photos from project context for multimodal first turn
     room_photo_urls: list[str] = input.project_context.get("room_photos", [])

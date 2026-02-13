@@ -465,6 +465,133 @@ The current architecture works within Gemini 3 Pro's 14-image ceiling:
 
 ---
 
+## Part 6: Room Intelligence in Shopping Pipeline
+
+### Context
+
+The shopping pipeline receives `room_dimensions: RoomDimensions | None` but completely ignores it — `filter_by_dimensions()` is a no-op stub, extraction and scoring prompts have no room awareness, and search queries don't use size constraints. Meanwhile, the `RoomContext` built in the workflow (merging `RoomAnalysis` from photo analysis with LiDAR `RoomDimensions`) stops at `WorkflowState` and never reaches `shopping.py`.
+
+This section wires room intelligence into all 4 shopping pipeline stages: extraction, search, scoring, and filtering. It uses BOTH data sources: precise LiDAR dimensions when available, and photo-estimated dimensions as fallback.
+
+### Prerequisite: Pipe RoomContext to Shopping
+
+**`backend/app/models/contracts.py`** — Add to `GenerateShoppingListInput`:
+```python
+class GenerateShoppingListInput(BaseModel):
+    design_image_url: str
+    original_room_photo_urls: list[str]
+    design_brief: DesignBrief | None = None
+    revision_history: list[RevisionRecord] = []
+    room_dimensions: RoomDimensions | None = None
+    room_context: RoomContext | None = None  # NEW: merged photo analysis + LiDAR
+```
+
+**`backend/app/workflows/design_project.py`** — Update `_shopping_input()`:
+```python
+def _shopping_input(self) -> GenerateShoppingListInput:
+    assert self.current_image is not None
+    return GenerateShoppingListInput(
+        design_image_url=self.current_image,
+        original_room_photo_urls=[p.storage_key for p in self.photos if p.photo_type == "room"],
+        design_brief=self.design_brief,
+        revision_history=self.revision_history,
+        room_dimensions=self.scan_data.room_dimensions if self.scan_data else None,
+        room_context=self.room_context,  # NEW
+    )
+```
+
+### Fix 3: Room-Constraint Extraction
+
+**Files**: `backend/app/activities/shopping.py`, `backend/prompts/item_extraction.txt`
+
+Add `_compute_room_constraints(room_dimensions: RoomDimensions) -> dict[str, dict[str, str]]` — computes per-category max sizes from room measurements:
+- Sofa: max width ~75% of longer usable wall (wall minus 1.2m clearance)
+- Coffee table: ~2/3 of max sofa width
+- Rug: ~80% of shorter wall x ~70% of longer wall
+- Dining table: room minus 1.8m clearance each side (90cm per side for chairs)
+- Lighting: floor lamp max = ceiling height - 0.3m, pendant hangs at 60% height
+
+Add `_format_room_constraints_for_prompt(room_context, room_dimensions) -> str`:
+- When LiDAR available: use precise measurements for constraint math
+- When only photo analysis: parse `estimated_dimensions` (e.g., "approximately 12x15 feet") as fallback
+- Include photo analysis furniture observations: "Detected: sofa (worn, keep), bookshelf (good condition, keep)"
+- Include door/window count for placement awareness
+
+Update `item_extraction.txt` — add `{room_constraints}` placeholder after "Keep items" section.
+
+Thread through: `_load_extraction_prompt()` → `extract_items()` → `generate_shopping_list()` all get room_context param.
+
+### Fix 4: Room-Aware Search Queries
+
+**File**: `backend/app/activities/shopping.py` (`_build_search_queries()`)
+
+Add `_room_size_label(room_dimensions)` — classifies as "small" (<15 sqm), "medium" (15-25), "large" (>25).
+
+Extend `_build_search_queries(item, room_dimensions=None)`:
+- When room dims available and item is primary furniture (sofa, table, rug, cabinet):
+  - Use `_compute_room_constraints()` to get max size
+  - Add a constrained query alongside existing queries
+- Optionally use photo analysis: flooring type for rug queries, lighting gaps for fixture queries
+
+### Fix 5: Implement filter_by_dimensions()
+
+**File**: `backend/app/activities/shopping.py` (currently no-op stub)
+
+Add `_parse_product_dims_cm(dims_str) -> tuple[float, float, float] | None`:
+- Regex for "84x36x32 inches", "213x91cm", "8x10" formats
+- Returns (width_cm, depth_cm, height_cm) or None
+
+Replace the no-op `filter_by_dimensions()`:
+- Compute per-category constraints via `_compute_room_constraints()`
+- For each scored product with parseable dimensions:
+  - Compare product's largest dimension against category max constraint
+  - Annotate (do NOT remove): `room_fit = "fits" / "tight" / "too_large"`
+  - Set `room_fit_detail` with explanation string
+- Products without parseable dimensions pass through unchanged
+
+Update `apply_confidence_filtering()`:
+- When `room_fit == "too_large"`, downgrade `fit_status` to "tight" even if confidence >= 0.8
+
+### Fix 6: Boost Dimension Scoring Weight with LiDAR
+
+**Files**: `backend/app/activities/shopping.py`, `backend/prompts/product_scoring.txt`
+
+Define two weight dicts:
+```python
+SCORING_WEIGHTS_DEFAULT = {"category": 0.30, "material": 0.20, "color": 0.20, "style": 0.20, "dimensions": 0.10}
+SCORING_WEIGHTS_LIDAR   = {"category": 0.25, "material": 0.20, "color": 0.18, "style": 0.17, "dimensions": 0.20}
+```
+
+Update `product_scoring.txt`:
+- Replace hardcoded weights with template variables: `{w_category}`, `{w_material}`, `{w_color}`, `{w_style}`, `{w_dimensions}`
+- Add room dimensions context section
+- Update dimension criterion to evaluate room fit when dimensions provided
+
+### Implementation Order
+
+```
+Prerequisite: RoomContext in GenerateShoppingListInput + _shopping_input()
+    │
+    ▼
+Fix 3: _compute_room_constraints() + extraction prompt  [shared helper]
+    │
+    ├──▶ Fix 4: Room-aware search queries
+    ├──▶ Fix 5: filter_by_dimensions() implementation
+    └──▶ Fix 6: Dynamic scoring weights
+```
+
+### Tests to Add (`backend/tests/test_shopping.py`)
+
+**Fix 3:** test_compute_room_constraints_standard_room, test_compute_room_constraints_small_room, test_format_room_constraints_with_lidar, test_format_room_constraints_photo_only, test_extraction_prompt_includes_room_context, test_extraction_prompt_without_context
+
+**Fix 4:** test_room_size_label, test_search_queries_with_room_dims, test_search_queries_without_room_dims
+
+**Fix 5:** test_parse_product_dims_inches, test_parse_product_dims_cm, test_parse_product_dims_none, test_filter_annotates_fits, test_filter_annotates_tight, test_filter_annotates_too_large, test_filter_passthrough_without_lidar, test_confidence_downgrades_on_too_large
+
+**Fix 6:** test_scoring_weights_sum_to_one, test_scoring_prompt_lidar_weights, test_scoring_prompt_default_weights
+
+---
+
 ## Verification
 
 1. **Contract tests**: All new models serialize/deserialize, additive fields have defaults, backward-compatible
