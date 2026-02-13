@@ -902,6 +902,59 @@ class TestIntakeEndpoints:
         assert resp.json()["error"] == "wrong_step"
         assert "start_intake" in resp.json()["message"]
 
+    @pytest.mark.asyncio
+    async def test_session_recovery_from_client_history(self, client, project_id):
+        """Intake session recovers from client-provided history after API restart."""
+        _mock_states[project_id].step = "intake"
+        # Start and send first message normally
+        await client.post(
+            f"/api/v1/projects/{project_id}/intake/start",
+            json={"mode": "quick"},
+        )
+        resp1 = await client.post(
+            f"/api/v1/projects/{project_id}/intake/message",
+            json={"message": "bedroom"},
+        )
+        assert resp1.status_code == 200
+
+        # Simulate API restart: clear in-memory sessions
+        _intake_sessions.pop(project_id, None)
+
+        # Send next message with client-provided history (iOS resends conversation)
+        resp2 = await client.post(
+            f"/api/v1/projects/{project_id}/intake/message",
+            json={
+                "message": "modern",
+                "conversation_history": [
+                    {"role": "user", "content": "bedroom"},
+                    {"role": "assistant", "content": resp1.json()["agent_message"]},
+                ],
+                "mode": "quick",
+            },
+        )
+        assert resp2.status_code == 200
+        body = resp2.json()
+        # Should be step 3 (open-ended), not step 1 (room type)
+        assert body["progress"] == "Question 3 of 3"
+
+    @pytest.mark.asyncio
+    async def test_session_lost_without_history_returns_409(self, client, project_id):
+        """When session is lost and client sends no history, 409 is returned."""
+        _mock_states[project_id].step = "intake"
+        await client.post(
+            f"/api/v1/projects/{project_id}/intake/start",
+            json={"mode": "quick"},
+        )
+        # Simulate API restart
+        _intake_sessions.pop(project_id, None)
+
+        resp = await client.post(
+            f"/api/v1/projects/{project_id}/intake/message",
+            json={"message": "bedroom"},
+        )
+        assert resp.status_code == 409
+        assert resp.json()["error"] == "wrong_step"
+
 
 class TestMockGenerationStep:
     """GAP-5: Verify generation step is visible between intake and selection."""

@@ -329,6 +329,8 @@ class IntakeStartRequest(BaseModel):
 
 class IntakeMessageRequest(BaseModel):
     message: str
+    conversation_history: list[ChatMessage] = Field(default=[], max_length=20)
+    mode: Literal["quick", "full", "open"] | None = None
 
 
 class IntakeConfirmRequest(BaseModel):

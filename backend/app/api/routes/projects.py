@@ -611,6 +611,13 @@ async def send_intake_message(project_id: str, body: IntakeMessageRequest, reque
         return err
     assert state is not None
 
+    # Reconstruct session from client-provided history if API restarted mid-conversation
+    if project_id not in _intake_sessions and body.conversation_history:
+        _intake_sessions[project_id] = _IntakeSession(
+            mode=body.mode or "quick",
+            history=list(body.conversation_history),
+        )
+
     if not settings.use_mock_activities:
         return await _real_intake_message(project_id, state, body.message)
 
