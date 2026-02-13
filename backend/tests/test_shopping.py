@@ -852,6 +852,26 @@ class TestDimensionFiltering:
         result = filter_by_dimensions(items, scored, dims)
         assert "room_fit" not in result[0][0]
 
+    def test_rug_dimension_fit_checked(self):
+        """Rug products should be checked against width_cm/length_cm constraints."""
+        dims = RoomDimensions(width_m=4.0, length_m=5.0, height_m=2.7)
+        items = [{"category": "Area Rug"}]
+        # Room: 4m x 5m. Rug limits: 320cm x 350cm (80%/70%).
+        # Product: "8x10" → 8ft x 10ft = 244cm x 305cm → fits.
+        scored = [[{"weighted_total": 0.8, "dimensions": "8x10"}]]
+        result = filter_by_dimensions(items, scored, dims)
+        assert result[0][0]["room_fit"] == "fits"
+
+    def test_rug_too_large_annotated(self):
+        """Oversized rug exceeding room limits gets room_fit='too_large'."""
+        dims = RoomDimensions(width_m=3.0, length_m=3.5, height_m=2.7)
+        items = [{"category": "Rug"}]
+        # Room: 3m x 3.5m. Rug limits: 240cm x 245cm.
+        # Product: "10x12" → 10ft x 12ft = 305cm x 366cm → too large.
+        scored = [[{"weighted_total": 0.8, "dimensions": "10x12"}]]
+        result = filter_by_dimensions(items, scored, dims)
+        assert result[0][0]["room_fit"] == "too_large"
+
     def test_confidence_downgrades_on_too_large(self):
         """too_large products get fit_status downgraded in confidence filtering."""
         items = [{"category": "Sofa"}]

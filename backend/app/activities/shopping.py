@@ -1012,15 +1012,22 @@ def filter_by_dimensions(
         if constraint is None:
             continue
 
-        # Get the max dimension for this category
-        max_cm = float(
-            constraint.get("max_width_cm")
-            or constraint.get("max_length_cm")
-            or constraint.get("max_height_cm")
-            or "0"
-        )
-        if max_cm <= 0:
-            continue
+        # Rugs use width_cm/length_cm (2-axis check); furniture uses max_*_cm (1-axis)
+        is_rug = constraint_key == "rug"
+        if is_rug:
+            rug_max_w = float(constraint.get("width_cm") or "0")
+            rug_max_l = float(constraint.get("length_cm") or "0")
+            if rug_max_w <= 0 or rug_max_l <= 0:
+                continue
+        else:
+            max_cm = float(
+                constraint.get("max_width_cm")
+                or constraint.get("max_length_cm")
+                or constraint.get("max_height_cm")
+                or "0"
+            )
+            if max_cm <= 0:
+                continue
 
         item_category = items[item_idx].get("category")
         for product in item_scores:
@@ -1029,24 +1036,30 @@ def filter_by_dimensions(
             if parsed is None:
                 continue
 
-            largest_dim = max(parsed)
-            ratio = largest_dim / max_cm if max_cm > 0 else 0
+            if is_rug:
+                # Compare rug width/length against room limits (sorted to match)
+                rug_dims = sorted(parsed[:2])
+                rug_limits = sorted([rug_max_w, rug_max_l])
+                ratio = max(
+                    rug_dims[0] / rug_limits[0] if rug_limits[0] > 0 else 0,
+                    rug_dims[1] / rug_limits[1] if rug_limits[1] > 0 else 0,
+                )
+                limit_desc = f'{rug_max_w / 2.54:.0f}"x{rug_max_l / 2.54:.0f}"'
+            else:
+                largest_dim = max(parsed)
+                ratio = largest_dim / max_cm if max_cm > 0 else 0
+                limit_desc = f'{max_cm / 2.54:.0f}"'
 
+            product_largest = max(parsed) / 2.54  # largest dim in inches
             if ratio <= 1.0:
                 product["room_fit"] = "fits"
-                product["room_fit_detail"] = (
-                    f'{largest_dim / 2.54:.0f}" within {max_cm / 2.54:.0f}" limit'
-                )
+                product["room_fit_detail"] = f'{product_largest:.0f}" within {limit_desc} limit'
             elif ratio <= 1.15:
                 product["room_fit"] = "tight"
-                product["room_fit_detail"] = (
-                    f'{largest_dim / 2.54:.0f}" near {max_cm / 2.54:.0f}" limit'
-                )
+                product["room_fit_detail"] = f'{product_largest:.0f}" near {limit_desc} limit'
             else:
                 product["room_fit"] = "too_large"
-                product["room_fit_detail"] = (
-                    f'{largest_dim / 2.54:.0f}" exceeds {max_cm / 2.54:.0f}" limit'
-                )
+                product["room_fit_detail"] = f'{product_largest:.0f}" exceeds {limit_desc} limit'
 
     return scored_products
 

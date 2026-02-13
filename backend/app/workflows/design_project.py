@@ -533,11 +533,16 @@ class DesignProjectWorkflow:
         )
 
     async def _resolve_analysis(self) -> None:
-        """Collect analysis result if available. Never blocks intake."""
+        """Collect analysis result if available. Never blocks intake.
+
+        Uses asyncio.shield() so the activity continues running in the background
+        if the 30s timeout expires — a slow model response can still be collected
+        later (e.g., before shopping) instead of being cancelled.
+        """
         if self._analysis_handle is None:
             return
         try:
-            result = await asyncio.wait_for(self._analysis_handle, timeout=30)
+            result = await asyncio.wait_for(asyncio.shield(self._analysis_handle), timeout=30)
             self.room_analysis = result.analysis
             self._build_room_context()
         except TimeoutError:
