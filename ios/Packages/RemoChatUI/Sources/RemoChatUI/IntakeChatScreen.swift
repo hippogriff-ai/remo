@@ -21,7 +21,7 @@ public struct IntakeChatScreen: View {
 
     public var body: some View {
         VStack(spacing: 0) {
-            if selectedMode == nil {
+            if selectedMode == nil && projectState.chatMessages.isEmpty {
                 modeSelectionView
             } else {
                 chatView
