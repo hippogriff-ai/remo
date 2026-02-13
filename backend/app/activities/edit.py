@@ -16,7 +16,6 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    import httpx
     from google import genai
 
 import structlog
@@ -40,6 +39,7 @@ from app.utils.gemini_chat import (
     serialize_contents_to_r2,
     serialize_to_r2,
 )
+from app.utils.http import download_image, download_images
 from app.utils.image import draw_annotations
 
 logger = structlog.get_logger()
@@ -59,9 +59,6 @@ TEXT_FEEDBACK_TEMPLATE = (
     "Keep the room architecture, camera angle, and overall composition. "
     "Return a clean photorealistic image reflecting these changes."
 )
-
-# NOTE: Download helpers (_fetch_image, _download_image, _download_images)
-# are duplicated in generate.py — extract to shared utility in P2.
 
 
 def _load_prompt(name: str) -> str:
@@ -84,68 +81,6 @@ def _build_edit_instructions(annotations: list[AnnotationRegion]) -> str:
         color = color_names.get(ann.region_id, "red")
         lines.append(f"{ann.region_id} ({color} circle) — {ann.instruction}")
     return "\n".join(lines)
-
-
-async def _fetch_image(client: httpx.AsyncClient, url: str) -> Image.Image:
-    """Fetch and validate a single image using the given HTTP client."""
-    import httpx
-
-    try:
-        response = await client.get(url, timeout=30)
-    except httpx.TimeoutException as exc:
-        raise ApplicationError(
-            f"Timeout downloading image: {url[:100]}",
-            non_retryable=False,
-        ) from exc
-    except httpx.RequestError as exc:
-        raise ApplicationError(
-            f"Network error downloading image: {url[:100]}: {type(exc).__name__}",
-            non_retryable=False,
-        ) from exc
-
-    if response.status_code >= 400:
-        # 429 is retryable (throttling); other 4xx are non-retryable client errors
-        is_non_retryable = response.status_code < 500 and response.status_code != 429
-        raise ApplicationError(
-            f"HTTP {response.status_code} downloading image: {url[:100]}",
-            non_retryable=is_non_retryable,
-        )
-
-    content_type = response.headers.get("content-type", "")
-    if content_type and not content_type.startswith("image/"):
-        raise ApplicationError(
-            f"Expected image content-type, got: {content_type}",
-            non_retryable=True,
-        )
-
-    try:
-        img = Image.open(io.BytesIO(response.content))
-        img.load()  # Force full decode to catch truncation
-    except Exception as exc:
-        raise ApplicationError(
-            f"Downloaded image is corrupt: {url[:100]}",
-            non_retryable=True,
-        ) from exc
-    return img
-
-
-async def _download_image(url: str) -> Image.Image:
-    """Download an image from a URL."""
-    import httpx
-
-    async with httpx.AsyncClient() as client:
-        return await _fetch_image(client, url)
-
-
-async def _download_images(urls: list[str]) -> list[Image.Image]:
-    """Download multiple images concurrently with a shared HTTP client."""
-    if not urls:
-        return []
-    import httpx
-
-    async with httpx.AsyncClient() as client:
-        tasks = [_fetch_image(client, url) for url in urls]
-        return await asyncio.gather(*tasks)
 
 
 def _upload_image(image: Image.Image, project_id: str) -> str:
@@ -175,8 +110,8 @@ async def _bootstrap_chat(
 
     # Download reference images for context
     room_images, inspiration_images = await asyncio.gather(
-        _download_images(input.room_photo_urls),
-        _download_images(input.inspiration_photo_urls),
+        download_images(input.room_photo_urls),
+        download_images(input.inspiration_photo_urls),
     )
 
     # Safety cap: product allows 2 room + 3 inspiration = 5 refs, plus
@@ -385,7 +320,7 @@ async def edit_design(input: EditDesignInput) -> EditDesignOutput:
     try:
         if resolved_input.chat_history_key is None:
             # First call: bootstrap — always needs the base image
-            base_image = await _download_image(resolved_input.base_image_url)
+            base_image = await download_image(resolved_input.base_image_url)
             chat, result_image = await _bootstrap_chat(resolved_input, base_image)
 
             if result_image is None:
@@ -404,7 +339,7 @@ async def edit_design(input: EditDesignInput) -> EditDesignOutput:
             # Subsequent call: continue from R2 history
             # Only download base image if annotations require it
             cont_base: Image.Image | None = (
-                await _download_image(resolved_input.base_image_url)
+                await download_image(resolved_input.base_image_url)
                 if resolved_input.annotations
                 else None
             )

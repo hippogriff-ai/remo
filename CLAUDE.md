@@ -8,7 +8,7 @@ Remo is an AI-powered room redesign iOS app. Users photograph a room, describe t
 
 ## Status
 
-T0 (Platform) P0+P1 complete, P2 integration done. Backend has 899 unit tests + 80 E2E tests passing, 94% coverage, ruff/mypy clean. Full pipeline verified end-to-end with real AI (Claude Opus, Gemini 3 Pro, Exa). Golden path test: 216s. LLM response caching for dev/test. See `CONTINUITY.md` for current state.
+T0 (Platform) P0+P1 complete, P2 integration done. All T0-owned modules at 100% coverage, ruff/mypy clean. Full pipeline verified end-to-end with real AI (Claude Opus, Gemini 3 Pro, Exa). Golden path test: 216s. LLM response caching for dev/test. See `CONTINUITY.md` for current state.
 
 ## Development Commands
 
@@ -92,7 +92,7 @@ backend/
   app/
     models/contracts.py        # ALL Pydantic models (T0 owns exclusively, frozen)
     models/db.py               # SQLAlchemy models (9 tables)
-    api/routes/projects.py     # FastAPI endpoints (17 endpoints, mock state store, multi-step intake conversation, real intake agent wiring)
+    api/routes/projects.py     # FastAPI endpoints (mock state store, multi-step intake conversation, real intake agent wiring)
     api/routes/health.py       # Health check endpoint (version, environment, service status)
     workflows/design_project.py # Temporal workflow (12 signals, 1 query)
     activities/mock_stubs.py   # Mock activities (T0-owned, swapped in P2)
@@ -105,7 +105,7 @@ backend/
     main.py                    # FastAPI app (request ID middleware, error handlers)
     worker.py                  # Temporal worker entrypoint
   migrations/versions/         # Alembic (001_initial_schema.py)
-  tests/                       # 792 tests across 11 test files (module-scoped Temporal fixture)
+  tests/                       # pytest suite (module-scoped Temporal fixture)
 ios/                           # (T1-owned, not yet scaffolded in this worktree)
 ```
 
