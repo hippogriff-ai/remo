@@ -106,6 +106,33 @@ final class ModelsTests: XCTestCase {
         XCTAssertEqual(region.regionId, 1)
         XCTAssertEqual(region.centerX, 0.5)
         XCTAssertEqual(region.instruction, "Replace this lamp with a modern floor lamp")
+        // Verify backward compatibility: new optional fields get defaults
+        XCTAssertNil(region.action)
+        XCTAssertEqual(region.avoid, [])
+        XCTAssertEqual(region.constraints, [])
+    }
+
+    func testAnnotationRegionDecodingWithAllFields() throws {
+        let json = """
+        {"region_id": 2, "center_x": 0.3, "center_y": 0.7, "radius": 0.12, "instruction": "Remove this shelf entirely", "action": "Remove", "avoid": ["modern art", "glass"], "constraints": ["kid-friendly"]}
+        """.data(using: .utf8)!
+
+        let region = try JSONDecoder().decode(AnnotationRegion.self, from: json)
+        XCTAssertEqual(region.regionId, 2)
+        XCTAssertEqual(region.action, "Remove")
+        XCTAssertEqual(region.avoid, ["modern art", "glass"])
+        XCTAssertEqual(region.constraints, ["kid-friendly"])
+    }
+
+    func testAnnotationRegionRoundTrip() throws {
+        let original = AnnotationRegion(
+            regionId: 1, centerX: 0.5, centerY: 0.3, radius: 0.1,
+            instruction: "Replace with floor lamp",
+            action: "Replace", avoid: ["plastic"], constraints: ["budget"]
+        )
+        let data = try JSONEncoder().encode(original)
+        let decoded = try JSONDecoder().decode(AnnotationRegion.self, from: data)
+        XCTAssertEqual(original, decoded)
     }
 
     func testShoppingListDecoding() throws {
@@ -465,6 +492,67 @@ final class ModelsTests: XCTestCase {
         // Verify nested wall data is accessible
         XCTAssertEqual(dims.walls[0]["height"], AnyCodable(2.7))
         XCTAssertEqual(dims.openings[0]["type"], AnyCodable("door"))
+    }
+
+    func testRoomDimensionsBackwardCompatMinimal() throws {
+        // Old backend JSON without new fields — should decode with defaults
+        let json = """
+        {
+            "width_m": 3.0,
+            "length_m": 4.0,
+            "height_m": 2.5
+        }
+        """.data(using: .utf8)!
+
+        let dims = try JSONDecoder().decode(RoomDimensions.self, from: json)
+        XCTAssertEqual(dims.widthM, 3.0)
+        XCTAssertEqual(dims.walls, [])
+        XCTAssertEqual(dims.openings, [])
+        XCTAssertEqual(dims.furniture, [])
+        XCTAssertEqual(dims.surfaces, [])
+        XCTAssertNil(dims.floorAreaSqm)
+    }
+
+    func testRoomDimensionsWithNewFields() throws {
+        let json = """
+        {
+            "width_m": 4.2,
+            "length_m": 5.8,
+            "height_m": 2.7,
+            "walls": [],
+            "openings": [],
+            "furniture": [
+                {"type": "sofa", "width": 2.1, "depth": 0.9}
+            ],
+            "surfaces": [
+                {"type": "floor", "material": "hardwood"}
+            ],
+            "floor_area_sqm": 24.36
+        }
+        """.data(using: .utf8)!
+
+        let dims = try JSONDecoder().decode(RoomDimensions.self, from: json)
+        XCTAssertEqual(dims.furniture.count, 1)
+        XCTAssertEqual(dims.furniture[0]["type"], AnyCodable("sofa"))
+        XCTAssertEqual(dims.surfaces.count, 1)
+        XCTAssertEqual(dims.surfaces[0]["material"], AnyCodable("hardwood"))
+        XCTAssertEqual(dims.floorAreaSqm, 24.36)
+    }
+
+    func testRoomDimensionsRoundTripWithNewFields() throws {
+        let dims = RoomDimensions(
+            widthM: 4.0,
+            lengthM: 5.0,
+            heightM: 2.5,
+            furniture: [["type": AnyCodable("table")]],
+            surfaces: [["type": AnyCodable("floor"), "material": AnyCodable("tile")]],
+            floorAreaSqm: 20.0
+        )
+        let data = try JSONEncoder().encode(dims)
+        let decoded = try JSONDecoder().decode(RoomDimensions.self, from: data)
+        XCTAssertEqual(decoded.furniture.count, 1)
+        XCTAssertEqual(decoded.surfaces.count, 1)
+        XCTAssertEqual(decoded.floorAreaSqm, 20.0)
     }
 
     // MARK: - Forward compatibility (unknown fields ignored)

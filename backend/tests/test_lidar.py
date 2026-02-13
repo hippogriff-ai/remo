@@ -51,6 +51,9 @@ class TestParseRoomDimensions:
         assert result.height_m == 2.7
         assert len(result.walls) == 4
         assert len(result.openings) == 2
+        assert result.floor_area_sqm == 24.36
+        assert result.furniture == []
+        assert result.surfaces == []
 
     def test_walls_preserved(self) -> None:
         """Wall data should be passed through as-is in the walls list."""
@@ -80,12 +83,14 @@ class TestParseRoomDimensions:
         assert result.height_m == 2.5
         assert result.walls == []
         assert result.openings == []
+        assert result.furniture == []
+        assert result.surfaces == []
+        assert result.floor_area_sqm == 12.0  # fallback: 3.0 * 4.0
 
     def test_extra_fields_ignored(self) -> None:
-        """Unknown fields like floor_area_sqm should not cause errors."""
+        """Unknown top-level fields should not cause errors."""
         data = _valid_lidar_json()
-        data["floor_area_sqm"] = 24.36
-        data["furniture"] = [{"type": "sofa"}]
+        data["metadata"] = {"scanner_version": "2.0"}
         result = parse_room_dimensions(data)
 
         assert result.width_m == 4.2
@@ -104,6 +109,103 @@ class TestParseRoomDimensions:
         result = parse_room_dimensions(data)
 
         assert result.width_m == 4.2
+
+
+class TestFurnitureSurfacesFloorArea:
+    """Tests for furniture, surfaces, and floor_area_sqm parsing."""
+
+    def test_furniture_parsed(self) -> None:
+        """Furniture array should be passed through to RoomDimensions."""
+        data = _valid_lidar_json()
+        data["furniture"] = [
+            {"type": "sofa", "width": 2.1, "depth": 0.9, "height": 0.8},
+            {"type": "table", "width": 1.2, "depth": 0.6, "height": 0.75},
+        ]
+        result = parse_room_dimensions(data)
+        assert len(result.furniture) == 2
+        assert result.furniture[0]["type"] == "sofa"
+
+    def test_surfaces_parsed(self) -> None:
+        """Surfaces array should be passed through to RoomDimensions."""
+        data = _valid_lidar_json()
+        data["surfaces"] = [{"type": "floor", "material": "hardwood"}]
+        result = parse_room_dimensions(data)
+        assert len(result.surfaces) == 1
+        assert result.surfaces[0]["material"] == "hardwood"
+
+    def test_floor_area_from_roomplan(self) -> None:
+        """floor_area_sqm from RoomPlan should be used when valid."""
+        data = _valid_lidar_json()
+        data["floor_area_sqm"] = 24.36
+        result = parse_room_dimensions(data)
+        assert result.floor_area_sqm == 24.36
+
+    def test_floor_area_fallback_to_computed(self) -> None:
+        """Without floor_area_sqm, should fall back to width * length."""
+        data = {"room": {"width": 4.0, "length": 5.0, "height": 2.5}}
+        result = parse_room_dimensions(data)
+        assert result.floor_area_sqm == 20.0
+
+    def test_floor_area_invalid_nan_falls_back(self) -> None:
+        """NaN floor_area_sqm should fall back to width * length."""
+        data = _valid_lidar_json()
+        data["floor_area_sqm"] = float("nan")
+        result = parse_room_dimensions(data)
+        assert result.floor_area_sqm == pytest.approx(4.2 * 5.8)
+
+    def test_floor_area_negative_falls_back(self) -> None:
+        """Negative floor_area_sqm should fall back to width * length."""
+        data = _valid_lidar_json()
+        data["floor_area_sqm"] = -10.0
+        result = parse_room_dimensions(data)
+        assert result.floor_area_sqm == pytest.approx(4.2 * 5.8)
+
+    def test_floor_area_zero_falls_back(self) -> None:
+        """Zero floor_area_sqm should fall back to width * length."""
+        data = _valid_lidar_json()
+        data["floor_area_sqm"] = 0
+        result = parse_room_dimensions(data)
+        assert result.floor_area_sqm == pytest.approx(4.2 * 5.8)
+
+    def test_floor_area_non_numeric_falls_back(self) -> None:
+        """Non-numeric floor_area_sqm should fall back to width * length."""
+        data = _valid_lidar_json()
+        data["floor_area_sqm"] = "big"
+        result = parse_room_dimensions(data)
+        assert result.floor_area_sqm == pytest.approx(4.2 * 5.8)
+
+    def test_furniture_not_list_treated_as_empty(self) -> None:
+        """Non-list furniture should be treated as empty."""
+        data = _valid_lidar_json()
+        data["furniture"] = "invalid"
+        result = parse_room_dimensions(data)
+        assert result.furniture == []
+
+    def test_surfaces_not_list_treated_as_empty(self) -> None:
+        """Non-list surfaces should be treated as empty."""
+        data = _valid_lidar_json()
+        data["surfaces"] = 42
+        result = parse_room_dimensions(data)
+        assert result.surfaces == []
+
+    def test_full_valid_input_includes_new_fields(self) -> None:
+        """Full input with all new fields should parse correctly."""
+        data = _valid_lidar_json()
+        data["furniture"] = [{"type": "chair"}]
+        data["surfaces"] = [{"type": "floor", "material": "tile"}]
+        data["floor_area_sqm"] = 25.0
+        result = parse_room_dimensions(data)
+        assert result.furniture == [{"type": "chair"}]
+        assert result.surfaces == [{"type": "floor", "material": "tile"}]
+        assert result.floor_area_sqm == 25.0
+
+    def test_minimal_input_defaults_new_fields(self) -> None:
+        """Minimal input should default new fields properly."""
+        data = {"room": {"width": 3.0, "length": 4.0, "height": 2.5}}
+        result = parse_room_dimensions(data)
+        assert result.furniture == []
+        assert result.surfaces == []
+        assert result.floor_area_sqm == 12.0  # 3.0 * 4.0
 
 
 class TestParseRoomDimensionsErrors:

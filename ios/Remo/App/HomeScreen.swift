@@ -12,6 +12,7 @@ struct HomeScreen: View {
     @State private var isLoading = true
     @State private var errorMessage: String?
     @State private var navigationPath = NavigationPath()
+    @State private var showOnboardingTip = false
 
     private static let projectIdsKey = "remo_project_ids"
 
@@ -78,7 +79,19 @@ struct HomeScreen: View {
                 }
             }
             .task {
+                // Show onboarding tooltip on first launch
+                let isMaestroTest = UserDefaults.standard.bool(forKey: "maestro-test")
+                let hasSeenOnboarding = UserDefaults.standard.bool(forKey: "remo_has_seen_onboarding")
+                if !hasSeenOnboarding && !isMaestroTest {
+                    showOnboardingTip = true
+                    UserDefaults.standard.set(true, forKey: "remo_has_seen_onboarding")
+                }
                 await loadAndRefreshProjects()
+            }
+            .alert("Welcome to Remo", isPresented: $showOnboardingTip) {
+                Button("Got It") {}
+            } message: {
+                Text("Your design data is temporary — save your final image to Photos when you're done. We automatically delete all project data within 48 hours.")
             }
         }
     }

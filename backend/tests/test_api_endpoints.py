@@ -33,7 +33,7 @@ _VALID = ValidatePhotoOutput(passed=True, failures=[], messages=["Photo looks gr
 _INVALID = ValidatePhotoOutput(
     passed=False,
     failures=["low_resolution"],
-    messages=["Image is too small (100px)."],
+    messages=["This photo is too low resolution. Please use a higher quality image."],
 )
 
 

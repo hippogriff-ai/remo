@@ -32,9 +32,13 @@ public struct PhotoUploadScreen: View {
                         .foregroundStyle(.tint)
                     Text("Upload Room Photos")
                         .font(.title2.bold())
-                    Text("Take at least 2 photos of your room.\nOptionally add up to 3 inspiration photos.")
+                    Text("Take 2 photos from opposite corners of the room\nso we can see the full space.")
                         .font(.subheadline)
                         .foregroundStyle(.secondary)
+                        .multilineTextAlignment(.center)
+                    Text("Optionally add up to 3 inspiration photos.")
+                        .font(.caption)
+                        .foregroundStyle(.tertiary)
                         .multilineTextAlignment(.center)
                 }
                 .padding(.top)
@@ -49,6 +53,35 @@ public struct PhotoUploadScreen: View {
                         }
                     }
                     .padding(.horizontal)
+
+                    // Inspiration photo notes
+                    let inspirationPhotos = projectState.photos.filter { $0.photoType == "inspiration" }
+                    if !inspirationPhotos.isEmpty {
+                        VStack(alignment: .leading, spacing: 8) {
+                            Text("Inspiration Notes")
+                                .font(.caption.bold())
+                                .foregroundStyle(.secondary)
+                            ForEach(inspirationPhotos) { photo in
+                                if let index = projectState.photos.firstIndex(where: { $0.photoId == photo.photoId }) {
+                                    HStack(spacing: 8) {
+                                        Image(systemName: "sparkles")
+                                            .font(.caption)
+                                            .foregroundStyle(.purple)
+                                        TextField(
+                                            "What do you like about this?",
+                                            text: Binding(
+                                                get: { projectState.photos[index].note ?? "" },
+                                                set: { projectState.photos[index].note = $0.isEmpty ? nil : String($0.prefix(200)) }
+                                            )
+                                        )
+                                        .textFieldStyle(.roundedBorder)
+                                        .font(.caption)
+                                    }
+                                }
+                            }
+                        }
+                        .padding(.horizontal)
+                    }
                 }
 
                 // Status

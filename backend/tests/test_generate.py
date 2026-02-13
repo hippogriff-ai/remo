@@ -179,6 +179,91 @@ class TestPromptBuilding:
         assert "room geometry" in prompt or "architecture" in prompt
 
 
+class TestRoomContextFormatting:
+    """Tests for _format_room_context and room_dimensions in prompt building."""
+
+    def test_format_none_returns_empty(self):
+        from app.activities.generate import _format_room_context
+
+        assert _format_room_context(None) == ""
+
+    def test_format_basic_dimensions(self):
+        from app.activities.generate import _format_room_context
+        from app.models.contracts import RoomDimensions
+
+        dims = RoomDimensions(width_m=4.2, length_m=5.8, height_m=2.7)
+        result = _format_room_context(dims)
+        assert "4.2m" in result
+        assert "5.8m" in result
+        assert "2.7m" in result
+
+    def test_format_includes_floor_area(self):
+        from app.activities.generate import _format_room_context
+        from app.models.contracts import RoomDimensions
+
+        dims = RoomDimensions(width_m=4.0, length_m=5.0, height_m=2.5, floor_area_sqm=20.0)
+        result = _format_room_context(dims)
+        assert "20.0 m²" in result
+
+    def test_format_includes_openings(self):
+        from app.activities.generate import _format_room_context
+        from app.models.contracts import RoomDimensions
+
+        dims = RoomDimensions(
+            width_m=4.0,
+            length_m=5.0,
+            height_m=2.5,
+            openings=[{"type": "door"}, {"type": "window"}],
+        )
+        result = _format_room_context(dims)
+        assert "door" in result
+        assert "window" in result
+
+    def test_format_includes_furniture(self):
+        from app.activities.generate import _format_room_context
+        from app.models.contracts import RoomDimensions
+
+        dims = RoomDimensions(
+            width_m=4.0,
+            length_m=5.0,
+            height_m=2.5,
+            furniture=[{"type": "sofa"}, {"type": "table"}],
+        )
+        result = _format_room_context(dims)
+        assert "sofa" in result
+        assert "table" in result
+
+    def test_format_includes_surfaces(self):
+        from app.activities.generate import _format_room_context
+        from app.models.contracts import RoomDimensions
+
+        dims = RoomDimensions(
+            width_m=4.0,
+            length_m=5.0,
+            height_m=2.5,
+            surfaces=[{"type": "floor", "material": "hardwood"}],
+        )
+        result = _format_room_context(dims)
+        assert "hardwood" in result
+
+    def test_build_prompt_with_dimensions(self):
+        from app.activities.generate import _build_generation_prompt
+        from app.models.contracts import RoomDimensions
+
+        dims = RoomDimensions(width_m=4.2, length_m=5.8, height_m=2.7, floor_area_sqm=24.36)
+        prompt = _build_generation_prompt(None, [], room_dimensions=dims)
+        assert "4.2m" in prompt
+        assert "5.8m" in prompt
+        assert "24.4 m²" in prompt or "24.3 m²" in prompt or "24.4" in prompt
+
+    def test_build_prompt_without_dimensions(self):
+        from app.activities.generate import _build_generation_prompt
+
+        prompt = _build_generation_prompt(None, [], room_dimensions=None)
+        # Should not contain dimension text but should still be valid
+        assert "redesign" in prompt.lower() or "interior design" in prompt.lower()
+
+
 class TestPromptFiles:
     """Verify prompt template files exist and are valid."""
 
@@ -187,6 +272,7 @@ class TestPromptFiles:
         assert path.exists()
         content = path.read_text()
         assert "{brief}" in content
+        assert "{room_context}" in content
         assert len(content) > 50
 
     def test_edit_prompt_exists(self):

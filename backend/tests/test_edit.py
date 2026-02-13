@@ -211,6 +211,96 @@ class TestEditInstructions:
         assert "sectional" in result
         assert "bookshelf" in result
 
+    def test_build_instructions_with_action(self):
+        from app.activities.edit import _build_edit_instructions
+
+        annotations = [
+            AnnotationRegion(
+                region_id=1,
+                center_x=0.5,
+                center_y=0.5,
+                radius=0.1,
+                instruction="Replace with modern pendant light",
+                action="Replace",
+            ),
+        ]
+        result = _build_edit_instructions(annotations)
+        assert "Action: Replace" in result
+        assert "modern pendant light" in result
+
+    def test_build_instructions_with_avoid(self):
+        from app.activities.edit import _build_edit_instructions
+
+        annotations = [
+            AnnotationRegion(
+                region_id=1,
+                center_x=0.5,
+                center_y=0.5,
+                radius=0.1,
+                instruction="Change the finish on this cabinet",
+                avoid=["chrome", "brass"],
+            ),
+        ]
+        result = _build_edit_instructions(annotations)
+        assert "Avoid: chrome, brass" in result
+
+    def test_build_instructions_with_constraints(self):
+        from app.activities.edit import _build_edit_instructions
+
+        annotations = [
+            AnnotationRegion(
+                region_id=1,
+                center_x=0.5,
+                center_y=0.5,
+                radius=0.1,
+                instruction="Resize this bookshelf to be taller",
+                constraints=["budget-friendly", "kid-friendly"],
+            ),
+        ]
+        result = _build_edit_instructions(annotations)
+        assert "Constraints: budget-friendly, kid-friendly" in result
+
+    def test_build_instructions_with_all_fields(self):
+        from app.activities.edit import _build_edit_instructions
+
+        annotations = [
+            AnnotationRegion(
+                region_id=2,
+                center_x=0.5,
+                center_y=0.5,
+                radius=0.1,
+                instruction="Remove this old armchair entirely",
+                action="Remove",
+                avoid=["leaving empty space"],
+                constraints=["minimal style"],
+            ),
+        ]
+        result = _build_edit_instructions(annotations)
+        assert "2 (blue circle)" in result
+        assert "Action: Remove" in result
+        assert "old armchair" in result
+        assert "Avoid: leaving empty space" in result
+        assert "Constraints: minimal style" in result
+
+    def test_build_instructions_without_optional_fields(self):
+        """Instruction-only annotations should not include Action/Avoid/Constraints labels."""
+        from app.activities.edit import _build_edit_instructions
+
+        annotations = [
+            AnnotationRegion(
+                region_id=1,
+                center_x=0.5,
+                center_y=0.5,
+                radius=0.1,
+                instruction="Make this wall a lighter color",
+            ),
+        ]
+        result = _build_edit_instructions(annotations)
+        assert "Action:" not in result
+        assert "Avoid:" not in result
+        assert "Constraints:" not in result
+        assert "lighter color" in result
+
 
 def _make_test_image(w: int = 100, h: int = 100) -> Image.Image:
     return Image.new("RGB", (w, h), "white")

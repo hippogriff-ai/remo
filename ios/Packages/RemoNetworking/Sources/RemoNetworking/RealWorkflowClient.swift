@@ -211,8 +211,10 @@ public final class RealWorkflowClient: WorkflowClientProtocol, @unchecked Sendab
                 ])
             )
         }
+        let requestId = httpResponse.value(forHTTPHeaderField: "X-Request-ID")
         guard (200...299).contains(httpResponse.statusCode) else {
-            if let errorResponse = try? decoder.decode(ErrorResponse.self, from: data) {
+            if var errorResponse = try? decoder.decode(ErrorResponse.self, from: data) {
+                errorResponse.requestId = requestId
                 throw APIError.httpError(statusCode: httpResponse.statusCode, response: errorResponse)
             }
             throw APIError.httpError(
@@ -220,7 +222,8 @@ public final class RealWorkflowClient: WorkflowClientProtocol, @unchecked Sendab
                 response: ErrorResponse(
                     error: "http_\(httpResponse.statusCode)",
                     message: "Request failed with status \(httpResponse.statusCode)",
-                    retryable: httpResponse.statusCode >= 500
+                    retryable: httpResponse.statusCode >= 500,
+                    requestId: requestId
                 )
             )
         }

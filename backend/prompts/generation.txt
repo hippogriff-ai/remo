@@ -2,7 +2,7 @@ You are an expert interior designer creating photorealistic room visualizations.
 Given reference photos of a room, redesign it according to the following brief:
 
 {brief}
-
+{room_context}
 Requirements:
 - Generate a single photorealistic image of the redesigned room
 - The result must look like a professional interior design photograph taken with a high-end camera

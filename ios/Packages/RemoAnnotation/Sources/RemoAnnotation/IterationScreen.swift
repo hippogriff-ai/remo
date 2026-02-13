@@ -19,6 +19,10 @@ public struct IterationScreen: View {
     @State private var isSubmitting = false
     @State private var isApproving = false
     @State private var errorMessage: String?
+    @State private var showOverlapWarning = false
+    @State private var showRevisionHistory = false
+    @State private var showApprovalConfirmation = false
+    @State private var showRegionPanel = false
 
     enum IterationMode: String, CaseIterable {
         case annotation = "Mark Areas"
@@ -44,47 +48,70 @@ public struct IterationScreen: View {
                 regions: $regions,
                 maxRegions: 3,
                 imageURL: projectState.currentImage,
-                onWillMutate: { snapshotRegions() }
+                onWillMutate: { snapshotRegions() },
+                onOverlap: { showOverlapWarning = true }
             )
             .aspectRatio(4/3, contentMode: .fit)
             .padding(.horizontal)
 
-            Text("Round \(projectState.iterationCount + 1) of 5")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .padding(.top, 8)
+            HStack {
+                Text("Round \(projectState.iterationCount + 1) of 5")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                if projectState.iterationCount > 0 {
+                    Button {
+                        showRevisionHistory = true
+                    } label: {
+                        Label("History", systemImage: "clock.arrow.circlepath")
+                            .font(.caption)
+                    }
+                }
+            }
+            .padding(.top, 8)
+
+            if projectState.iterationCount >= 5 {
+                Text("You've used all 5 revision rounds. Please approve your design or start a new project.")
+                    .font(.subheadline)
+                    .foregroundStyle(.orange)
+                    .multilineTextAlignment(.center)
+                    .padding(.horizontal)
+                    .padding(.top, 8)
+                    .accessibilityIdentifier("iteration_limit_message")
+            }
 
             Spacer()
 
-            switch mode {
-            case .annotation:
-                annotationControls
-            case .text:
-                textControls
-            }
-
-            Button {
-                Task { await submit() }
-            } label: {
-                HStack {
-                    if isSubmitting {
-                        ProgressView()
-                            .tint(.white)
-                    }
-                    Text(isSubmitting ? "Generating..." : "Generate Revision")
+            if projectState.iterationCount < 5 {
+                switch mode {
+                case .annotation:
+                    annotationControls
+                case .text:
+                    textControls
                 }
-                .frame(maxWidth: .infinity)
+
+                Button {
+                    Task { await submit() }
+                } label: {
+                    HStack {
+                        if isSubmitting {
+                            ProgressView()
+                                .tint(.white)
+                        }
+                        Text(isSubmitting ? "Generating..." : "Generate Revision")
+                    }
+                    .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.large)
+                .disabled(!canSubmit || isSubmitting || isApproving)
+                .padding()
+                .accessibilityLabel(isSubmitting ? "Generating revision" : "Generate Revision")
+                .accessibilityHint("Sends your edits to generate a revised design")
+                .accessibilityIdentifier("iteration_submit")
             }
-            .buttonStyle(.borderedProminent)
-            .controlSize(.large)
-            .disabled(!canSubmit || isSubmitting || isApproving)
-            .padding()
-            .accessibilityLabel(isSubmitting ? "Generating revision" : "Generate Revision")
-            .accessibilityHint("Sends your edits to generate a revised design")
-            .accessibilityIdentifier("iteration_submit")
 
             Button("Approve This Design") {
-                Task { await approve() }
+                showApprovalConfirmation = true
             }
             .font(.subheadline)
             .disabled(isSubmitting || isApproving)
@@ -101,6 +128,87 @@ public struct IterationScreen: View {
         } message: {
             Text(errorMessage ?? "")
         }
+        .confirmationDialog("Approve Design?", isPresented: $showApprovalConfirmation, titleVisibility: .visible) {
+            Button("Approve") {
+                Task { await approve() }
+            }
+            Button("Keep Editing", role: .cancel) {}
+        } message: {
+            Text("Happy with this design? Once approved, it's final.")
+        }
+        .alert("Regions Can't Overlap", isPresented: $showOverlapWarning) {
+            Button("OK") {}
+        } message: {
+            Text("Please draw around a different area, or delete an existing region first.")
+        }
+        .sheet(isPresented: $showRevisionHistory) {
+            NavigationStack {
+                List {
+                    ForEach(projectState.revisionHistory, id: \.revisionNumber) { revision in
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text("Revision \(revision.revisionNumber)")
+                                .font(.subheadline.bold())
+                            ForEach(revision.instructions, id: \.self) { instruction in
+                                Text(instruction)
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
+                        .padding(.vertical, 2)
+                    }
+                }
+                .navigationTitle("Revision History")
+                #if os(iOS)
+                .navigationBarTitleDisplayMode(.inline)
+                #endif
+                .toolbar {
+                    ToolbarItem(placement: .cancellationAction) {
+                        Button("Done") { showRevisionHistory = false }
+                    }
+                }
+            }
+        }
+        .sheet(isPresented: $showRegionPanel) {
+            NavigationStack {
+                RegionListPanel(regions: $regions, onDelete: { index in
+                    snapshotRegions()
+                    guard index < regions.count else { return }
+                    withAnimation(.easeOut(duration: 0.2)) {
+                        regions.remove(at: index)
+                        // Renumber remaining regions to maintain 1..N (LASSO-11)
+                        for i in regions.indices {
+                            regions[i].regionId = i + 1
+                        }
+                    }
+                    #if os(iOS)
+                    UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                    #endif
+                })
+                .navigationTitle("Edit Regions")
+                #if os(iOS)
+                .navigationBarTitleDisplayMode(.inline)
+                #endif
+                .toolbar {
+                    #if os(iOS)
+                    ToolbarItem(placement: .cancellationAction) {
+                        EditButton()
+                            .accessibilityIdentifier("region_list_edit_button")
+                    }
+                    #endif
+                    ToolbarItem(placement: .confirmationAction) {
+                        Button("Done") { showRegionPanel = false }
+                    }
+                }
+            }
+            .presentationDetents([.medium, .large])
+            .presentationDragIndicator(.visible)
+            .presentationBackgroundInteraction(.enabled(upThrough: .medium))
+        }
+        .onChange(of: regions.count) { oldCount, newCount in
+            if newCount > oldCount && !showRegionPanel && mode == .annotation {
+                showRegionPanel = true
+            }
+        }
     }
 
     private var canSubmit: Bool {
@@ -108,7 +216,7 @@ public struct IterationScreen: View {
         case .annotation:
             return regions.contains { $0.instruction.count >= 10 }
         case .text:
-            return !textFeedback.trimmingCharacters(in: .whitespaces).isEmpty
+            return textFeedback.trimmingCharacters(in: .whitespaces).count >= 10
         }
     }
 
@@ -130,37 +238,61 @@ public struct IterationScreen: View {
                 }
             }
 
-            ForEach(regions.indices, id: \.self) { index in
-                regionEditorRow(at: index)
+            if !regions.isEmpty {
+                Button {
+                    showRegionPanel = true
+                } label: {
+                    HStack(spacing: 8) {
+                        ForEach(Array(regions.enumerated()), id: \.element.regionId) { index, region in
+                            HStack(spacing: 4) {
+                                Circle()
+                                    .fill(regionColor(for: index))
+                                    .frame(width: 20, height: 20)
+                                    .overlay {
+                                        Text("\(index + 1)")
+                                            .font(.caption2.bold())
+                                            .foregroundStyle(.white)
+                                    }
+                                Text(region.action ?? "Replace")
+                                    .font(.caption2)
+                                    .lineLimit(1)
+                            }
+                        }
+
+                        Spacer()
+
+                        Label("Edit", systemImage: "pencil.circle")
+                            .font(.caption)
+                    }
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 8)
+                    .background(Color.secondary.opacity(0.08))
+                    .clipShape(RoundedRectangle(cornerRadius: 10))
+                }
+                .buttonStyle(.plain)
+                .accessibilityIdentifier("region_edit_panel_button")
             }
         }
         .padding(.horizontal)
     }
 
-    @ViewBuilder
-    private func regionEditorRow(at index: Int) -> some View {
-        if index < regions.count {
-            let color = regionColor(for: index)
-            RegionEditor(region: $regions[index], displayNumber: index + 1, color: color, onDelete: {
-                snapshotRegions()
-                withAnimation(.easeOut(duration: 0.2)) {
-                    guard index < regions.count else { return }
-                    regions.remove(at: index)
-                }
-                #if os(iOS)
-                UIImpactFeedbackGenerator(style: .light).impactOccurred()
-                #endif
-            })
-        }
-    }
 
     @ViewBuilder
     private var textControls: some View {
-        TextField("Describe what you'd like changed...", text: $textFeedback, axis: .vertical)
-            .textFieldStyle(.roundedBorder)
-            .lineLimit(2...6)
-            .padding(.horizontal)
-            .accessibilityIdentifier("iteration_text_input")
+        VStack(alignment: .leading, spacing: 4) {
+            TextField("Describe what you'd like changed...", text: $textFeedback, axis: .vertical)
+                .textFieldStyle(.roundedBorder)
+                .lineLimit(2...6)
+                .accessibilityIdentifier("iteration_text_input")
+
+            let trimmedCount = textFeedback.trimmingCharacters(in: .whitespaces).count
+            if !textFeedback.isEmpty && trimmedCount < 10 {
+                Text("Please provide more detail (at least 10 characters)")
+                    .font(.caption)
+                    .foregroundStyle(.orange)
+            }
+        }
+        .padding(.horizontal)
     }
 
     private func submit() async {
@@ -242,6 +374,7 @@ struct AnnotationCanvas: View {
     let maxRegions: Int
     let imageURL: String?
     var onWillMutate: (() -> Void)?
+    var onOverlap: (() -> Void)?
 
     @State private var isDragging = false
     @State private var activeGuides: SnapGuides = SnapGuides()
@@ -320,13 +453,10 @@ struct AnnotationCanvas: View {
                                     activeGuides = guides
                                     if guides.snapX { nx = guides.snappedX ?? nx }
                                     if guides.snapY { ny = guides.snappedY ?? ny }
-                                    regions[currentIndex] = AnnotationRegion(
-                                        regionId: region.regionId,
-                                        centerX: nx,
-                                        centerY: ny,
-                                        radius: region.radius,
-                                        instruction: region.instruction
-                                    )
+                                    var updated = region
+                                    updated.centerX = nx
+                                    updated.centerY = ny
+                                    regions[currentIndex] = updated
                                 }
                                 .onEnded { _ in
                                     isDragging = false
@@ -343,13 +473,9 @@ struct AnnotationCanvas: View {
                                     }
                                     let base = pinchBaseRadius ?? region.radius
                                     let newRadius = min(maxRadius, max(minRadius, base * value.magnification))
-                                    regions[currentIndex] = AnnotationRegion(
-                                        regionId: region.regionId,
-                                        centerX: region.centerX,
-                                        centerY: region.centerY,
-                                        radius: newRadius,
-                                        instruction: region.instruction
-                                    )
+                                    var updated = region
+                                    updated.radius = newRadius
+                                    regions[currentIndex] = updated
                                 }
                                 .onEnded { _ in
                                     pinchBaseRadius = nil
@@ -361,15 +487,23 @@ struct AnnotationCanvas: View {
             .contentShape(Rectangle())
             .onTapGesture(coordinateSpace: .local) { (location: CGPoint) in
                 guard regions.count < maxRegions else { return }
-                onWillMutate?()
                 let nx = location.x / geometry.size.width
                 let ny = location.y / geometry.size.height
+                let newRadius = 0.08
+                let overlaps = RemoAnnotation.checkRegionOverlap(
+                    x: nx, y: ny, radius: newRadius, existingRegions: regions
+                )
+                if overlaps {
+                    onOverlap?()
+                    return
+                }
+                onWillMutate?()
                 let nextId = (regions.map(\.regionId).max() ?? 0) + 1
                 let newRegion = AnnotationRegion(
                     regionId: nextId,
                     centerX: nx,
                     centerY: ny,
-                    radius: 0.08,
+                    radius: newRadius,
                     instruction: ""
                 )
                 withAnimation(.spring(response: 0.3, dampingFraction: 0.7)) {
@@ -456,35 +590,149 @@ func computeSnapGuides(
     return guides
 }
 
-// MARK: - Region Editor
+/// Check if a proposed region at (x, y) with given radius overlaps any existing region.
+/// Extracted for testability — used by AnnotationCanvas tap gesture.
+func checkRegionOverlap(
+    x: Double,
+    y: Double,
+    radius: Double,
+    existingRegions: [AnnotationRegion]
+) -> Bool {
+    existingRegions.contains { existing in
+        let dx = x - existing.centerX
+        let dy = y - existing.centerY
+        let distance = (dx * dx + dy * dy).squareRoot()
+        return distance < (radius + existing.radius)
+    }
+}
 
-struct RegionEditor: View {
+// MARK: - Region Actions
+
+private let regionActions = ["Replace", "Remove", "Change finish", "Resize", "Reposition"]
+
+// MARK: - Region List Panel
+
+struct RegionListPanel: View {
+    @Binding var regions: [AnnotationRegion]
+    let onDelete: (Int) -> Void
+
+    @State private var expandedRegionId: Int?
+
+    private let colors: [Color] = [.red, .blue, .green]
+
+    var body: some View {
+        List {
+            ForEach(Array(regions.enumerated()), id: \.element.regionId) { index, region in
+                RegionListRow(
+                    region: $regions[index],
+                    displayNumber: index + 1,
+                    color: colors[index % 3],
+                    isExpanded: expandedRegionId == region.regionId,
+                    onTap: {
+                        withAnimation {
+                            expandedRegionId = expandedRegionId == region.regionId ? nil : region.regionId
+                        }
+                    }
+                )
+            }
+            .onDelete { indexSet in
+                for index in indexSet.sorted(by: >) {
+                    onDelete(index)
+                }
+            }
+            .onMove { source, destination in
+                regions.move(fromOffsets: source, toOffset: destination)
+                renumberRegions()
+            }
+
+            if regions.count < 3 {
+                Text("Tap the image to add more regions")
+                    .font(.caption)
+                    .foregroundStyle(.tertiary)
+                    .listRowBackground(Color.clear)
+            }
+        }
+        #if os(iOS)
+        .listStyle(.insetGrouped)
+        #endif
+        .onChange(of: regions.count) { _, _ in
+            if let lastRegion = regions.last {
+                expandedRegionId = lastRegion.regionId
+            }
+        }
+    }
+
+    private func renumberRegions() {
+        for i in regions.indices {
+            regions[i].regionId = i + 1
+        }
+    }
+}
+
+struct RegionListRow: View {
     @Binding var region: AnnotationRegion
     let displayNumber: Int
     let color: Color
-    let onDelete: () -> Void
+    let isExpanded: Bool
+    let onTap: () -> Void
 
     var body: some View {
-        HStack(spacing: 8) {
-            Circle()
-                .fill(color)
-                .frame(width: 28, height: 28)
-                .overlay {
-                    Text("\(displayNumber)")
-                        .font(.caption.bold())
-                        .foregroundStyle(.white)
+        VStack(alignment: .leading, spacing: 8) {
+            Button(action: onTap) {
+                HStack(spacing: 10) {
+                    Circle()
+                        .fill(color)
+                        .frame(width: 28, height: 28)
+                        .overlay {
+                            Text("\(displayNumber)")
+                                .font(.caption.bold())
+                                .foregroundStyle(.white)
+                        }
+
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(region.action ?? "Replace")
+                            .font(.subheadline.bold())
+
+                        if !region.instruction.isEmpty {
+                            Text(String(region.instruction.prefix(40)) + (region.instruction.count > 40 ? "\u{2026}" : ""))
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                                .lineLimit(1)
+                        } else {
+                            Text("Tap to add instruction")
+                                .font(.caption)
+                                .foregroundStyle(.tertiary)
+                        }
+                    }
+
+                    Spacer()
+
+                    Image(systemName: isExpanded ? "chevron.up" : "chevron.down")
+                        .font(.caption)
+                        .foregroundStyle(.tertiary)
                 }
+            }
+            .buttonStyle(.plain)
 
-            TextField("Instruction (min 10 chars)", text: $region.instruction)
-                .textFieldStyle(.roundedBorder)
-                .font(.subheadline)
+            if isExpanded {
+                Divider()
 
-            Button(role: .destructive) {
-                onDelete()
-            } label: {
-                Image(systemName: "xmark.circle.fill")
-                    .foregroundStyle(.secondary)
+                Picker("Action", selection: Binding(
+                    get: { region.action ?? "Replace" },
+                    set: { region.action = $0 }
+                )) {
+                    ForEach(regionActions, id: \.self) { action in
+                        Text(action).tag(action)
+                    }
+                }
+                .pickerStyle(.menu)
+
+                TextField("Instruction (min 10 chars)", text: $region.instruction)
+                    .textFieldStyle(.roundedBorder)
+                    .font(.subheadline)
             }
         }
+        .padding(.vertical, 4)
+        .accessibilityIdentifier("region_list_row_\(displayNumber)")
     }
 }

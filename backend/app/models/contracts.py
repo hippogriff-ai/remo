@@ -126,6 +126,9 @@ class RoomDimensions(BaseModel):
     height_m: float
     walls: list[dict] = []
     openings: list[dict] = []
+    furniture: list[dict] = []
+    surfaces: list[dict] = []
+    floor_area_sqm: float | None = None
 
 
 class AnnotationRegion(BaseModel):
@@ -134,6 +137,9 @@ class AnnotationRegion(BaseModel):
     center_y: float = Field(ge=0, le=1)
     radius: float = Field(ge=0, le=1)
     instruction: str = Field(min_length=10)
+    action: str | None = None  # Replace, Remove, Change finish, Resize, Reposition
+    avoid: list[str] = []
+    constraints: list[str] = []
 
 
 class DesignOption(BaseModel):

@@ -1,7 +1,10 @@
 appId: com.hippogriff.remo
 ---
-# IntakeChatScreen: 3-step chat conversation then confirm brief
+# IntakeChatScreen: select mode, 3-step chat conversation, then confirm brief
 - assertVisible: "Design Chat"
+# Mode selection: pick Full Intake
+- tapOn:
+    id: "mode_full"
 # Wait for the first agent message to load (mock has 300ms delay)
 - extendedWaitUntil:
     visible: "Living Room"

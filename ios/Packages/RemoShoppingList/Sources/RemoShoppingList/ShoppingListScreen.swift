@@ -1,4 +1,7 @@
 import SwiftUI
+#if os(iOS)
+import UIKit
+#endif
 import RemoModels
 import RemoNetworking
 
@@ -19,6 +22,9 @@ private func formatPrice(_ cents: Int) -> String {
 public struct ShoppingListScreen: View {
     @Bindable var projectState: ProjectState
 
+    @State private var showCopiedToast = false
+    @State private var showShareSheet = false
+
     public init(projectState: ProjectState) {
         self.projectState = projectState
     }
@@ -26,7 +32,7 @@ public struct ShoppingListScreen: View {
     public var body: some View {
         Group {
             if let shopping = projectState.shoppingList {
-                ShoppingContent(shopping: shopping)
+                ShoppingContent(shopping: shopping, hasScanData: projectState.scanData != nil)
             } else {
                 ContentUnavailableView(
                     "No Shopping List",
@@ -39,13 +45,91 @@ public struct ShoppingListScreen: View {
         #if os(iOS)
         .navigationBarTitleDisplayMode(.inline)
         #endif
+        .toolbar {
+            if projectState.shoppingList != nil {
+                ToolbarItemGroup(placement: .primaryAction) {
+                    Button {
+                        copyShoppingList()
+                    } label: {
+                        Label("Copy All", systemImage: "doc.on.doc")
+                    }
+                    .accessibilityIdentifier("shopping_copy_all")
+
+                    #if os(iOS)
+                    Button {
+                        showShareSheet = true
+                    } label: {
+                        Label("Share", systemImage: "square.and.arrow.up")
+                    }
+                    .accessibilityIdentifier("shopping_share")
+                    #endif
+                }
+            }
+        }
+        .overlay(alignment: .bottom) {
+            if showCopiedToast {
+                Text("Shopping list copied!")
+                    .font(.subheadline.bold())
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 10)
+                    .background(.ultraThinMaterial)
+                    .clipShape(Capsule())
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
+                    .padding(.bottom, 20)
+            }
+        }
+        #if os(iOS)
+        .sheet(isPresented: $showShareSheet) {
+            if let text = formattedShoppingList() {
+                ShareSheet(items: [text])
+            }
+        }
+        #endif
+    }
+
+    private func formattedShoppingList() -> String? {
+        guard let shopping = projectState.shoppingList else { return nil }
+        var lines: [String] = ["Remo Shopping List", ""]
+        for item in shopping.items {
+            let price = formatPrice(item.priceCents)
+            lines.append("\(item.productName) - \(price)")
+            lines.append("  \(item.retailer) — \(item.productUrl)")
+            lines.append("")
+        }
+        lines.append("Total: \(formatPrice(shopping.totalEstimatedCostCents))")
+        return lines.joined(separator: "\n")
+    }
+
+    private func copyShoppingList() {
+        guard let text = formattedShoppingList() else { return }
+        #if os(iOS)
+        UIPasteboard.general.string = text
+        #endif
+        withAnimation { showCopiedToast = true }
+        Task {
+            try? await Task.sleep(for: .seconds(2))
+            withAnimation { showCopiedToast = false }
+        }
     }
 }
+
+#if os(iOS)
+struct ShareSheet: UIViewControllerRepresentable {
+    let items: [Any]
+
+    func makeUIViewController(context: Context) -> UIActivityViewController {
+        UIActivityViewController(activityItems: items, applicationActivities: nil)
+    }
+
+    func updateUIViewController(_ uiViewController: UIActivityViewController, context: Context) {}
+}
+#endif
 
 // MARK: - Shopping Content
 
 struct ShoppingContent: View {
     let shopping: ShoppingListOutput
+    var hasScanData: Bool = false
 
     private var groupedItems: [(category: String, items: [ProductMatch])] {
         Dictionary(grouping: shopping.items, by: \.categoryGroup)
@@ -55,6 +139,19 @@ struct ShoppingContent: View {
 
     var body: some View {
         List {
+            // Non-LiDAR banner
+            if !hasScanData {
+                Section {
+                    Label {
+                        Text("We matched products by style. For size-verified recommendations, use Room Scan on an iPhone Pro next time.")
+                            .font(.caption)
+                    } icon: {
+                        Image(systemName: "info.circle")
+                    }
+                    .foregroundStyle(.secondary)
+                }
+            }
+
             // Total cost
             Section {
                 HStack {
@@ -119,6 +216,12 @@ struct ProductCard: View {
                 VStack(alignment: .leading, spacing: 4) {
                     Text(item.productName)
                         .font(.subheadline.bold())
+                    if !item.whyMatched.isEmpty {
+                        Text(item.whyMatched)
+                            .font(.caption)
+                            .italic()
+                            .foregroundStyle(.secondary)
+                    }
                     Text(item.retailer)
                         .font(.caption)
                         .foregroundStyle(.secondary)
@@ -145,13 +248,26 @@ struct ProductCard: View {
                     .foregroundStyle(.secondary)
             }
 
-            // Buy link
-            if let url = URL(string: item.productUrl) {
-                Link(destination: url) {
-                    Label("Buy", systemImage: "arrow.up.right.square")
-                        .font(.subheadline)
+            // Buy link + copy link
+            HStack {
+                if let url = URL(string: item.productUrl) {
+                    Link(destination: url) {
+                        Label("Buy", systemImage: "arrow.up.right.square")
+                            .font(.subheadline)
+                    }
+                    .accessibilityLabel("Buy \(item.productName) from \(item.retailer)")
                 }
-                .accessibilityLabel("Buy \(item.productName) from \(item.retailer)")
+                Spacer()
+                Button {
+                    #if os(iOS)
+                    UIPasteboard.general.string = item.productUrl
+                    #endif
+                } label: {
+                    Label("Copy Link", systemImage: "doc.on.doc")
+                        .font(.caption)
+                }
+                .buttonStyle(.borderless)
+                .accessibilityIdentifier("copy_link_\(item.productName)")
             }
         }
         .padding(.vertical, 4)

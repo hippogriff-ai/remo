@@ -21,7 +21,7 @@ appId: com.hippogriff.remo
 - tapOn: "Skip"
 - assertVisible: "Design Chat"
 - tapOn:
-    id: "chat_skip"
+    id: "mode_skip"
 - tapOn: "Skip"
 - assertVisible: "Choose a Design"
 - tapOn: "Modern Minimalist"
@@ -35,9 +35,13 @@ appId: com.hippogriff.remo
 # Tap the canvas to place an annotation circle (center of the image area)
 - tapOn:
     point: "50%,35%"
+# Bottom sheet auto-opens with the new region expanded
+- assertVisible: "Edit Regions"
 # Type instruction for the circle (min 10 chars)
 - tapOn: "Instruction (min 10 chars)"
 - inputText: "Replace this lamp with a modern floor lamp design"
+# Dismiss the edit panel
+- tapOn: "Done"
 # Submit should now be enabled
 - tapOn:
     id: "iteration_submit"
