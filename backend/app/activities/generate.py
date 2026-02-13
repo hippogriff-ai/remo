@@ -132,18 +132,21 @@ async def _generate_single_option(
     room_images: list[Image.Image],
     inspiration_images: list[Image.Image],
     option_index: int,
+    source_urls: list[str] | None = None,
 ) -> Image.Image:
     """Generate a single design option via standalone Gemini call."""
     from app.utils.llm_cache import get_cached_bytes, set_cached_bytes
 
     # Dev/test cache: avoid redundant Gemini calls when prompt/inputs
-    # haven't changed. Key includes prompt text + image metadata.
+    # haven't changed. Key includes prompt text, source URLs (stable R2 keys),
+    # and option index to prevent cross-project collisions.
     # Will be removed in production (real users never send identical inputs).
     cache_key = [
         prompt,
         str(len(room_images)),
         str(len(inspiration_images)),
         str(option_index),
+        *(source_urls or []),
     ]
     cached_png = get_cached_bytes("gemini_gen", cache_key)
     if cached_png:
@@ -260,9 +263,11 @@ async def generate_designs(input: GenerateDesignsInput) -> GenerateDesignsOutput
         prompt = _build_generation_prompt(input.design_brief, input.inspiration_notes)
 
         # Generate 2 options in parallel
+        # Pass original R2 keys (stable, not presigned) for cache key identity
+        source_urls = input.room_photo_urls + input.inspiration_photo_urls
         option_0, option_1 = await asyncio.gather(
-            _generate_single_option(prompt, room_images, inspiration_images, 0),
-            _generate_single_option(prompt, room_images, inspiration_images, 1),
+            _generate_single_option(prompt, room_images, inspiration_images, 0, source_urls),
+            _generate_single_option(prompt, room_images, inspiration_images, 1, source_urls),
         )
 
         # Upload to R2 (sync boto3 calls run in thread pool)

@@ -57,8 +57,13 @@ MAX_INSPIRATION_PHOTOS = 3
 
 
 def _r2_configured() -> bool:
-    """Check if R2 credentials are available for photo storage."""
-    return bool(settings.r2_account_id and settings.r2_access_key_id)
+    """Check if all required R2 credentials are available for photo storage."""
+    return bool(
+        settings.r2_account_id
+        and settings.r2_access_key_id
+        and settings.r2_secret_access_key
+        and settings.r2_bucket_name
+    )
 
 
 # In-memory mock state store (used when use_temporal=False)
@@ -834,7 +839,7 @@ async def start_over(project_id: str, request: Request):
     if err := _check_step(state, None, "start over"):
         return err
     assert state is not None
-    if state.approved or state.step in ("shopping", "completed"):
+    if state.approved or state.step in ("shopping", "completed", "abandoned", "cancelled"):
         return _error(409, "wrong_step", f"Cannot start over in step '{state.step}'")
 
     if settings.use_temporal:
