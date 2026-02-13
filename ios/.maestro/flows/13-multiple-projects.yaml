@@ -24,6 +24,9 @@ appId: com.hippogriff.remo
 - tapOn: "Remo"
 - assertVisible:
     id: "home_project_1"
+# Verify resume badge appears on pending projects (P8-01)
+- assertVisible:
+    id: "resume_badge"
 - takeScreenshot: 13-multiple-projects
 # Tap second project to verify navigation works
 - tapOn:

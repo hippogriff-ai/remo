@@ -301,6 +301,61 @@ class TestEditInstructions:
         assert "Constraints:" not in result
         assert "lighter color" in result
 
+    def test_build_instructions_empty_avoid_and_constraints(self):
+        """Explicit empty arrays should suppress Avoid/Constraints labels."""
+        from app.activities.edit import _build_edit_instructions
+
+        annotations = [
+            AnnotationRegion(
+                region_id=1,
+                center_x=0.5,
+                center_y=0.5,
+                radius=0.1,
+                instruction="Replace lamp",
+                avoid=[],
+                constraints=[],
+            ),
+        ]
+        result = _build_edit_instructions(annotations)
+        assert "Avoid:" not in result
+        assert "Constraints:" not in result
+
+    def test_build_instructions_all_three_colors(self):
+        """Verify all three region IDs map to correct colors."""
+        from app.activities.edit import _build_edit_instructions
+
+        annotations = [
+            AnnotationRegion(
+                region_id=i, center_x=0.3 * i, center_y=0.5,
+                radius=0.1, instruction=f"Edit region {i} with detail",
+            )
+            for i in range(1, 4)
+        ]
+        result = _build_edit_instructions(annotations)
+        assert "1 (red circle)" in result
+        assert "2 (blue circle)" in result
+        assert "3 (green circle)" in result
+
+    def test_build_instructions_action_and_avoid_only(self):
+        """Action + avoid without constraints should omit Constraints label."""
+        from app.activities.edit import _build_edit_instructions
+
+        annotations = [
+            AnnotationRegion(
+                region_id=1,
+                center_x=0.5,
+                center_y=0.5,
+                radius=0.1,
+                instruction="Remove shelf",
+                action="Remove",
+                avoid=["leaving marks"],
+            ),
+        ]
+        result = _build_edit_instructions(annotations)
+        assert "Action: Remove" in result
+        assert "Avoid: leaving marks" in result
+        assert "Constraints:" not in result
+
 
 def _make_test_image(w: int = 100, h: int = 100) -> Image.Image:
     return Image.new("RGB", (w, h), "white")

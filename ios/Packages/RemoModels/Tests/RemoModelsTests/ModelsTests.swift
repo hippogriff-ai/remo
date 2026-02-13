@@ -135,6 +135,30 @@ final class ModelsTests: XCTestCase {
         XCTAssertEqual(original, decoded)
     }
 
+    func testAnnotationRegionDecodingNullAction() throws {
+        // Explicit null for action should decode as nil (same as omitting)
+        let json = """
+        {"region_id": 1, "center_x": 0.5, "center_y": 0.3, "radius": 0.1, "instruction": "Test", "action": null, "avoid": [], "constraints": []}
+        """.data(using: .utf8)!
+
+        let region = try JSONDecoder().decode(AnnotationRegion.self, from: json)
+        XCTAssertNil(region.action)
+        XCTAssertEqual(region.avoid, [])
+        XCTAssertEqual(region.constraints, [])
+    }
+
+    func testAnnotationRegionPartialFields() throws {
+        // Action set but avoid/constraints omitted — should default to empty arrays
+        let json = """
+        {"region_id": 1, "center_x": 0.5, "center_y": 0.5, "radius": 0.1, "instruction": "Change color", "action": "Change finish"}
+        """.data(using: .utf8)!
+
+        let region = try JSONDecoder().decode(AnnotationRegion.self, from: json)
+        XCTAssertEqual(region.action, "Change finish")
+        XCTAssertEqual(region.avoid, [])
+        XCTAssertEqual(region.constraints, [])
+    }
+
     func testShoppingListDecoding() throws {
         let json = """
         {
@@ -202,6 +226,18 @@ final class ModelsTests: XCTestCase {
         let response = try JSONDecoder().decode(ErrorResponse.self, from: json)
         XCTAssertEqual(response.error, "wrong_step")
         XCTAssertFalse(response.retryable)
+        // requestId is set from HTTP header, not JSON — should be nil after decode
+        XCTAssertNil(response.requestId)
+    }
+
+    func testErrorResponseRequestIdNotDecodedFromJSON() throws {
+        // Even if JSON contains request_id, it should be ignored (excluded from CodingKeys)
+        let json = """
+        {"error": "server_error", "message": "Something failed", "retryable": true, "request_id": "req-from-json"}
+        """.data(using: .utf8)!
+
+        let response = try JSONDecoder().decode(ErrorResponse.self, from: json)
+        XCTAssertNil(response.requestId, "requestId should not be decoded from JSON — it's set from HTTP headers only")
     }
 
     // MARK: - JSON Encoding (for request bodies)
@@ -237,12 +273,28 @@ final class ModelsTests: XCTestCase {
         XCTAssertEqual(ProjectStep.approval.rawValue, "approval")
         XCTAssertEqual(ProjectStep.shopping.rawValue, "shopping")
         XCTAssertEqual(ProjectStep.completed.rawValue, "completed")
+        XCTAssertEqual(ProjectStep.abandoned.rawValue, "abandoned")
+        XCTAssertEqual(ProjectStep.cancelled.rawValue, "cancelled")
     }
 
     func testProjectStepFromString() {
         XCTAssertEqual(ProjectStep(rawValue: "photos"), .photoUpload)
         XCTAssertEqual(ProjectStep(rawValue: "completed"), .completed)
+        XCTAssertEqual(ProjectStep(rawValue: "abandoned"), .abandoned)
+        XCTAssertEqual(ProjectStep(rawValue: "cancelled"), .cancelled)
         XCTAssertNil(ProjectStep(rawValue: "invalid"))
+    }
+
+    func testProjectStepIsTerminal() {
+        // Non-terminal steps
+        let nonTerminal: [ProjectStep] = [.photoUpload, .scan, .intake, .generation, .selection, .iteration, .approval, .shopping]
+        for step in nonTerminal {
+            XCTAssertFalse(step.isTerminal, "\(step) should not be terminal")
+        }
+        // Terminal steps
+        XCTAssertTrue(ProjectStep.completed.isTerminal)
+        XCTAssertTrue(ProjectStep.abandoned.isTerminal)
+        XCTAssertTrue(ProjectStep.cancelled.isTerminal)
     }
 
     // MARK: - ProjectState.apply()
@@ -294,6 +346,24 @@ final class ModelsTests: XCTestCase {
         XCTAssertNil(state.error)
     }
 
+    func testApplyTerminalStateAbandoned() {
+        let state = ProjectState()
+        state.step = .iteration
+        let workflow = WorkflowState(step: "abandoned")
+        state.apply(workflow)
+        XCTAssertEqual(state.step, .abandoned)
+        XCTAssertTrue(state.step.isTerminal)
+    }
+
+    func testApplyTerminalStateCancelled() {
+        let state = ProjectState()
+        state.step = .generation
+        let workflow = WorkflowState(step: "cancelled")
+        state.apply(workflow)
+        XCTAssertEqual(state.step, .cancelled)
+        XCTAssertTrue(state.step.isTerminal)
+    }
+
     // MARK: - ProjectState.preview()
 
     func testPreviewFactoryPhotoUpload() {
@@ -318,11 +388,17 @@ final class ModelsTests: XCTestCase {
     // MARK: - ProjectStep ordering (Comparable)
 
     func testProjectStepOrderingFollowsWorkflow() {
-        let steps: [ProjectStep] = [.photoUpload, .scan, .intake, .generation, .selection, .iteration, .approval, .shopping, .completed]
+        let steps: [ProjectStep] = [.photoUpload, .scan, .intake, .generation, .selection, .iteration, .approval, .shopping, .completed, .abandoned, .cancelled]
         // Each step should be less than the next
         for i in 0..<steps.count - 1 {
             XCTAssertTrue(steps[i] < steps[i + 1], "\(steps[i]) should be < \(steps[i + 1])")
         }
+    }
+
+    func testTerminalStepsSortAfterCompleted() {
+        XCTAssertTrue(ProjectStep.completed < .abandoned)
+        XCTAssertTrue(ProjectStep.completed < .cancelled)
+        XCTAssertTrue(ProjectStep.abandoned < .cancelled)
     }
 
     func testProjectStepEqualityNotLessThan() {

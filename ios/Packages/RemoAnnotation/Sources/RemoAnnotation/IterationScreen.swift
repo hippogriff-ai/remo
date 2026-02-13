@@ -23,6 +23,7 @@ public struct IterationScreen: View {
     @State private var showRevisionHistory = false
     @State private var showApprovalConfirmation = false
     @State private var showRegionPanel = false
+    @State private var highlightedRegionId: Int?
 
     enum IterationMode: String, CaseIterable {
         case annotation = "Mark Areas"
@@ -49,7 +50,8 @@ public struct IterationScreen: View {
                 maxRegions: 3,
                 imageURL: projectState.currentImage,
                 onWillMutate: { snapshotRegions() },
-                onOverlap: { showOverlapWarning = true }
+                onOverlap: { showOverlapWarning = true },
+                highlightedRegionId: $highlightedRegionId
             )
             .aspectRatio(4/3, contentMode: .fit)
             .padding(.horizontal)
@@ -145,16 +147,41 @@ public struct IterationScreen: View {
             NavigationStack {
                 List {
                     ForEach(projectState.revisionHistory, id: \.revisionNumber) { revision in
-                        VStack(alignment: .leading, spacing: 4) {
+                        VStack(alignment: .leading, spacing: 8) {
                             Text("Revision \(revision.revisionNumber)")
                                 .font(.subheadline.bold())
+
+                            if let url = URL(string: revision.revisedImageUrl) {
+                                AsyncImage(url: url) { phase in
+                                    switch phase {
+                                    case .success(let image):
+                                        image
+                                            .resizable()
+                                            .aspectRatio(contentMode: .fit)
+                                            .clipShape(RoundedRectangle(cornerRadius: 8))
+                                    case .failure:
+                                        Label("Image unavailable", systemImage: "photo.badge.exclamationmark")
+                                            .font(.caption)
+                                            .foregroundStyle(.secondary)
+                                            .frame(maxWidth: .infinity)
+                                            .frame(height: 120)
+                                    default:
+                                        ProgressView()
+                                            .frame(maxWidth: .infinity)
+                                            .frame(height: 120)
+                                    }
+                                }
+                                .frame(maxHeight: 200)
+                                .accessibilityIdentifier("revision_image_\(revision.revisionNumber)")
+                            }
+
                             ForEach(revision.instructions, id: \.self) { instruction in
                                 Text(instruction)
                                     .font(.caption)
                                     .foregroundStyle(.secondary)
                             }
                         }
-                        .padding(.vertical, 2)
+                        .padding(.vertical, 4)
                     }
                 }
                 .navigationTitle("Revision History")
@@ -183,6 +210,8 @@ public struct IterationScreen: View {
                     #if os(iOS)
                     UIImpactFeedbackGenerator(style: .light).impactOccurred()
                     #endif
+                }, onHighlight: { regionId in
+                    highlightedRegionId = regionId
                 })
                 .navigationTitle("Edit Regions")
                 #if os(iOS)
@@ -196,7 +225,10 @@ public struct IterationScreen: View {
                     }
                     #endif
                     ToolbarItem(placement: .confirmationAction) {
-                        Button("Done") { showRegionPanel = false }
+                        Button("Done") {
+                            showRegionPanel = false
+                            highlightedRegionId = nil
+                        }
                     }
                 }
             }
@@ -207,6 +239,11 @@ public struct IterationScreen: View {
         .onChange(of: regions.count) { oldCount, newCount in
             if newCount > oldCount && !showRegionPanel && mode == .annotation {
                 showRegionPanel = true
+            }
+        }
+        .onChange(of: showRegionPanel) { _, isShowing in
+            if !isShowing {
+                highlightedRegionId = nil
             }
         }
     }
@@ -304,6 +341,8 @@ public struct IterationScreen: View {
         isSubmitting = true
         defer { isSubmitting = false }
 
+        let previousCount = projectState.iterationCount
+
         do {
             switch mode {
             case .annotation:
@@ -315,11 +354,24 @@ public struct IterationScreen: View {
                 guard !trimmed.isEmpty else { return }
                 try await client.submitTextFeedback(projectId: projectId, feedback: trimmed)
             }
-            let newState = try await client.getState(projectId: projectId)
+            // Poll until iteration_count increases or an error appears.
+            // With mock backend this returns immediately; with real Temporal + Gemini
+            // the edit activity takes 15-30s.
+            let poller = PollingManager(client: client)
+            let newState = try await poller.pollUntil(projectId: projectId) { state in
+                state.iterationCount > previousCount
+            }
             projectState.apply(newState)
+            // pollUntil returns on EITHER condition met OR error — surface backend errors
+            if let workflowError = newState.error {
+                errorMessage = workflowError.message
+                return
+            }
             regions = []
             regionHistory = []
             textFeedback = ""
+        } catch is CancellationError {
+            // View disappeared while polling — do nothing
         } catch {
             errorMessage = error.localizedDescription
         }
@@ -375,6 +427,7 @@ struct AnnotationCanvas: View {
     let imageURL: String?
     var onWillMutate: (() -> Void)?
     var onOverlap: (() -> Void)?
+    @Binding var highlightedRegionId: Int?
 
     @State private var isDragging = false
     @State private var activeGuides: SnapGuides = SnapGuides()
@@ -423,17 +476,28 @@ struct AnnotationCanvas: View {
                     let minDim = min(geometry.size.width, geometry.size.height)
                     let radius = region.radius * minDim
 
+                    let isHighlighted = highlightedRegionId == region.regionId
+
                     Circle()
-                        .strokeBorder(color, lineWidth: 3)
-                        .background(Circle().fill(color.opacity(0.15)))
+                        .strokeBorder(color, lineWidth: isHighlighted ? 5 : 3)
+                        .background(Circle().fill(color.opacity(isHighlighted ? 0.3 : 0.15)))
                         .frame(width: radius * 2, height: radius * 2)
+                        .shadow(color: isHighlighted ? color.opacity(0.6) : .clear, radius: 8)
+                        .animation(.easeInOut(duration: 0.3), value: highlightedRegionId)
                         .overlay {
+                            let chipSize: CGFloat = 24
+                            let halfChip = chipSize / 2
+                            let cx = region.centerX * geometry.size.width
+                            let cy = region.centerY * geometry.size.height
+                            let clampedX = min(max(cx, halfChip), geometry.size.width - halfChip) - cx
+                            let clampedY = min(max(cy, halfChip), geometry.size.height - halfChip) - cy
                             Text("\(index + 1)")
                                 .font(.caption.bold())
                                 .foregroundStyle(.white)
-                                .frame(width: 24, height: 24)
+                                .frame(width: chipSize, height: chipSize)
                                 .background(color)
                                 .clipShape(Circle())
+                                .offset(x: clampedX, y: clampedY)
                         }
                         .position(
                             x: region.centerX * geometry.size.width,
@@ -615,6 +679,7 @@ private let regionActions = ["Replace", "Remove", "Change finish", "Resize", "Re
 struct RegionListPanel: View {
     @Binding var regions: [AnnotationRegion]
     let onDelete: (Int) -> Void
+    var onHighlight: ((Int?) -> Void)?
 
     @State private var expandedRegionId: Int?
 
@@ -630,7 +695,9 @@ struct RegionListPanel: View {
                     isExpanded: expandedRegionId == region.regionId,
                     onTap: {
                         withAnimation {
-                            expandedRegionId = expandedRegionId == region.regionId ? nil : region.regionId
+                            let wasExpanded = expandedRegionId == region.regionId
+                            expandedRegionId = wasExpanded ? nil : region.regionId
+                            onHighlight?(wasExpanded ? nil : region.regionId)
                         }
                     }
                 )
@@ -730,9 +797,98 @@ struct RegionListRow: View {
                 TextField("Instruction (min 10 chars)", text: $region.instruction)
                     .textFieldStyle(.roundedBorder)
                     .font(.subheadline)
+
+                TextField("Avoid (comma-separated)", text: avoidBinding)
+                    .textFieldStyle(.roundedBorder)
+                    .font(.subheadline)
+                    .accessibilityIdentifier("region_avoid_\(displayNumber)")
+
+                Text("Style nudges")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+
+                FlowLayout(spacing: 6) {
+                    ForEach(styleNudges, id: \.self) { nudge in
+                        let isOn = region.constraints.contains(nudge)
+                        Button {
+                            if isOn {
+                                region.constraints.removeAll { $0 == nudge }
+                            } else {
+                                region.constraints.append(nudge)
+                            }
+                        } label: {
+                            Text(nudge)
+                                .font(.caption2)
+                                .padding(.horizontal, 10)
+                                .padding(.vertical, 5)
+                                .background(isOn ? Color.accentColor.opacity(0.2) : Color.secondary.opacity(0.1))
+                                .foregroundStyle(isOn ? .primary : .secondary)
+                                .clipShape(Capsule())
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityIdentifier("nudge_\(nudge.replacingOccurrences(of: " ", with: "_"))")
+                    }
+                }
             }
         }
         .padding(.vertical, 4)
         .accessibilityIdentifier("region_list_row_\(displayNumber)")
+    }
+
+    private var avoidBinding: Binding<String> {
+        Binding(
+            get: { region.avoid.joined(separator: ", ") },
+            set: { newValue in
+                region.avoid = newValue
+                    .split(separator: ",")
+                    .map { $0.trimmingCharacters(in: .whitespaces) }
+                    .filter { !$0.isEmpty }
+            }
+        )
+    }
+}
+
+private let styleNudges = [
+    "cheaper", "premium", "more minimal", "more cozy",
+    "more modern", "pet-friendly", "kid-friendly", "low maintenance",
+]
+
+/// Simple flow layout that wraps items to next line when they don't fit.
+struct FlowLayout: Layout {
+    var spacing: CGFloat = 6
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        let result = layout(in: proposal.width ?? .infinity, subviews: subviews)
+        return result.size
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        let result = layout(in: bounds.width, subviews: subviews)
+        for (index, position) in result.positions.enumerated() {
+            subviews[index].place(at: CGPoint(x: bounds.minX + position.x, y: bounds.minY + position.y), proposal: .unspecified)
+        }
+    }
+
+    private func layout(in width: CGFloat, subviews: Subviews) -> (size: CGSize, positions: [CGPoint]) {
+        var positions: [CGPoint] = []
+        var x: CGFloat = 0
+        var y: CGFloat = 0
+        var rowHeight: CGFloat = 0
+        var maxWidth: CGFloat = 0
+
+        for subview in subviews {
+            let size = subview.sizeThatFits(.unspecified)
+            if x + size.width > width, x > 0 {
+                x = 0
+                y += rowHeight + spacing
+                rowHeight = 0
+            }
+            positions.append(CGPoint(x: x, y: y))
+            rowHeight = max(rowHeight, size.height)
+            x += size.width + spacing
+            maxWidth = max(maxWidth, x - spacing)
+        }
+
+        return (CGSize(width: maxWidth, height: y + rowHeight), positions)
     }
 }

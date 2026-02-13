@@ -246,6 +246,57 @@ class TestRoomContextFormatting:
         result = _format_room_context(dims)
         assert "hardwood" in result
 
+    def test_format_empty_arrays_omit_sections(self):
+        """Explicit empty arrays should not produce Openings/furniture/Surfaces lines."""
+        from app.activities.generate import _format_room_context
+        from app.models.contracts import RoomDimensions
+
+        dims = RoomDimensions(
+            width_m=4.0, length_m=5.0, height_m=2.5,
+            openings=[], furniture=[], surfaces=[],
+        )
+        result = _format_room_context(dims)
+        assert "Openings:" not in result
+        assert "furniture" not in result
+        assert "Surfaces:" not in result
+        assert "4.0m" in result
+
+    def test_format_missing_keys_uses_fallback(self):
+        """Dict entries without 'type' or 'material' use fallback values."""
+        from app.activities.generate import _format_room_context
+        from app.models.contracts import RoomDimensions
+
+        dims = RoomDimensions(
+            width_m=4.0, length_m=5.0, height_m=2.5,
+            openings=[{}],
+            furniture=[{}],
+            surfaces=[{"type": "floor"}],
+        )
+        result = _format_room_context(dims)
+        assert "opening" in result
+        assert "item" in result
+        assert "unknown" in result
+
+    def test_format_all_fields_populated(self):
+        """All fields present should produce complete context block."""
+        from app.activities.generate import _format_room_context
+        from app.models.contracts import RoomDimensions
+
+        dims = RoomDimensions(
+            width_m=4.2, length_m=5.8, height_m=2.7,
+            floor_area_sqm=24.36,
+            openings=[{"type": "door"}, {"type": "window"}, {"type": "window"}],
+            furniture=[{"type": "sofa"}, {"type": "table"}],
+            surfaces=[{"type": "floor", "material": "hardwood"}],
+        )
+        result = _format_room_context(dims)
+        assert "4.2m" in result
+        assert "24.4" in result or "24.3" in result
+        assert "door" in result
+        assert result.count("window") == 2
+        assert "sofa" in result
+        assert "hardwood" in result
+
     def test_build_prompt_with_dimensions(self):
         from app.activities.generate import _build_generation_prompt
         from app.models.contracts import RoomDimensions

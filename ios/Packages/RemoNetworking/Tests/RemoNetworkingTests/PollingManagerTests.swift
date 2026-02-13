@@ -92,6 +92,58 @@ final class PollingManagerTests: XCTestCase {
 
     // MARK: - Cancellation
 
+    // MARK: - pollUntil (custom condition)
+
+    func testPollUntilReturnsWhenConditionMet() async throws {
+        // Simulate iteration count incrementing: client returns iterationCount=2 on second call
+        let client = IncrementingClient(initialCount: 1, targetCount: 2)
+        let poller = PollingManager(client: client, interval: .milliseconds(50))
+
+        let state = try await poller.pollUntil(projectId: "test-123") { state in
+            state.iterationCount > 1
+        }
+        XCTAssertEqual(state.iterationCount, 2)
+    }
+
+    func testPollUntilReturnsOnError() async throws {
+        let client = IncrementingClient(initialCount: 1, targetCount: 1)
+        await client.setErrorState(WorkflowError(message: "Edit failed", retryable: true))
+
+        let poller = PollingManager(client: client, interval: .milliseconds(50))
+        let state = try await poller.pollUntil(projectId: "test-123") { _ in false }
+        XCTAssertNotNil(state.error)
+        XCTAssertEqual(state.error?.message, "Edit failed")
+    }
+
+    func testPollUntilRetriesTransientErrors() async throws {
+        // Fail once, then return matching condition
+        let client = FlakyConditionClient(failCount: 1, iterationCount: 3)
+        let poller = PollingManager(client: client, interval: .milliseconds(50), maxRetries: 3)
+
+        let state = try await poller.pollUntil(projectId: "test-123") { state in
+            state.iterationCount >= 3
+        }
+        XCTAssertEqual(state.iterationCount, 3)
+        let count = await client.callCount
+        XCTAssertEqual(count, 2) // 1 failure + 1 success
+    }
+
+    func testPollUntilThrowsAfterMaxRetries() async throws {
+        let client = FlakyConditionClient(failCount: 10, iterationCount: 3)
+        let poller = PollingManager(client: client, interval: .milliseconds(50), maxRetries: 2)
+
+        do {
+            _ = try await poller.pollUntil(projectId: "test-123") { _ in true }
+            XCTFail("Should have thrown after max retries")
+        } catch let error as APIError {
+            XCTAssertTrue(error.isRetryable)
+        }
+        let count = await client.callCount
+        XCTAssertEqual(count, 3) // maxRetries + 1
+    }
+
+    // MARK: - Cancellation
+
     func testPollThrowsCancellationWhenCancelled() async throws {
         let client = MockWorkflowClient(delay: .milliseconds(100))
         let projectId = try await client.createProject(deviceFingerprint: "test", hasLidar: false)
@@ -160,6 +212,87 @@ private actor FlakyClient: WorkflowClientProtocol {
     func sendIntakeMessage(projectId: String, message: String) async throws -> IntakeChatOutput {
         IntakeChatOutput(agentMessage: "")
     }
+    func confirmIntake(projectId: String, brief: DesignBrief) async throws {}
+    func skipIntake(projectId: String) async throws {}
+    func selectOption(projectId: String, index: Int) async throws {}
+    func submitAnnotationEdit(projectId: String, annotations: [AnnotationRegion]) async throws {}
+    func submitTextFeedback(projectId: String, feedback: String) async throws {}
+    func approveDesign(projectId: String) async throws {}
+    func startOver(projectId: String) async throws {}
+    func retryFailedStep(projectId: String) async throws {}
+}
+
+/// Returns a state where iterationCount increments each call until it reaches targetCount.
+private actor IncrementingClient: WorkflowClientProtocol {
+    var currentCount: Int
+    let targetCount: Int
+    var errorState: WorkflowError?
+
+    init(initialCount: Int, targetCount: Int) {
+        self.currentCount = initialCount
+        self.targetCount = targetCount
+    }
+
+    func setErrorState(_ error: WorkflowError) { errorState = error }
+
+    func getState(projectId: String) async throws -> WorkflowState {
+        if currentCount < targetCount {
+            currentCount += 1
+        }
+        var state = WorkflowState(step: "iteration", iterationCount: currentCount)
+        state.error = errorState
+        return state
+    }
+
+    func createProject(deviceFingerprint: String, hasLidar: Bool) async throws -> String { "" }
+    func deleteProject(projectId: String) async throws {}
+    func deletePhoto(projectId: String, photoId: String) async throws {}
+    func uploadPhoto(projectId: String, imageData: Data, photoType: String) async throws -> PhotoUploadResponse {
+        PhotoUploadResponse(photoId: "", validation: ValidatePhotoOutput(passed: true, failures: [], messages: []))
+    }
+    func uploadScan(projectId: String, scanData: [String: Any]) async throws {}
+    func skipScan(projectId: String) async throws {}
+    func startIntake(projectId: String, mode: String) async throws -> IntakeChatOutput { IntakeChatOutput(agentMessage: "") }
+    func sendIntakeMessage(projectId: String, message: String) async throws -> IntakeChatOutput { IntakeChatOutput(agentMessage: "") }
+    func confirmIntake(projectId: String, brief: DesignBrief) async throws {}
+    func skipIntake(projectId: String) async throws {}
+    func selectOption(projectId: String, index: Int) async throws {}
+    func submitAnnotationEdit(projectId: String, annotations: [AnnotationRegion]) async throws {}
+    func submitTextFeedback(projectId: String, feedback: String) async throws {}
+    func approveDesign(projectId: String) async throws {}
+    func startOver(projectId: String) async throws {}
+    func retryFailedStep(projectId: String) async throws {}
+}
+
+/// Fails a configured number of times before returning a state matching a condition.
+private actor FlakyConditionClient: WorkflowClientProtocol {
+    var callCount = 0
+    let failCount: Int
+    let iterationCount: Int
+
+    init(failCount: Int, iterationCount: Int) {
+        self.failCount = failCount
+        self.iterationCount = iterationCount
+    }
+
+    func getState(projectId: String) async throws -> WorkflowState {
+        callCount += 1
+        if callCount <= failCount {
+            throw APIError.networkError(URLError(.notConnectedToInternet))
+        }
+        return WorkflowState(step: "iteration", iterationCount: iterationCount)
+    }
+
+    func createProject(deviceFingerprint: String, hasLidar: Bool) async throws -> String { "" }
+    func deleteProject(projectId: String) async throws {}
+    func deletePhoto(projectId: String, photoId: String) async throws {}
+    func uploadPhoto(projectId: String, imageData: Data, photoType: String) async throws -> PhotoUploadResponse {
+        PhotoUploadResponse(photoId: "", validation: ValidatePhotoOutput(passed: true, failures: [], messages: []))
+    }
+    func uploadScan(projectId: String, scanData: [String: Any]) async throws {}
+    func skipScan(projectId: String) async throws {}
+    func startIntake(projectId: String, mode: String) async throws -> IntakeChatOutput { IntakeChatOutput(agentMessage: "") }
+    func sendIntakeMessage(projectId: String, message: String) async throws -> IntakeChatOutput { IntakeChatOutput(agentMessage: "") }
     func confirmIntake(projectId: String, brief: DesignBrief) async throws {}
     func skipIntake(projectId: String) async throws {}
     func selectOption(projectId: String, index: Int) async throws {}

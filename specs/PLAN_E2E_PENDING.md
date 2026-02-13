@@ -23,16 +23,16 @@
 
 **Why first**: Everything else is untestable until the app can talk to the real backend.
 
-### P1-01: Backend Switching via Launch Arguments
+### P1-01: Backend Switching via Launch Arguments — DONE
 **File**: `ios/Remo/App/RemoApp.swift`
 **What**: Check UserDefaults for `real-backend` (bool) and `backend-url` (string) launch arguments. If `real-backend` is true, use `RealWorkflowClient(baseURL:)` instead of `MockWorkflowClient`.
-**Why**: Currently hardcoded to `MockWorkflowClient`. The `RealWorkflowClient` is already fully implemented (all 17 API methods) — just need to wire the switch.
-**Test**: Launch app with `-real-backend true -backend-url http://localhost:8000`, create a project, verify it appears in the backend DB.
+**Done**: RemoApp.swift reads `real-backend` and `backend-url` from UserDefaults, creates `RealWorkflowClient(baseURL:)` when enabled.
 
-### P1-02: X-Request-ID in Error Reporting
+### P1-02: X-Request-ID in Error Reporting — DONE
 **File**: `ios/Packages/RemoNetworking/Sources/RemoNetworking/RealWorkflowClient.swift`
 **What**: Extract `X-Request-ID` header from HTTP responses and include in `APIError` for log correlation.
 **Why**: When something fails in the real backend, the request ID lets you trace it in server logs.
+**Done**: X-Request-ID extracted from HTTP response, included in `ErrorResponse.requestId`, and surfaced in error UI via `APIError.errorDescription` — appends "(Reference: abc-123)" to error messages when requestId is present. All error alerts across the app automatically display it.
 
 ---
 
@@ -40,70 +40,50 @@
 
 **Why second**: These are missing features that a human tester will immediately notice. Ordered by user flow sequence.
 
-### P2-01: Photo Upload — Inspiration Notes UI
+### P2-01: Photo Upload — Inspiration Notes UI — DONE
 **File**: `ios/Packages/RemoPhotoUpload/Sources/RemoPhotoUpload/PhotoUploadScreen.swift`
 **What**: Add a text field (max 200 chars) below each inspiration photo thumbnail. Bind to `PhotoData.note` and send with upload.
-**Spec ref**: 4.3.2 — "For each inspiration photo, the user can add a short text note"
-**Acceptance**: Upload inspiration photo, type a note, verify note appears in backend `WorkflowState.photos[].note`.
+**Done**: Notes TextField added. Note: stored locally only — backend `uploadPhoto` API doesn't accept notes yet.
 
-### P2-02: Photo Upload — "Opposite Corners" Instruction
+### P2-02: Photo Upload — "Opposite Corners" Instruction — DONE
 **File**: `ios/Packages/RemoPhotoUpload/Sources/RemoPhotoUpload/PhotoUploadScreen.swift`
 **What**: Replace generic "Take at least 2 photos" text with: "Take 2 photos from opposite corners of the room so we can see the full space." Add a simple top-down room diagram showing camera positions.
 **Spec ref**: 4.3.1
+**Done**: Text instruction updated. `CameraDiagram` view added — top-down room rectangle with two camera dots in opposite corners and field-of-view cones drawn using SwiftUI Canvas. Placed between the instruction text and inspiration photos text.
 
-### P2-03: Intake — Mode Selection Screen
+### P2-03: Intake — Mode Selection Screen — DONE
 **File**: `ios/Packages/RemoChatUI/Sources/RemoChatUI/IntakeChatScreen.swift`
-**What**: Before the chat starts, show 3-4 buttons:
-- "Quick Intake" — ~3 questions, ~2 minutes
-- "Full Intake" — ~10 questions, ~8 minutes
-- "Open Conversation" — Tell us everything, take your time
-- "Skip" (only visible if inspiration photos uploaded)
+**What**: Before the chat starts, show 3-4 mode selection buttons (Quick/Full/Open/Skip).
+**Done**: Mode selection buttons with accessibility identifiers (`mode_quick`, `mode_full`, `mode_open`, `mode_skip`). Skip visible only when inspiration photos uploaded.
 
-Pass selected mode to `client.startIntake(projectId:mode:)`. Currently hardcoded to `"full"` at line 137.
-**Spec ref**: 4.5 Entry & Form Selection
-**Acceptance**: Select "Quick", verify agent asks ~3 questions. Select "Full", verify ~10. Skip button hidden when no inspiration photos.
-
-### P2-04: Intake — Summary Correction Flow
+### P2-04: Intake — Summary Correction Flow — DONE
 **File**: `ios/Packages/RemoChatUI/Sources/RemoChatUI/IntakeChatScreen.swift`
-**What**: When `is_summary == true`, show numbered confirmation: "1. Looks good / 2. I want to change something". If user picks 2, agent asks what to change, updates brief, re-displays summary.
-**Spec ref**: 4.5 INTAKE-5, INTAKE-6
-**Currently**: Only shows "Looks Good!" button.
+**What**: Summary card with Confirm + Change actions.
+**Done**: SummaryCard shows "Looks Good" and "I Want to Change Something" buttons (`chat_confirm_brief`, `chat_change_brief`). INTAKE-5/6 spec compliance.
 
-### P2-05: Approval — Confirmation Dialog
-**File**: `ios/Packages/RemoDesignViews/Sources/RemoDesignViews/ApprovalScreen.swift` (or `IterationScreen.swift` if approve button lives there)
-**What**: Tapping "Approve Design" shows an alert: "Happy with this design? Once approved, it's final." with "Approve" and "Keep editing" buttons. Only call `client.approveDesign()` on confirm.
-**Spec ref**: 4.9 line 519
-**Why**: Users can currently approve accidentally with a single tap.
+### P2-05: Approval — Confirmation Dialog — DONE
+**File**: `ios/Packages/RemoDesignViews/Sources/RemoDesignViews/ApprovalScreen.swift` + `IterationScreen.swift`
+**Done**: Both screens use `confirmationDialog` with "Approve" / "Keep Editing" buttons. Only calls `approveDesign()` on confirm.
 
-### P2-06: Shopping List — Share, Copy, Copy Link
+### P2-06: Shopping List — Share, Copy, Copy Link — DONE
 **File**: `ios/Packages/RemoShoppingList/Sources/RemoShoppingList/ShoppingListScreen.swift`
-**What**:
-- **Share Shopping List** button: Format all products as text (name, price, URL per line) and open iOS share sheet
-- **Copy All** button: Same formatted text → clipboard, show "Shopping list copied!" toast
-- **Copy Link** per product card: Copy product URL → clipboard
-**Spec ref**: 4.9.3 lines 572-574
+**Done**: Share/Copy All buttons with share sheet and clipboard. Per-product "Copy Link" button.
 
-### P2-07: Shopping List — Display "Why This Match"
+### P2-07: Shopping List — Display "Why This Match" — DONE
 **File**: `ios/Packages/RemoShoppingList/Sources/RemoShoppingList/ShoppingListScreen.swift`
-**What**: The `whyMatched` field already exists in the `ProductMatch` model. Display it on each product card as a secondary text line (e.g., italic caption below the product name).
-**Spec ref**: 4.9.3 table — "Why this match" column
+**Done**: `whyMatched` displayed as italic caption on each product card.
 
-### P2-08: Shopping List — Non-LiDAR Banner
+### P2-08: Shopping List — Non-LiDAR Banner — DONE
 **File**: `ios/Packages/RemoShoppingList/Sources/RemoShoppingList/ShoppingListScreen.swift`
-**What**: If project has no scan data, show a banner at the top: "Tip: We matched products by style. For size-verified recommendations, use Room Scan on an iPhone Pro next time."
-**Spec ref**: 4.9.3 LiDAR comparison table
+**Done**: Non-LiDAR banner shown when project has no scan data.
 
-### P2-09: Iteration — 5-Round Limit Message
+### P2-09: Iteration — 5-Round Limit Message — DONE
 **File**: `ios/Packages/RemoAnnotation/Sources/RemoAnnotation/IterationScreen.swift`
-**What**: When `iterationCount >= 5`, show message: "You've used all 5 revision rounds. Please approve your design or start a new project." Disable both Annotate and Regenerate buttons.
-**Spec ref**: 4.7 LASSO-17, 4.8 REGEN-5
-**Currently**: Buttons disabled but no explanation shown.
+**Done**: Limit message shown when `iterationCount >= 5`, editing controls hidden. `iteration_limit_message` accessibility identifier.
 
-### P2-10: Text Feedback — 10-Character Minimum
+### P2-10: Text Feedback — 10-Character Minimum — DONE
 **File**: `ios/Packages/RemoAnnotation/Sources/RemoAnnotation/IterationScreen.swift`
-**What**: Change text feedback validation from `.isEmpty` to `.count < 10`. Show hint: "Please provide more detail (at least 10 characters)".
-**Spec ref**: 4.8 REGEN-2
-**Currently**: Backend enforces this but iOS doesn't show the validation.
+**Done**: Client-side 10-char minimum with orange hint text. Matches backend validation.
 
 ---
 
@@ -111,7 +91,7 @@ Pass selected mode to `client.startIntake(projectId:mode:)`. Currently hardcoded
 
 **Why third**: The annotation tool works (circles + instructions) but is simplified vs spec. These items improve the editing experience.
 
-### P3-01: Region Editor — Full Fields
+### P3-01: Region Editor — Full Fields — DONE
 **Files**: `ios/.../IterationScreen.swift` + `backend/app/models/contracts.py` (AnnotationRegion)
 **What**:
 1. **Backend**: Add to `AnnotationRegion`: `action: str` (Replace/Remove/Change finish/Resize/Reposition), `avoid: list[str] = []`, `constraints: list[str] = []`
@@ -121,7 +101,7 @@ Pass selected mode to `client.startIntake(projectId:mode:)`. Currently hardcoded
    - Style nudges: toggle chips (cheaper, premium, more minimal, more cozy, more modern, pet-friendly, kid-friendly, low maintenance)
 3. **Backend prompt**: Update `backend/prompts/edit.txt` to reference action/avoid/constraints
 **Spec ref**: 4.7.4
-**Currently**: Only `instruction` field exists.
+**Done**: Backend contracts have action/avoid/constraints fields. iOS RegionListRow has action picker, instruction text field, avoid comma-separated TextField (with split/join binding), and 8 style nudge toggle chips using a custom `FlowLayout`. Backend `_build_edit_instructions()` includes action/avoid/constraints in prompts.
 
 ### P3-02: Edit List Panel — DONE
 **File**: `ios/.../IterationScreen.swift`
@@ -129,15 +109,15 @@ Pass selected mode to `client.startIntake(projectId:mode:)`. Currently hardcoded
 **Spec ref**: 4.7.5
 **Done**: Bottom sheet with `RegionListPanel` + `RegionListRow`. Compact summary bar in annotation controls opens sheet. Sheet auto-opens when regions added. Rows expand/collapse for editing. Swipe-to-delete. `presentationBackgroundInteraction` keeps canvas tappable. Maestro flow updated.
 
-### P3-03: Region Overlap Detection
+### P3-03: Region Overlap Detection — DONE
 **File**: `ios/.../IterationScreen.swift`
-**What**: Before creating a new region, check if it overlaps any existing region. If so, show: "Regions can't overlap. Please draw around a different area, or delete an existing region first."
-**Spec ref**: 4.7.2
+**Done**: `checkRegionOverlap()` validates before creation. Alert shown with "Regions Can't Overlap" title. 7 unit tests in SnapGuideTests.swift.
 
-### P3-04: Revision History View
-**File**: `ios/Packages/RemoDesignViews/` (new or existing screen)
+### P3-04: Revision History View — DONE
+**File**: `ios/Packages/RemoAnnotation/Sources/RemoAnnotation/IterationScreen.swift`
 **What**: Allow user to swipe back through previous revisions during iteration. Read-only view showing each revision image. Data already stored in `WorkflowState.revisionHistory`.
 **Spec ref**: 4.7.7
+**Done**: "History" button in iteration toolbar opens a sheet listing each revision with number, `AsyncImage` for `revisedImageUrl` (with loading/error states), and instruction text. Image capped at 200pt height with rounded corners.
 
 ### P3-05: Freehand Lasso (Design Decision Required)
 **File**: `ios/.../IterationScreen.swift`
@@ -149,27 +129,21 @@ Pass selected mode to `client.startIntake(projectId:mode:)`. Currently hardcoded
 
 ## Phase 4: Data & Privacy UX
 
-### P4-01: Onboarding Tooltip
-**File**: `ios/Remo/App/RemoApp.swift` or `HomeScreen.swift`
-**What**: On first launch (check UserDefaults flag), show a dismissible tooltip: "Your design data is temporary — save your final image to Photos when you're done. We automatically delete all project data within 48 hours."
-**Spec ref**: 4.10 line 660
+### P4-01: Onboarding Tooltip — DONE
+**File**: `ios/Remo/App/HomeScreen.swift`
+**Done**: First-launch alert with data retention warning. UserDefaults flag `remo_has_seen_onboarding`. Skipped in Maestro tests.
 
-### P4-02: Approval Screen Save Reminder
-**File**: `ios/.../ApprovalScreen.swift` or `OutputScreen.swift`
-**What**: Add text: "Make sure to save your design image and copy your specs. Project data will be deleted after 24 hours."
-**Spec ref**: 4.10 line 661
+### P4-02: Approval Screen Save Reminder — DONE
+**File**: `ios/Packages/RemoDesignViews/Sources/RemoDesignViews/OutputScreen.swift`
+**Done**: Save reminder text displayed on output screen.
 
 ---
 
 ## Phase 5: Validation Error Message Polish
 
-### P5-01: User-Friendly Validation Messages
+### P5-01: User-Friendly Validation Messages — DONE
 **File**: `backend/app/activities/validation.py`
-**What**: Update error messages to match spec exactly:
-- Blur: "This photo looks blurry. Please retake with a steady hand." (remove technical score)
-- Resolution: "This photo is too low resolution. Please use a higher quality image." (remove pixel count)
-- Not a room: "We couldn't identify a room in this photo. Please upload a photo of an interior space."
-**Spec ref**: 4.3.3 table
+**Done**: Blur, resolution, and content validation messages match spec exactly. No technical details exposed.
 
 ---
 
@@ -196,6 +170,48 @@ Pass selected mode to `client.startIntake(projectId:mode:)`. Currently hardcoded
 
 ### P6-06: Maestro Multiple Projects + Resume
 **What**: Create 2 projects at different steps, kill app, relaunch, verify both resume at correct step.
+
+---
+
+## Phase 8: PRODUCT_SPEC Compliance Gaps
+
+**Why**: These are spec test cases not covered by any existing plan item. Identified by audit swarm cross-referencing PRODUCT_SPEC.md against actual implementation.
+
+### P8-01: Home — Resume Badge (HOME-3) — DONE
+**File**: `ios/Remo/App/HomeScreen.swift`
+**What**: Show a "Resume" badge on pending project rows.
+**Spec ref**: HOME-3
+**Done**: ProjectRow now shows a "Resume" capsule badge (accent color, caption2 bold) next to the title for any project whose step is not `.completed`. Accessibility identifier `resume_badge` added.
+
+### P8-02: Photo Upload — Inspiration People/Animals Validation (PHOTO-11/12) — DONE
+**File**: `backend/app/activities/validation.py`
+**What**: Validate inspiration photos don't contain people or animals.
+**Spec ref**: PHOTO-11, PHOTO-12
+**Done**: Backend `_check_content()` already differentiates room vs inspiration validation (line 154-164). For inspiration photos, the Claude Haiku prompt explicitly rejects people/animals, and the error message matches spec exactly: "Inspiration photos should show spaces, furniture, or design details — not people or animals." No changes needed — already implemented.
+
+### P8-03: Intake — Domain-Based Progress Indicator (INTAKE-1/2) — DONE
+**File**: `ios/Packages/RemoChatUI/Sources/RemoChatUI/IntakeChatScreen.swift` + `backend/app/activities/intake.py`
+**What**: During Quick/Full intake, show a progress indicator reflecting which domains have been covered.
+**Spec ref**: INTAKE-1, INTAKE-2
+**Done**: Backend already returns `progress: "Turn X of ~Y — Z/11 domains covered"` in `IntakeChatOutput`. iOS IntakeChatScreen displays it as a bar above chat messages (line 112). No changes needed — already implemented.
+
+### P8-04: Design Selection — View Mode Persistence (GEN-11) — DONE
+**File**: `ios/Packages/RemoDesignViews/Sources/RemoDesignViews/DesignSelectionScreen.swift`
+**What**: Persist the user's view mode preference (side-by-side vs swipeable).
+**Spec ref**: GEN-11
+**Done**: Changed `@State private var showSideBySide` to `@AppStorage("remo_show_side_by_side")`. Preference now persists across the session and app restarts.
+
+### P8-05: Annotation — Number Chip Edge Clamping (LASSO-13) — DONE
+**File**: `ios/Packages/RemoAnnotation/Sources/RemoAnnotation/IterationScreen.swift`
+**What**: When a region's number chip would render off-canvas, clamp it to the nearest visible edge.
+**Spec ref**: LASSO-13
+**Done**: Number chip overlay now computes clamped X/Y offsets (half chip size margin from all edges). When region center is within 12pt of any edge, the chip shifts inward to stay fully visible.
+
+### P8-06: Annotation — List Item Tap Highlights Region on Canvas (LASSO-10) — DONE
+**File**: `ios/Packages/RemoAnnotation/Sources/RemoAnnotation/IterationScreen.swift`
+**What**: When user taps a region row in the edit panel, the corresponding circle on the canvas highlights (thicker border, glow shadow, enhanced fill).
+**Spec ref**: LASSO-10
+**Done**: Added `highlightedRegionId: Int?` state on IterationScreen, passed as binding to AnnotationCanvas. RegionListPanel calls `onHighlight` when a row is tapped/expanded. Canvas circles show thicker border (5px), enhanced fill (0.3 opacity), and glow shadow when highlighted. Highlight clears on panel dismiss.
 
 ---
 
@@ -247,6 +263,14 @@ P1-01 (backend switching)     ← GATE: unlocks everything
   ├── P6-01 through P6-06     ← Maestro E2E validation
   │     (P6-01 first, then P6-02 with real AI, then edge cases)
   │
+  ├── P8-01 through P8-05     ← PRODUCT_SPEC compliance gaps
+  │     Priority within P8:
+  │       1. P8-04 (view mode persistence) — 1-line fix (@State → @AppStorage)
+  │       2. P8-01 (resume badge) — visible UX gap
+  │       3. P8-05 (chip edge clamping) — cosmetic but spec-required
+  │       4. P8-02 (inspiration validation) — needs backend coordination
+  │       5. P8-03 (domain progress) — needs backend chat response changes
+  │
   └── P7-01 through P7-04     ← LiDAR (LAST, manual)
 ```
 
@@ -260,7 +284,8 @@ P1-01 (backend switching)     ← GATE: unlocks everything
 | P4 | 2 | ~40 lines iOS | Quick wins |
 | P5 | 1 | ~10 lines backend | String changes |
 | P6 | 6 | Maestro YAML + test runs | Validation, not new code |
+| P8 | 5 | ~150 lines iOS, ~20 lines backend | Spec compliance polish |
 | P7 | 4 | ~500 lines iOS | Significant — ARKit/RoomPlan integration |
 
-**Total before LiDAR**: ~800 lines of code changes + Maestro validation
+**Total before LiDAR**: ~950 lines of code changes + Maestro validation
 **LiDAR**: ~500 lines + manual device testing

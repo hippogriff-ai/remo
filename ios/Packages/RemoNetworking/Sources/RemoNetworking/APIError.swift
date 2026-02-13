@@ -13,6 +13,9 @@ public enum APIError: LocalizedError {
         case .networkError(let error):
             return "Network error: \(error.localizedDescription)"
         case .httpError(_, let response):
+            if let requestId = response.requestId {
+                return "\(response.message)\n(Reference: \(requestId))"
+            }
             return response.message
         case .decodingError(let error):
             return "Data error: \(error.localizedDescription)"

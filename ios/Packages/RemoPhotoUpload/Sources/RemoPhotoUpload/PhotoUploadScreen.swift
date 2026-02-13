@@ -36,6 +36,11 @@ public struct PhotoUploadScreen: View {
                         .font(.subheadline)
                         .foregroundStyle(.secondary)
                         .multilineTextAlignment(.center)
+
+                    CameraDiagram()
+                        .frame(width: 160, height: 120)
+                        .padding(.vertical, 4)
+
                     Text("Optionally add up to 3 inspiration photos.")
                         .font(.caption)
                         .foregroundStyle(.tertiary)
@@ -288,6 +293,56 @@ struct PhotoThumbnail: View {
             }
             .accessibilityElement(children: .combine)
             .accessibilityLabel("\(photo.photoType.capitalized) photo")
+    }
+}
+
+// MARK: - Camera Diagram
+
+/// Top-down room diagram showing two camera positions in opposite corners with field-of-view cones.
+struct CameraDiagram: View {
+    var body: some View {
+        Canvas { context, size in
+            let w = size.width
+            let h = size.height
+            let inset: CGFloat = 8
+
+            // Room rectangle
+            let roomRect = CGRect(x: inset, y: inset, width: w - inset * 2, height: h - inset * 2)
+            context.stroke(Path(roomRect), with: .color(.secondary), lineWidth: 2)
+
+            // Camera 1 — bottom-left corner, facing top-right
+            drawCamera(context: &context, position: CGPoint(x: roomRect.minX + 12, y: roomRect.maxY - 12),
+                       angle: -.pi / 4, size: size)
+
+            // Camera 2 — top-right corner, facing bottom-left
+            drawCamera(context: &context, position: CGPoint(x: roomRect.maxX - 12, y: roomRect.minY + 12),
+                       angle: .pi * 3 / 4, size: size)
+        }
+        .accessibilityLabel("Diagram showing two camera positions in opposite corners of a room")
+    }
+
+    private func drawCamera(context: inout GraphicsContext, position: CGPoint, angle: CGFloat, size: CGSize) {
+        let fovAngle: CGFloat = .pi / 3
+        let coneLength: CGFloat = min(size.width, size.height) * 0.5
+
+        // Field-of-view cone
+        var conePath = Path()
+        conePath.move(to: position)
+        conePath.addLine(to: CGPoint(
+            x: position.x + coneLength * cos(angle - fovAngle / 2),
+            y: position.y + coneLength * sin(angle - fovAngle / 2)
+        ))
+        conePath.addLine(to: CGPoint(
+            x: position.x + coneLength * cos(angle + fovAngle / 2),
+            y: position.y + coneLength * sin(angle + fovAngle / 2)
+        ))
+        conePath.closeSubpath()
+        context.fill(conePath, with: .color(.accentColor.opacity(0.15)))
+        context.stroke(conePath, with: .color(.accentColor.opacity(0.4)), lineWidth: 1)
+
+        // Camera icon (small filled circle)
+        let camRect = CGRect(x: position.x - 5, y: position.y - 5, width: 10, height: 10)
+        context.fill(Path(ellipseIn: camRect), with: .color(.accentColor))
     }
 }
 
