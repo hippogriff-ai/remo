@@ -326,8 +326,11 @@ class TestEditInstructions:
 
         annotations = [
             AnnotationRegion(
-                region_id=i, center_x=0.3 * i, center_y=0.5,
-                radius=0.1, instruction=f"Edit region {i} with detail",
+                region_id=i,
+                center_x=0.3 * i,
+                center_y=0.5,
+                radius=0.1,
+                instruction=f"Edit region {i} with detail",
             )
             for i in range(1, 4)
         ]

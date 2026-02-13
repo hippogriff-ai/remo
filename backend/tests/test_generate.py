@@ -252,8 +252,12 @@ class TestRoomContextFormatting:
         from app.models.contracts import RoomDimensions
 
         dims = RoomDimensions(
-            width_m=4.0, length_m=5.0, height_m=2.5,
-            openings=[], furniture=[], surfaces=[],
+            width_m=4.0,
+            length_m=5.0,
+            height_m=2.5,
+            openings=[],
+            furniture=[],
+            surfaces=[],
         )
         result = _format_room_context(dims)
         assert "Openings:" not in result
@@ -267,7 +271,9 @@ class TestRoomContextFormatting:
         from app.models.contracts import RoomDimensions
 
         dims = RoomDimensions(
-            width_m=4.0, length_m=5.0, height_m=2.5,
+            width_m=4.0,
+            length_m=5.0,
+            height_m=2.5,
             openings=[{}],
             furniture=[{}],
             surfaces=[{"type": "floor"}],
@@ -283,7 +289,9 @@ class TestRoomContextFormatting:
         from app.models.contracts import RoomDimensions
 
         dims = RoomDimensions(
-            width_m=4.2, length_m=5.8, height_m=2.7,
+            width_m=4.2,
+            length_m=5.8,
+            height_m=2.7,
             floor_area_sqm=24.36,
             openings=[{"type": "door"}, {"type": "window"}, {"type": "window"}],
             furniture=[{"type": "sofa"}, {"type": "table"}],
