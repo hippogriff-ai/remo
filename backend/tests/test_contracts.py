@@ -19,16 +19,21 @@ from app.activities.mock_stubs import (
 from app.activities.mock_stubs import (
     generate_shopping_list as mock_generate_shopping_list,
 )
+from app.activities.mock_stubs import (
+    load_style_skill as mock_load_style_skill,
+)
 from app.models.contracts import (
     AnnotationEditRequest,
     AnnotationRegion,
     ChatMessage,
+    CostBreakdown,
     CreateProjectRequest,
     DesignBrief,
     DesignOption,
     EditDesignInput,
     EditDesignOutput,
     ErrorResponse,
+    FeasibilityNote,
     GenerateDesignsInput,
     GenerateDesignsOutput,
     GenerateShoppingListInput,
@@ -36,15 +41,22 @@ from app.models.contracts import (
     InspirationNote,
     IntakeChatInput,
     IntakeChatOutput,
+    LoadSkillInput,
+    LoadSkillOutput,
     PhotoData,
     PhotoUploadResponse,
     ProductMatch,
+    ProfessionalFee,
     QuickReplyOption,
+    RenovationIntent,
     RevisionRecord,
     RoomDimensions,
     ScanData,
     SelectOptionRequest,
+    SkillManifest,
+    SkillSummary,
     StyleProfile,
+    StyleSkillPack,
     TextFeedbackRequest,
     UnmatchedItem,
     ValidatePhotoInput,
@@ -687,6 +699,11 @@ class TestAPIModels:
         with pytest.raises(ValidationError):
             TextFeedbackRequest(feedback="")
 
+    def test_text_feedback_request_too_short_fails(self):
+        """TextFeedbackRequest rejects feedback under 10 chars (REGEN-2)."""
+        with pytest.raises(ValidationError):
+            TextFeedbackRequest(feedback="darker")
+
     def test_error_response(self):
         """ErrorResponse with all fields."""
         e = ErrorResponse(
@@ -1026,6 +1043,11 @@ class TestMockStubOutputConformance:
     @pytest.mark.asyncio
     async def test_mock_generate_designs_output(self):
         """Mock generate_designs returns valid GenerateDesignsOutput (2 options)."""
+        from app.activities.mock_stubs import FORCE_FAILURE_SENTINEL
+
+        # Clean up any leftover sentinel from E2E error-injection tests
+        FORCE_FAILURE_SENTINEL.unlink(missing_ok=True)
+
         inp = GenerateDesignsInput(
             room_photo_urls=["photos/room_0.jpg", "photos/room_1.jpg"],
         )
@@ -1041,6 +1063,26 @@ class TestMockStubOutputConformance:
         restored = GenerateDesignsOutput.model_validate_json(out.model_dump_json())
         assert len(restored.options) == 2
         assert restored.options[0].image_url == out.options[0].image_url
+
+    @pytest.mark.asyncio
+    async def test_mock_generate_designs_force_failure(self):
+        """Mock generate_designs raises ApplicationError when sentinel file exists.
+
+        Covers the one-shot error injection path (mock_stubs.py:37-39) used by
+        E2E-11 to test the error → retry cycle.
+        """
+        from temporalio.exceptions import ApplicationError
+
+        from app.activities.mock_stubs import FORCE_FAILURE_SENTINEL
+
+        FORCE_FAILURE_SENTINEL.touch()
+        inp = GenerateDesignsInput(
+            room_photo_urls=["photos/room_0.jpg"],
+        )
+        with pytest.raises(ApplicationError, match="Injected failure"):
+            await mock_generate_designs(inp)
+        # Sentinel is consumed (deleted) after the error
+        assert not FORCE_FAILURE_SENTINEL.exists()
 
     @pytest.mark.asyncio
     async def test_mock_edit_design_output(self):
@@ -1082,10 +1124,567 @@ class TestMockStubOutputConformance:
         assert item.product_name == "Mock Chair"
         assert item.price_cents == 9999
         assert item.confidence_score == 0.9
+        # Phase 1a: cost_breakdown populated
+        assert out.cost_breakdown is not None
+        assert out.cost_breakdown.materials_cents == 9999
+        assert out.cost_breakdown.total_low_cents == 9999
+        assert out.cost_breakdown.total_high_cents == 12000
         # Round-trip
         restored = GenerateShoppingListOutput.model_validate_json(out.model_dump_json())
         assert restored.total_estimated_cost_cents == 9999
         assert restored.items[0].product_name == "Mock Chair"
+        assert restored.cost_breakdown.materials_cents == 9999
+
+    @pytest.mark.asyncio
+    async def test_mock_load_style_skill_known_ids(self):
+        """Mock load_style_skill returns packs for known skill IDs."""
+        out = await mock_load_style_skill(
+            LoadSkillInput(skill_ids=["mid-century-modern", "japandi"])
+        )
+        assert isinstance(out, LoadSkillOutput)
+        assert len(out.skill_packs) == 2
+        assert out.not_found == []
+        ids = {p.skill_id for p in out.skill_packs}
+        assert ids == {"mid-century-modern", "japandi"}
+
+    @pytest.mark.asyncio
+    async def test_mock_load_style_skill_mixed(self):
+        """Mock load_style_skill handles mix of known and unknown IDs."""
+        out = await mock_load_style_skill(LoadSkillInput(skill_ids=["japandi", "art-deco"]))
+        assert len(out.skill_packs) == 1
+        assert out.skill_packs[0].skill_id == "japandi"
+        assert out.not_found == ["art-deco"]
+
+    @pytest.mark.asyncio
+    async def test_mock_load_style_skill_all_unknown(self):
+        """Mock load_style_skill returns all IDs as not_found if unknown."""
+        out = await mock_load_style_skill(LoadSkillInput(skill_ids=["unknown-style"]))
+        assert len(out.skill_packs) == 0
+        assert out.not_found == ["unknown-style"]
+
+
+# ---------------------------------------------------------------------------
+# Phase 1a: Skill System Models
+# ---------------------------------------------------------------------------
+
+
+class TestSkillSummary:
+    """SkillSummary — lightweight skill reference."""
+
+    def test_valid(self):
+        """Valid construction with all fields."""
+        s = SkillSummary(
+            skill_id="mid-century-modern",
+            name="Mid-Century Modern",
+            description="Clean lines, organic curves",
+            style_tags=["retro", "minimal"],
+        )
+        assert s.skill_id == "mid-century-modern"
+        assert len(s.style_tags) == 2
+
+    def test_style_tags_default_empty(self):
+        """style_tags defaults to empty list."""
+        s = SkillSummary(skill_id="x", name="X", description="X")
+        assert s.style_tags == []
+
+    def test_round_trip(self):
+        """JSON serialization round-trip."""
+        s = SkillSummary(skill_id="a", name="A", description="A", style_tags=["t"])
+        restored = SkillSummary.model_validate_json(s.model_dump_json())
+        assert restored.style_tags == ["t"]
+
+
+class TestStyleSkillPack:
+    """StyleSkillPack — full knowledge pack with versioning."""
+
+    def test_valid_with_knowledge(self):
+        """Valid pack with knowledge dict."""
+        p = StyleSkillPack(
+            skill_id="japandi",
+            name="Japandi",
+            description="Japanese minimalism meets Scandinavian warmth",
+            version=2,
+            style_tags=["minimal", "warm"],
+            applicable_room_types=["living room", "bedroom"],
+            knowledge={"principles": ["wabi-sabi", "hygge"]},
+        )
+        assert p.version == 2
+        assert p.knowledge["principles"][0] == "wabi-sabi"
+
+    def test_version_default_one(self):
+        """Version defaults to 1."""
+        p = StyleSkillPack(skill_id="x", name="X", description="X")
+        assert p.version == 1
+
+    def test_version_zero_fails(self):
+        """Version must be >= 1."""
+        with pytest.raises(ValidationError):
+            StyleSkillPack(skill_id="x", name="X", description="X", version=0)
+
+    def test_empty_knowledge_valid(self):
+        """Empty knowledge dict is valid (T3 defines contents)."""
+        p = StyleSkillPack(skill_id="x", name="X", description="X", knowledge={})
+        assert p.knowledge == {}
+
+    def test_round_trip(self):
+        """JSON round-trip preserves knowledge dict."""
+        p = StyleSkillPack(
+            skill_id="a",
+            name="A",
+            description="A",
+            knowledge={"k": [1, 2, 3]},
+        )
+        restored = StyleSkillPack.model_validate_json(p.model_dump_json())
+        assert restored.knowledge == {"k": [1, 2, 3]}
+
+
+class TestSkillManifest:
+    """SkillManifest — available skills for a project."""
+
+    def test_empty_valid(self):
+        """Empty manifest is valid."""
+        m = SkillManifest()
+        assert m.skills == []
+        assert m.default_skill_ids == []
+
+    def test_with_skills(self):
+        """Manifest with skills and defaults."""
+        m = SkillManifest(
+            skills=[
+                SkillSummary(skill_id="mcm", name="MCM", description="Mid-Century"),
+                SkillSummary(skill_id="jap", name="Japandi", description="Japandi"),
+            ],
+            default_skill_ids=["mcm"],
+        )
+        assert len(m.skills) == 2
+        assert m.default_skill_ids == ["mcm"]
+
+
+class TestLoadSkillInput:
+    """LoadSkillInput — activity input for skill loading."""
+
+    def test_valid_single(self):
+        """Single skill ID is valid."""
+        inp = LoadSkillInput(skill_ids=["mid-century-modern"])
+        assert len(inp.skill_ids) == 1
+
+    def test_valid_multiple(self):
+        """Multiple skill IDs are valid."""
+        inp = LoadSkillInput(skill_ids=["a", "b", "c"])
+        assert len(inp.skill_ids) == 3
+
+    def test_empty_fails(self):
+        """Empty list fails (min_length=1)."""
+        with pytest.raises(ValidationError):
+            LoadSkillInput(skill_ids=[])
+
+
+class TestLoadSkillOutput:
+    """LoadSkillOutput — activity output with loaded packs."""
+
+    def test_empty_valid(self):
+        """All defaults are valid (no packs loaded, nothing not found)."""
+        out = LoadSkillOutput()
+        assert out.skill_packs == []
+        assert out.not_found == []
+
+    def test_with_packs_and_not_found(self):
+        """Mix of loaded packs and not-found IDs."""
+        out = LoadSkillOutput(
+            skill_packs=[
+                StyleSkillPack(skill_id="a", name="A", description="A"),
+            ],
+            not_found=["b", "c"],
+        )
+        assert len(out.skill_packs) == 1
+        assert out.not_found == ["b", "c"]
+
+    def test_round_trip(self):
+        """JSON round-trip."""
+        out = LoadSkillOutput(
+            skill_packs=[
+                StyleSkillPack(
+                    skill_id="x",
+                    name="X",
+                    description="X",
+                    knowledge={"k": "v"},
+                ),
+            ],
+            not_found=["y"],
+        )
+        restored = LoadSkillOutput.model_validate_json(out.model_dump_json())
+        assert restored.skill_packs[0].knowledge == {"k": "v"}
+        assert restored.not_found == ["y"]
+
+
+# ---------------------------------------------------------------------------
+# Phase 1a: Cost/Feasibility Models
+# ---------------------------------------------------------------------------
+
+
+class TestFeasibilityNote:
+    """FeasibilityNote — renovation intervention assessment."""
+
+    def test_valid(self):
+        """Valid feasibility note."""
+        n = FeasibilityNote(
+            intervention="Remove wall between kitchen and living room",
+            assessment="needs_verification",
+            confidence=0.7,
+            explanation="Could be load-bearing; needs structural assessment",
+            cost_impact="adds $2-5K for structural engineer",
+            professional_needed="structural engineer",
+        )
+        assert n.assessment == "needs_verification"
+        assert n.confidence == 0.7
+
+    def test_invalid_assessment_rejected(self):
+        """Invalid assessment value is rejected by Literal type."""
+        with pytest.raises(ValidationError):
+            FeasibilityNote(
+                intervention="test",
+                assessment="maybe",
+                confidence=0.5,
+                explanation="test",
+            )
+
+    def test_all_valid_assessments(self):
+        """All four assessment values are accepted."""
+        for value in [
+            "likely_feasible",
+            "needs_verification",
+            "risky",
+            "not_feasible",
+        ]:
+            n = FeasibilityNote(
+                intervention="test",
+                assessment=value,
+                confidence=0.5,
+                explanation="test",
+            )
+            assert n.assessment == value
+
+    def test_confidence_out_of_range(self):
+        """Confidence must be 0-1."""
+        with pytest.raises(ValidationError):
+            FeasibilityNote(
+                intervention="test",
+                assessment="risky",
+                confidence=1.5,
+                explanation="test",
+            )
+
+    def test_optional_fields_default_none(self):
+        """cost_impact and professional_needed default to None."""
+        n = FeasibilityNote(
+            intervention="test",
+            assessment="likely_feasible",
+            confidence=0.9,
+            explanation="Simple paint job",
+        )
+        assert n.cost_impact is None
+        assert n.professional_needed is None
+
+
+class TestProfessionalFee:
+    """ProfessionalFee — estimated cost for a professional service."""
+
+    def test_valid(self):
+        """Valid professional fee."""
+        f = ProfessionalFee(
+            professional_type="structural engineer",
+            reason="Load-bearing wall assessment",
+            estimate_cents=50000,
+        )
+        assert f.estimate_cents == 50000
+
+    def test_negative_estimate_fails(self):
+        """Negative estimate is rejected."""
+        with pytest.raises(ValidationError):
+            ProfessionalFee(
+                professional_type="plumber",
+                reason="test",
+                estimate_cents=-100,
+            )
+
+
+class TestCostBreakdown:
+    """CostBreakdown — detailed project cost breakdown."""
+
+    def test_minimal_defaults(self):
+        """All defaults produce valid model."""
+        c = CostBreakdown()
+        assert c.materials_cents == 0
+        assert c.labor_estimate_cents is None
+        assert c.professional_fees == []
+        assert c.total_low_cents == 0
+        assert c.total_high_cents == 0
+
+    def test_full(self):
+        """Full cost breakdown with professional fees."""
+        c = CostBreakdown(
+            materials_cents=150000,
+            labor_estimate_cents=80000,
+            labor_estimate_note="2 days painting + 1 day installation",
+            professional_fees=[
+                ProfessionalFee(
+                    professional_type="painter",
+                    reason="Full room repaint",
+                    estimate_cents=40000,
+                ),
+            ],
+            permit_fees_estimate_cents=5000,
+            total_low_cents=275000,
+            total_high_cents=350000,
+        )
+        assert c.materials_cents == 150000
+        assert len(c.professional_fees) == 1
+        assert c.permit_fees_estimate_cents == 5000
+
+    def test_negative_materials_fails(self):
+        """Negative materials_cents is rejected."""
+        with pytest.raises(ValidationError):
+            CostBreakdown(materials_cents=-1)
+
+    def test_negative_total_fails(self):
+        """Negative total is rejected."""
+        with pytest.raises(ValidationError):
+            CostBreakdown(total_low_cents=-1)
+
+    def test_round_trip(self):
+        """JSON round-trip with nested ProfessionalFee."""
+        c = CostBreakdown(
+            materials_cents=9999,
+            professional_fees=[
+                ProfessionalFee(
+                    professional_type="engineer",
+                    reason="assessment",
+                    estimate_cents=50000,
+                ),
+            ],
+            total_low_cents=59999,
+            total_high_cents=80000,
+        )
+        restored = CostBreakdown.model_validate_json(c.model_dump_json())
+        assert restored.professional_fees[0].estimate_cents == 50000
+        assert restored.total_high_cents == 80000
+
+
+class TestRenovationIntent:
+    """RenovationIntent — user's renovation scope."""
+
+    def test_cosmetic(self):
+        """Valid cosmetic renovation."""
+        r = RenovationIntent(
+            scope="cosmetic",
+            interventions=["repaint walls", "new curtains"],
+        )
+        assert r.scope == "cosmetic"
+        assert len(r.interventions) == 2
+
+    def test_structural_with_feasibility(self):
+        """Structural scope with feasibility notes."""
+        r = RenovationIntent(
+            scope="structural",
+            interventions=["remove wall"],
+            feasibility_notes=[
+                FeasibilityNote(
+                    intervention="remove wall",
+                    assessment="risky",
+                    confidence=0.6,
+                    explanation="Likely load-bearing",
+                    professional_needed="structural engineer",
+                ),
+            ],
+            estimated_permits=["building permit"],
+        )
+        assert r.scope == "structural"
+        assert len(r.feasibility_notes) == 1
+        assert r.estimated_permits == ["building permit"]
+
+    def test_invalid_scope_rejected(self):
+        """Invalid scope value is rejected."""
+        with pytest.raises(ValidationError):
+            RenovationIntent(scope="nuclear")
+
+    def test_all_valid_scopes(self):
+        """All three scope values are accepted."""
+        for scope in ["cosmetic", "moderate", "structural"]:
+            r = RenovationIntent(scope=scope)
+            assert r.scope == scope
+
+    def test_defaults(self):
+        """Lists default to empty."""
+        r = RenovationIntent(scope="cosmetic")
+        assert r.interventions == []
+        assert r.feasibility_notes == []
+        assert r.estimated_permits == []
+
+
+# ---------------------------------------------------------------------------
+# Phase 1a: Evolution / Backward Compatibility
+# ---------------------------------------------------------------------------
+
+
+class TestDesignBriefEvolution:
+    """DesignBrief backward compatibility with Phase 1a fields."""
+
+    def test_existing_minimal_still_works(self):
+        """Old-style DesignBrief (no new fields) still valid."""
+        b = DesignBrief(room_type="living room")
+        assert b.style_skills_used == []
+        assert b.renovation_intent is None
+
+    def test_with_new_fields(self):
+        """DesignBrief with Phase 1a fields."""
+        b = DesignBrief(
+            room_type="kitchen",
+            style_skills_used=["mid-century-modern", "japandi"],
+            renovation_intent=RenovationIntent(
+                scope="moderate",
+                interventions=["replace countertops"],
+                feasibility_notes=[
+                    FeasibilityNote(
+                        intervention="replace countertops",
+                        assessment="likely_feasible",
+                        confidence=0.9,
+                        explanation="Standard granite swap",
+                    ),
+                ],
+            ),
+        )
+        assert len(b.style_skills_used) == 2
+        assert b.renovation_intent.scope == "moderate"
+
+    def test_forward_compat_old_json(self):
+        """Old JSON without new fields deserializes correctly."""
+        old_json = '{"room_type": "bedroom", "pain_points": ["too dark"]}'
+        b = DesignBrief.model_validate_json(old_json)
+        assert b.room_type == "bedroom"
+        assert b.style_skills_used == []
+        assert b.renovation_intent is None
+
+    def test_round_trip_with_renovation(self):
+        """DesignBrief with renovation_intent round-trips through JSON."""
+        b = DesignBrief(
+            room_type="office",
+            renovation_intent=RenovationIntent(
+                scope="structural",
+                feasibility_notes=[
+                    FeasibilityNote(
+                        intervention="open wall",
+                        assessment="not_feasible",
+                        confidence=0.95,
+                        explanation="Exterior wall",
+                    ),
+                ],
+            ),
+        )
+        restored = DesignBrief.model_validate_json(b.model_dump_json())
+        assert restored.renovation_intent.scope == "structural"
+        assert restored.renovation_intent.feasibility_notes[0].confidence == 0.95
+
+
+class TestShoppingListOutputEvolution:
+    """GenerateShoppingListOutput backward compatibility with cost_breakdown."""
+
+    def test_existing_without_cost_breakdown(self):
+        """Old-style output (no cost_breakdown) still valid."""
+        out = GenerateShoppingListOutput(items=[], total_estimated_cost_cents=0)
+        assert out.cost_breakdown is None
+
+    def test_with_cost_breakdown(self):
+        """Output with CostBreakdown."""
+        out = GenerateShoppingListOutput(
+            items=[],
+            total_estimated_cost_cents=150000,
+            cost_breakdown=CostBreakdown(
+                materials_cents=100000,
+                labor_estimate_cents=50000,
+                total_low_cents=150000,
+                total_high_cents=200000,
+            ),
+        )
+        assert out.cost_breakdown.materials_cents == 100000
+
+    def test_forward_compat_old_json(self):
+        """Old JSON without cost_breakdown deserializes correctly."""
+        old_json = '{"items": [], "total_estimated_cost_cents": 5000}'
+        out = GenerateShoppingListOutput.model_validate_json(old_json)
+        assert out.cost_breakdown is None
+        assert out.total_estimated_cost_cents == 5000
+
+    def test_round_trip_with_cost_breakdown(self):
+        """Shopping list with cost_breakdown survives JSON round-trip."""
+        out = GenerateShoppingListOutput(
+            items=[
+                ProductMatch(
+                    category_group="Furniture",
+                    product_name="Chair",
+                    retailer="Store",
+                    price_cents=50000,
+                    product_url="https://example.com",
+                    confidence_score=0.9,
+                    why_matched="matched",
+                ),
+            ],
+            total_estimated_cost_cents=50000,
+            cost_breakdown=CostBreakdown(
+                materials_cents=50000,
+                professional_fees=[
+                    ProfessionalFee(
+                        professional_type="designer",
+                        reason="consultation",
+                        estimate_cents=20000,
+                    ),
+                ],
+                total_low_cents=70000,
+                total_high_cents=90000,
+            ),
+        )
+        restored = GenerateShoppingListOutput.model_validate_json(out.model_dump_json())
+        assert restored.cost_breakdown.materials_cents == 50000
+        assert len(restored.cost_breakdown.professional_fees) == 1
+
+
+class TestIntakeChatInputEvolution:
+    """IntakeChatInput backward compatibility with available_skills."""
+
+    def test_existing_without_skills(self):
+        """Old-style input (no available_skills) still valid."""
+        inp = IntakeChatInput(
+            mode="full",
+            project_context={},
+            conversation_history=[],
+            user_message="hello",
+        )
+        assert inp.available_skills == []
+
+    def test_with_skills(self):
+        """Input with available skills."""
+        inp = IntakeChatInput(
+            mode="quick",
+            project_context={},
+            conversation_history=[],
+            user_message="hello",
+            available_skills=[
+                SkillSummary(
+                    skill_id="mcm",
+                    name="Mid-Century Modern",
+                    description="Clean lines",
+                ),
+            ],
+        )
+        assert len(inp.available_skills) == 1
+
+    def test_forward_compat_old_json(self):
+        """Old JSON without available_skills deserializes correctly."""
+        old_json = (
+            '{"mode": "full", "project_context": {}, '
+            '"conversation_history": [], "user_message": "hi"}'
+        )
+        inp = IntakeChatInput.model_validate_json(old_json)
+        assert inp.available_skills == []
 
 
 class TestAllModelsImportable:
@@ -1098,6 +1697,13 @@ class TestAllModelsImportable:
         expected = [
             "StyleProfile",
             "InspirationNote",
+            "SkillSummary",
+            "StyleSkillPack",
+            "SkillManifest",
+            "FeasibilityNote",
+            "ProfessionalFee",
+            "CostBreakdown",
+            "RenovationIntent",
             "DesignBrief",
             "RoomDimensions",
             "AnnotationRegion",
@@ -1118,6 +1724,8 @@ class TestAllModelsImportable:
             "GenerateShoppingListOutput",
             "IntakeChatInput",
             "IntakeChatOutput",
+            "LoadSkillInput",
+            "LoadSkillOutput",
             "ValidatePhotoInput",
             "ValidatePhotoOutput",
             "WorkflowState",

@@ -752,6 +752,194 @@ class TestEvalHarness:
         assert "{transcript}" in RUBRIC_PROMPT
 
 
+class TestEvaluateBrief:
+    """Tests for evaluate_brief() with mocked Anthropic client."""
+
+    _VALID_SCORES = (
+        '{"style_coherence": 8, "color_strategy": 12, "lighting_design": 10,'
+        ' "material_texture": 11, "design_intelligence": 7, "diagnostic_depth": 3,'
+        ' "actionability": 12, "completeness": 8, "user_fidelity": 4,'
+        ' "total": 75, "tag": "PASS", "notes": "Good brief."}'
+    )
+
+    def _brief(self):
+        from app.models.contracts import DesignBrief
+
+        return DesignBrief(
+            room_type="living_room",
+            occupants="2 adults, one cat",
+        )
+
+    def _conversation(self):
+        return [
+            {"role": "assistant", "content": "What type of room?"},
+            {"role": "user", "content": "Living room"},
+        ]
+
+    def _mock_response(self, text: str) -> MagicMock:
+        block = MagicMock()
+        block.text = text
+        resp = MagicMock()
+        resp.content = [block]
+        return resp
+
+    def test_returns_parsed_scores(self, monkeypatch):
+        """evaluate_brief calls Claude and returns parsed JSON scores."""
+        from app.activities.intake_eval import evaluate_brief
+
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+        mock_client = MagicMock()
+        mock_client.messages.create.return_value = self._mock_response(self._VALID_SCORES)
+
+        with patch("app.activities.intake_eval.anthropic.Anthropic", return_value=mock_client):
+            result = evaluate_brief(self._brief(), self._conversation())
+
+        assert result["total"] == 75
+        assert result["tag"] == "PASS"
+        assert result["style_coherence"] == 8
+        mock_client.messages.create.assert_called_once()
+
+    def test_missing_api_key_raises(self, monkeypatch):
+        """evaluate_brief raises RuntimeError when ANTHROPIC_API_KEY not set."""
+        import pytest
+
+        from app.activities.intake_eval import evaluate_brief
+
+        monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+
+        with pytest.raises(RuntimeError, match="ANTHROPIC_API_KEY"):
+            evaluate_brief(self._brief(), self._conversation())
+
+    def test_invalid_json_response_raises(self, monkeypatch):
+        """evaluate_brief raises ValueError when Claude returns non-JSON."""
+        import pytest
+
+        from app.activities.intake_eval import evaluate_brief
+
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+        mock_client = MagicMock()
+        mock_client.messages.create.return_value = self._mock_response(
+            "I can't evaluate this brief."
+        )
+
+        with (
+            patch("app.activities.intake_eval.anthropic.Anthropic", return_value=mock_client),
+            pytest.raises(ValueError, match="Could not extract JSON"),
+        ):
+            evaluate_brief(self._brief(), self._conversation())
+
+    def test_code_fenced_json_parsed(self, monkeypatch):
+        """evaluate_brief handles code-fenced JSON response."""
+        from app.activities.intake_eval import evaluate_brief
+
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+        fenced = f"```json\n{self._VALID_SCORES}\n```"
+        mock_client = MagicMock()
+        mock_client.messages.create.return_value = self._mock_response(fenced)
+
+        with patch("app.activities.intake_eval.anthropic.Anthropic", return_value=mock_client):
+            result = evaluate_brief(self._brief(), self._conversation())
+
+        assert result["total"] == 75
+
+    def test_prompt_includes_brief_and_transcript(self, monkeypatch):
+        """evaluate_brief passes brief JSON and transcript to Claude."""
+        from app.activities.intake_eval import evaluate_brief
+
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+        mock_client = MagicMock()
+        mock_client.messages.create.return_value = self._mock_response(self._VALID_SCORES)
+
+        with patch("app.activities.intake_eval.anthropic.Anthropic", return_value=mock_client):
+            evaluate_brief(self._brief(), self._conversation())
+
+        call_args = mock_client.messages.create.call_args
+        prompt_text = call_args.kwargs["messages"][0]["content"]
+        assert "2 adults, one cat" in prompt_text  # brief content
+        assert "Living room" in prompt_text  # transcript content
+
+
+class TestEvaluateConversationQuality:
+    """Tests for evaluate_conversation_quality() with mocked Anthropic client."""
+
+    _VALID_SCORES = (
+        '{"probing_quality": 4, "acknowledgment": 3, "adaptation": 4,'
+        ' "translation_visibility": 2, "conversational_flow": 4,'
+        ' "total": 17, "notes": "Good conversation flow."}'
+    )
+
+    def _conversation(self):
+        return [
+            {"role": "assistant", "content": "Tell me about the room."},
+            {"role": "user", "content": "A cozy living room."},
+            {"role": "assistant", "content": "Sounds warm!"},
+        ]
+
+    def _mock_response(self, text: str) -> MagicMock:
+        block = MagicMock()
+        block.text = text
+        resp = MagicMock()
+        resp.content = [block]
+        return resp
+
+    def test_returns_parsed_scores(self, monkeypatch):
+        """evaluate_conversation_quality calls Claude and returns parsed scores."""
+        from app.activities.intake_eval import evaluate_conversation_quality
+
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+        mock_client = MagicMock()
+        mock_client.messages.create.return_value = self._mock_response(self._VALID_SCORES)
+
+        with patch("app.activities.intake_eval.anthropic.Anthropic", return_value=mock_client):
+            result = evaluate_conversation_quality(self._conversation())
+
+        assert result["total"] == 17
+        assert result["probing_quality"] == 4
+        mock_client.messages.create.assert_called_once()
+
+    def test_missing_api_key_raises(self, monkeypatch):
+        """evaluate_conversation_quality raises when no API key set."""
+        import pytest
+
+        from app.activities.intake_eval import evaluate_conversation_quality
+
+        monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+
+        with pytest.raises(RuntimeError, match="ANTHROPIC_API_KEY"):
+            evaluate_conversation_quality(self._conversation())
+
+    def test_invalid_json_response_raises(self, monkeypatch):
+        """evaluate_conversation_quality raises on non-JSON response."""
+        import pytest
+
+        from app.activities.intake_eval import evaluate_conversation_quality
+
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+        mock_client = MagicMock()
+        mock_client.messages.create.return_value = self._mock_response("Not JSON")
+
+        with (
+            patch("app.activities.intake_eval.anthropic.Anthropic", return_value=mock_client),
+            pytest.raises(ValueError, match="Could not extract JSON"),
+        ):
+            evaluate_conversation_quality(self._conversation())
+
+    def test_prompt_includes_transcript(self, monkeypatch):
+        """evaluate_conversation_quality passes transcript to Claude."""
+        from app.activities.intake_eval import evaluate_conversation_quality
+
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+        mock_client = MagicMock()
+        mock_client.messages.create.return_value = self._mock_response(self._VALID_SCORES)
+
+        with patch("app.activities.intake_eval.anthropic.Anthropic", return_value=mock_client):
+            evaluate_conversation_quality(self._conversation())
+
+        call_args = mock_client.messages.create.call_args
+        prompt_text = call_args.kwargs["messages"][0]["content"]
+        assert "cozy living room" in prompt_text
+
+
 # === Mocked _run_intake_core Tests ===
 
 

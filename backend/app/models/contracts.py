@@ -28,6 +28,85 @@ class InspirationNote(BaseModel):
     agent_clarification: str | None = None
 
 
+# === Skill System ===
+
+
+class SkillSummary(BaseModel):
+    """Lightweight skill reference for manifests and listings."""
+
+    skill_id: str
+    name: str
+    description: str
+    style_tags: list[str] = []
+
+
+class StyleSkillPack(BaseModel):
+    """Full style knowledge pack loaded during intake.
+
+    T3 owns the `knowledge` dict structure — the contract defines
+    the envelope (identity, metadata, versioning) while leaving
+    the actual knowledge payload open for T3 to iterate on.
+    """
+
+    skill_id: str
+    name: str
+    description: str
+    version: int = Field(ge=1, default=1)
+    style_tags: list[str] = []
+    applicable_room_types: list[str] = []  # empty = all rooms
+    knowledge: dict = {}  # T3-defined: prompts, examples, references
+
+
+class SkillManifest(BaseModel):
+    """Available skills for a given project context."""
+
+    skills: list[SkillSummary] = []
+    default_skill_ids: list[str] = []  # auto-loaded for every project
+
+
+# === Renovation & Cost Types ===
+
+
+class FeasibilityNote(BaseModel):
+    """Assessment of a specific renovation intervention."""
+
+    intervention: str
+    assessment: Literal["likely_feasible", "needs_verification", "risky", "not_feasible"]
+    confidence: float = Field(ge=0, le=1)
+    explanation: str
+    cost_impact: str | None = None  # "adds $2-5K for plumbing reroute"
+    professional_needed: str | None = None  # "licensed plumber"
+
+
+class ProfessionalFee(BaseModel):
+    """Estimated cost for a professional service."""
+
+    professional_type: str  # "structural engineer", "licensed plumber"
+    reason: str  # "Load-bearing wall assessment"
+    estimate_cents: int = Field(ge=0)
+
+
+class CostBreakdown(BaseModel):
+    """Detailed project cost breakdown (materials + labor + fees)."""
+
+    materials_cents: int = Field(ge=0, default=0)
+    labor_estimate_cents: int | None = None  # None if cosmetic-only
+    labor_estimate_note: str | None = None
+    professional_fees: list[ProfessionalFee] = []
+    permit_fees_estimate_cents: int | None = None
+    total_low_cents: int = Field(ge=0, default=0)
+    total_high_cents: int = Field(ge=0, default=0)
+
+
+class RenovationIntent(BaseModel):
+    """User's renovation scope and feasibility analysis."""
+
+    scope: Literal["cosmetic", "moderate", "structural"]
+    interventions: list[str] = []
+    feasibility_notes: list[FeasibilityNote] = []
+    estimated_permits: list[str] = []
+
+
 class DesignBrief(BaseModel):
     room_type: str
     occupants: str | None = None
@@ -37,6 +116,8 @@ class DesignBrief(BaseModel):
     style_profile: StyleProfile | None = None
     constraints: list[str] = []
     inspiration_notes: list[InspirationNote] = []
+    style_skills_used: list[str] = []  # skill_ids loaded during intake
+    renovation_intent: RenovationIntent | None = None  # populated by intake agent
 
 
 class RoomDimensions(BaseModel):
@@ -162,6 +243,7 @@ class GenerateShoppingListOutput(BaseModel):
     items: list[ProductMatch]
     unmatched: list[UnmatchedItem] = []
     total_estimated_cost_cents: int = Field(ge=0)
+    cost_breakdown: CostBreakdown | None = None
 
 
 class IntakeChatInput(BaseModel):
@@ -169,6 +251,7 @@ class IntakeChatInput(BaseModel):
     project_context: dict
     conversation_history: list[ChatMessage]
     user_message: str
+    available_skills: list[SkillSummary] = []  # skills available for loading
 
 
 class IntakeChatOutput(BaseModel):
@@ -178,6 +261,19 @@ class IntakeChatOutput(BaseModel):
     progress: str | None = None
     is_summary: bool = False
     partial_brief: DesignBrief | None = None
+
+
+class LoadSkillInput(BaseModel):
+    """Activity input for loading skill packs from R2."""
+
+    skill_ids: list[str] = Field(min_length=1)
+
+
+class LoadSkillOutput(BaseModel):
+    """Activity output with loaded skill packs."""
+
+    skill_packs: list[StyleSkillPack] = []
+    not_found: list[str] = []  # skill IDs that couldn't be loaded
 
 
 class ValidatePhotoInput(BaseModel):
@@ -248,7 +344,7 @@ class AnnotationEditRequest(BaseModel):
 
 
 class TextFeedbackRequest(BaseModel):
-    feedback: str = Field(min_length=1)
+    feedback: str = Field(min_length=10)
 
 
 class ActionResponse(BaseModel):

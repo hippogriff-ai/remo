@@ -101,6 +101,18 @@ def delete_object(key: str) -> None:
     logger.info("r2_delete", key=key)
 
 
+def resolve_url(key_or_url: str) -> str:
+    """Convert an R2 storage key to a presigned URL; pass through existing URLs."""
+    if key_or_url.startswith(("http://", "https://")):
+        return key_or_url
+    return generate_presigned_url(key_or_url)
+
+
+def resolve_urls(keys_or_urls: list[str]) -> list[str]:
+    """Convert a list of R2 storage keys to presigned URLs; pass through existing URLs."""
+    return [resolve_url(item) for item in keys_or_urls]
+
+
 def delete_prefix(prefix: str) -> None:
     """Delete all objects under a prefix (e.g., 'projects/{id}/')."""
     client = _get_client()

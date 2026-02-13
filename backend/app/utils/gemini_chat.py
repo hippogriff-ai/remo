@@ -24,7 +24,7 @@ from app.config import settings
 
 logger = structlog.get_logger()
 
-GEMINI_MODEL = "gemini-3-pro-image-preview"
+GEMINI_MODEL = settings.gemini_model
 
 # --- Image budget constants ---
 # Product constraints: 2 room photos + 3 inspiration photos = 5 input images max.

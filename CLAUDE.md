@@ -8,7 +8,7 @@ Remo is an AI-powered room redesign iOS app. Users photograph a room, describe t
 
 ## Status
 
-T0 (Platform) P0+P1 complete, P2 integration in progress. Backend has 807 passing tests, 0 warnings, ruff clean, ruff format clean, mypy clean. Real T2/T3 activities are wired into the workflow (INT-1 through INT-4, INT-6, GAP-5 done). Quality sweep complete (IMP-3 through IMP-33). See `CONTINUITY.md` for current state.
+T0 (Platform) P0+P1 complete, P2 integration done. Backend has 899 unit tests + 80 E2E tests passing, 94% coverage, ruff/mypy clean. Full pipeline verified end-to-end with real AI (Claude Opus, Gemini 3 Pro, Exa). Golden path test: 216s. LLM response caching for dev/test. See `CONTINUITY.md` for current state.
 
 ## Development Commands
 
@@ -77,7 +77,7 @@ Key rule: API layer never calls AI APIs (except sync photo validation). Workflow
 |-------|------|
 | iOS | SwiftUI (iOS 17+), local SPM packages, `@Observable` |
 | Backend | Python 3.12+, FastAPI, Temporal (`temporalio`) |
-| Image gen | Gemini 3 Pro Image or Gemini 2.5 Flash Image (P0 spike picks winner) |
+| Image gen | Gemini 3 Pro Image (`gemini-3-pro-image-preview`, configurable via `GEMINI_MODEL`) |
 | AI chat/scoring | Claude Opus 4.6 via raw `anthropic` SDK with tool use (no framework) |
 | Photo validation | Claude Haiku 4.5 (sync in API handler) |
 | Product search | Exa API |

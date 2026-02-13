@@ -202,6 +202,20 @@ async def _generate_single_option(
     option_index: int,
 ) -> Image.Image:
     """Generate a single design option via standalone Gemini call."""
+    from app.utils.llm_cache import get_cached_bytes, set_cached_bytes
+
+    # Dev/test cache: avoid redundant Gemini calls when prompt/inputs
+    # haven't changed. Key includes prompt text + image metadata.
+    # Will be removed in production (real users never send identical inputs).
+    cache_key = [
+        prompt,
+        str(len(room_images)),
+        str(len(inspiration_images)),
+        str(option_index),
+    ]
+    cached_png = get_cached_bytes("gemini_gen", cache_key)
+    if cached_png:
+        return Image.open(io.BytesIO(cached_png))
 
     client = get_client()
 
@@ -253,6 +267,11 @@ async def _generate_single_option(
             non_retryable=False,
         )
 
+    # Save to dev/test cache for reuse in subsequent runs
+    buf = io.BytesIO()
+    result_image.save(buf, format="PNG")
+    set_cached_bytes("gemini_gen", cache_key, buf.getvalue())
+
     return result_image
 
 
@@ -265,14 +284,20 @@ async def generate_designs(input: GenerateDesignsInput) -> GenerateDesignsOutput
         num_inspiration_photos=len(input.inspiration_photo_urls),
     )
 
-    # Extract project_id from R2 URL path pattern: projects/{id}/...
+    # Extract project_id from R2 key/URL path pattern: projects/{id}/...
     project_id = _extract_project_id(input.room_photo_urls)
+
+    # Resolve R2 storage keys to presigned URLs (pass through existing URLs)
+    from app.utils.r2 import resolve_urls
+
+    room_urls = await asyncio.to_thread(resolve_urls, input.room_photo_urls)
+    inspiration_urls = await asyncio.to_thread(resolve_urls, input.inspiration_photo_urls)
 
     try:
         # Download source images
         room_images, inspiration_images = await asyncio.gather(
-            _download_images(input.room_photo_urls),
-            _download_images(input.inspiration_photo_urls),
+            _download_images(room_urls),
+            _download_images(inspiration_urls),
         )
 
         if not room_images:

@@ -52,6 +52,7 @@ asyncio_mode = "auto"
 testpaths = ["tests"]
 markers = [
     "integration: marks tests that require real API keys and external services",
+    "e2e: marks tests that require a running backend (docker compose up + API server + worker)",
 ]
 filterwarnings = [
     "ignore:Module pydantic_core.*was imported after initial workflow load:UserWarning",

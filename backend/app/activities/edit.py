@@ -369,11 +369,24 @@ async def edit_design(input: EditDesignInput) -> EditDesignOutput:
             non_retryable=True,
         )
 
+    # Resolve R2 storage keys to presigned URLs (pass through existing URLs)
+    from app.utils.r2 import resolve_url, resolve_urls
+
+    resolved_input = input.model_copy(
+        update={
+            "base_image_url": await asyncio.to_thread(resolve_url, input.base_image_url),
+            "room_photo_urls": await asyncio.to_thread(resolve_urls, input.room_photo_urls),
+            "inspiration_photo_urls": await asyncio.to_thread(
+                resolve_urls, input.inspiration_photo_urls
+            ),
+        }
+    )
+
     try:
-        if input.chat_history_key is None:
+        if resolved_input.chat_history_key is None:
             # First call: bootstrap — always needs the base image
-            base_image = await _download_image(input.base_image_url)
-            chat, result_image = await _bootstrap_chat(input, base_image)
+            base_image = await _download_image(resolved_input.base_image_url)
+            chat, result_image = await _bootstrap_chat(resolved_input, base_image)
 
             if result_image is None:
                 raise ApplicationError(
@@ -382,16 +395,20 @@ async def edit_design(input: EditDesignInput) -> EditDesignOutput:
                 )
 
             # Upload result and serialize history (sync calls in thread pool)
-            revised_url = await asyncio.to_thread(_upload_image, result_image, input.project_id)
-            history_key = await asyncio.to_thread(serialize_to_r2, chat, input.project_id)
+            revised_url = await asyncio.to_thread(
+                _upload_image, result_image, resolved_input.project_id
+            )
+            history_key = await asyncio.to_thread(serialize_to_r2, chat, resolved_input.project_id)
 
         else:
             # Subsequent call: continue from R2 history
             # Only download base image if annotations require it
             cont_base: Image.Image | None = (
-                await _download_image(input.base_image_url) if input.annotations else None
+                await _download_image(resolved_input.base_image_url)
+                if resolved_input.annotations
+                else None
             )
-            result_image, updated_history = await _continue_chat(input, cont_base)
+            result_image, updated_history = await _continue_chat(resolved_input, cont_base)
 
             if result_image is None:
                 raise ApplicationError(
@@ -400,11 +417,13 @@ async def edit_design(input: EditDesignInput) -> EditDesignOutput:
                 )
 
             # Upload result (sync call in thread pool)
-            revised_url = await asyncio.to_thread(_upload_image, result_image, input.project_id)
+            revised_url = await asyncio.to_thread(
+                _upload_image, result_image, resolved_input.project_id
+            )
 
             # Serialize updated history back to R2 using shared helper
             history_key = await asyncio.to_thread(
-                serialize_contents_to_r2, updated_history, input.project_id
+                serialize_contents_to_r2, updated_history, resolved_input.project_id
             )
 
         return EditDesignOutput(

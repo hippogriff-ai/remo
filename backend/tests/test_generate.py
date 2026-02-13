@@ -390,6 +390,15 @@ class TestGenerateSingleOption:
 class TestGenerateDesignsActivity:
     """Tests for the full generate_designs activity with mocks."""
 
+    @pytest.fixture(autouse=True)
+    def _mock_r2_resolve(self):
+        """Mock R2 URL resolution so tests don't need real R2 credentials."""
+        with patch(
+            "app.utils.r2.generate_presigned_url",
+            side_effect=lambda key: f"https://r2.example.com/{key}",
+        ):
+            yield
+
     @pytest.mark.asyncio
     async def test_error_on_rate_limit(self):
         from temporalio.exceptions import ApplicationError
@@ -610,6 +619,15 @@ class TestGenerateSingleOptionWithInspiration:
 
 class TestImageCountTruncation:
     """Tests for input image truncation to model limit."""
+
+    @pytest.fixture(autouse=True)
+    def _mock_r2_resolve(self):
+        """Mock R2 URL resolution so tests don't need real R2 credentials."""
+        with patch(
+            "app.utils.r2.generate_presigned_url",
+            side_effect=lambda key: f"https://r2.example.com/{key}",
+        ):
+            yield
 
     @pytest.mark.asyncio
     async def test_truncates_inspiration_when_over_limit(self):
