@@ -12,6 +12,7 @@ from __future__ import annotations
 
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import anthropic
 import pytest
 from temporalio.exceptions import ApplicationError
 
@@ -353,6 +354,54 @@ class TestAnalyzeRoomPhotosActivity:
 
             input = AnalyzeRoomPhotosInput(room_photo_urls=["https://r2.example.com/room.jpg"])
             await analyze_room_photos(input)
+
+    @pytest.mark.asyncio
+    async def test_rate_limit_error_retryable(self):
+        """RateLimitError should raise retryable ApplicationError."""
+        mock_client = MagicMock()
+        mock_client.messages.create = AsyncMock(
+            side_effect=anthropic.RateLimitError(
+                message="rate limited",
+                response=MagicMock(status_code=429, headers={}),
+                body=None,
+            )
+        )
+
+        with (
+            patch.dict("os.environ", {"ANTHROPIC_API_KEY": "test-key"}),
+            patch("app.activities.analyze_room.anthropic.AsyncAnthropic", return_value=mock_client),
+            pytest.raises(ApplicationError, match="rate limited") as exc_info,
+        ):
+            from app.activities.analyze_room import analyze_room_photos
+
+            input = AnalyzeRoomPhotosInput(room_photo_urls=["https://r2.example.com/room.jpg"])
+            await analyze_room_photos(input)
+
+        assert exc_info.value.non_retryable is False
+
+    @pytest.mark.asyncio
+    async def test_api_status_error_retryable(self):
+        """APIStatusError (503) should raise retryable ApplicationError."""
+        mock_client = MagicMock()
+        mock_client.messages.create = AsyncMock(
+            side_effect=anthropic.APIStatusError(
+                message="server error",
+                response=MagicMock(status_code=503, headers={}),
+                body=None,
+            )
+        )
+
+        with (
+            patch.dict("os.environ", {"ANTHROPIC_API_KEY": "test-key"}),
+            patch("app.activities.analyze_room.anthropic.AsyncAnthropic", return_value=mock_client),
+            pytest.raises(ApplicationError, match="API error") as exc_info,
+        ):
+            from app.activities.analyze_room import analyze_room_photos
+
+            input = AnalyzeRoomPhotosInput(room_photo_urls=["https://r2.example.com/room.jpg"])
+            await analyze_room_photos(input)
+
+        assert exc_info.value.non_retryable is False
 
     @pytest.mark.asyncio
     async def test_r2_resolve_failure_propagates(self):

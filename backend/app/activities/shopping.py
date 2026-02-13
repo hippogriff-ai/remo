@@ -132,10 +132,21 @@ def _compute_room_constraints(
 
     Uses standard interior design proportions to derive furniture size limits
     from LiDAR-measured (or photo-estimated) room dimensions.
+    Returns empty dict if dimensions are zero or negative.
     """
     width = room_dimensions.width_m
     length = room_dimensions.length_m
     height = room_dimensions.height_m
+
+    if width <= 0 or length <= 0 or height <= 0:
+        log.warning(
+            "invalid_room_dimensions",
+            width=width,
+            length=length,
+            height=height,
+        )
+        return {}
+
     longer_cm = max(width, length) * 100
     shorter_cm = min(width, length) * 100
     h_cm = height * 100
@@ -422,7 +433,7 @@ def _num_results_for_item(item: dict[str, Any]) -> int:
 
 
 def _room_size_label(room_dimensions: RoomDimensions) -> str:
-    """Classify room as small/medium/large based on floor area."""
+    """Classify room as small (<15 sqm), medium (15-25 sqm), or large (>25 sqm)."""
     area_sqm = room_dimensions.width_m * room_dimensions.length_m
     if area_sqm < 15:
         return "small"
@@ -926,11 +937,15 @@ _CATEGORY_TO_CONSTRAINT: dict[str, str] = {
 }
 
 
-def _parse_product_dims_cm(dims_str: str | None) -> tuple[float, float, float] | None:
+def _parse_product_dims_cm(
+    dims_str: str | None,
+    category: str | None = None,
+) -> tuple[float, float, float] | None:
     """Parse product dimension string into (width_cm, depth_cm, height_cm).
 
     Handles formats like "84x36x32 inches", "213x91cm", "8x10".
-    Assumes inches for furniture dimensions when no unit specified.
+    When no unit is specified: assumes feet for rugs (US convention where
+    "8x10" means 8'x10'), inches for all other furniture.
     """
     if not dims_str:
         return None
@@ -944,7 +959,14 @@ def _parse_product_dims_cm(dims_str: str | None) -> tuple[float, float, float] |
     unit = (match.group(4) or "").lower().strip()
 
     is_cm = unit.startswith("cm")
-    factor = 1.0 if is_cm else 2.54  # default to inches
+    is_rug = category and "rug" in category.lower()
+
+    if is_cm:
+        factor = 1.0
+    elif not unit and is_rug:
+        factor = 30.48  # feet → cm (US rug convention: "8x10" = 8'x10')
+    else:
+        factor = 2.54  # inches → cm
 
     return (d1 * factor, d2 * factor, d3 * factor)
 
@@ -971,11 +993,17 @@ def filter_by_dimensions(
     if room_dimensions is None:
         return scored_products
 
+    if len(items) != len(scored_products):
+        log.warning(
+            "dimension_filter_list_mismatch",
+            items_len=len(items),
+            scored_len=len(scored_products),
+        )
+        return scored_products
+
     constraints = _compute_room_constraints(room_dimensions)
 
     for item_idx, item_scores in enumerate(scored_products):
-        if item_idx >= len(items):
-            break
         constraint_key = _match_category(items[item_idx])
         if constraint_key is None:
             continue
@@ -994,9 +1022,10 @@ def filter_by_dimensions(
         if max_cm <= 0:
             continue
 
+        item_category = items[item_idx].get("category")
         for product in item_scores:
             product_dims_str = product.get("dimensions") or product.get("estimated_dimensions")
-            parsed = _parse_product_dims_cm(product_dims_str)
+            parsed = _parse_product_dims_cm(product_dims_str, category=item_category)
             if parsed is None:
                 continue
 

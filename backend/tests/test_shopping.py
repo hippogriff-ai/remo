@@ -37,6 +37,7 @@ from app.activities.shopping import (
     _google_shopping_url,
     _load_extraction_prompt,
     _load_scoring_prompt,
+    _match_category,
     _num_results_for_item,
     _parse_product_dims_cm,
     _price_to_cents,
@@ -1933,3 +1934,107 @@ class TestValidateExtractedItems:
         assert len(result) == 2
         assert result[0]["category"] == "Sofa"
         assert result[1]["category"] == "Table"
+
+
+class TestMatchCategory:
+    """Tests for _match_category edge cases."""
+
+    def test_matches_sofa(self):
+        assert _match_category({"category": "Sofa"}) == "sofa"
+
+    def test_matches_sectional_sofa(self):
+        assert _match_category({"category": "sectional sofa"}) == "sofa"
+
+    def test_matches_coffee_table(self):
+        assert _match_category({"category": "Coffee Table"}) == "coffee_table"
+
+    def test_matches_rug(self):
+        assert _match_category({"category": "Area Rug"}) == "rug"
+
+    def test_matches_floor_lamp(self):
+        assert _match_category({"category": "Floor Lamp"}) == "floor_lamp"
+
+    def test_no_match_returns_none(self):
+        assert _match_category({"category": "Wall Art"}) is None
+
+    def test_none_category_returns_none(self):
+        assert _match_category({"category": None}) is None
+
+    def test_missing_category_returns_none(self):
+        assert _match_category({}) is None
+
+    def test_empty_category_returns_none(self):
+        assert _match_category({"category": ""}) is None
+
+
+class TestComputeRoomConstraintsEdgeCases:
+    """Tests for zero/negative dimension handling."""
+
+    def test_zero_width_returns_empty(self):
+        dims = RoomDimensions(width_m=0, length_m=4.0, height_m=2.7)
+        assert _compute_room_constraints(dims) == {}
+
+    def test_negative_height_returns_empty(self):
+        dims = RoomDimensions(width_m=3.0, length_m=4.0, height_m=-1.0)
+        assert _compute_room_constraints(dims) == {}
+
+    def test_all_zero_returns_empty(self):
+        dims = RoomDimensions(width_m=0, length_m=0, height_m=0)
+        assert _compute_room_constraints(dims) == {}
+
+
+class TestDimensionFilterListMismatch:
+    """Tests for filter_by_dimensions list alignment guard."""
+
+    def test_mismatched_lists_returns_unmodified(self):
+        """When items and scored_products have different lengths, return unchanged."""
+        items = [{"category": "Sofa"}]
+        scored = [
+            [{"product_url": "a.com", "dimensions": "84x36 inches"}],
+            [{"product_url": "b.com", "dimensions": "48x24 inches"}],
+        ]
+        dims = RoomDimensions(width_m=4.0, length_m=5.0, height_m=2.7)
+        result = filter_by_dimensions(items, scored, dims)
+        # Should return unmodified — no room_fit annotations added
+        assert result == scored
+        assert "room_fit" not in result[0][0]
+
+
+class TestParseProductDimsCmRugCategory:
+    """Tests for category-aware unit inference in dimension parsing."""
+
+    def test_rug_without_unit_assumes_feet(self):
+        """'8x10' rug should be parsed as 8ft x 10ft, not 8in x 10in."""
+        result = _parse_product_dims_cm("8x10", category="Area Rug")
+        assert result is not None
+        w, d, h = result
+        # 8ft = 243.84cm, 10ft = 304.8cm
+        assert abs(w - 243.84) < 1.0
+        assert abs(d - 304.8) < 1.0
+
+    def test_rug_with_inches_unit_uses_inches(self):
+        """'96x120 inches' rug should use inches even for rug category."""
+        result = _parse_product_dims_cm("96x120 inches", category="Rug")
+        assert result is not None
+        w, d, h = result
+        assert abs(w - 96 * 2.54) < 1.0
+        assert abs(d - 120 * 2.54) < 1.0
+
+    def test_rug_with_cm_unit_uses_cm(self):
+        result = _parse_product_dims_cm("200x300 cm", category="Rug")
+        assert result is not None
+        assert result[0] == 200.0
+        assert result[1] == 300.0
+
+    def test_non_rug_without_unit_assumes_inches(self):
+        """Furniture without unit should still default to inches."""
+        result = _parse_product_dims_cm("84x36", category="Sofa")
+        assert result is not None
+        w, d, h = result
+        assert abs(w - 84 * 2.54) < 1.0
+
+    def test_none_category_defaults_to_inches(self):
+        result = _parse_product_dims_cm("84x36", category=None)
+        assert result is not None
+        w, d, h = result
+        assert abs(w - 84 * 2.54) < 1.0
