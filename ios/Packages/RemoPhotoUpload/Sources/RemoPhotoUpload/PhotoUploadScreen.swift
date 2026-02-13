@@ -218,10 +218,14 @@ public struct PhotoUploadScreen: View {
             if !response.validation.passed {
                 validationMessages = response.validation.messages
             } else {
-                validationMessages = []
                 // Refresh state to pick up new photos and possible step transition
                 let newState = try await client.getState(projectId: projectId)
                 projectState.apply(newState)
+                if let workflowError = newState.error {
+                    validationMessages = [workflowError.message]
+                } else {
+                    validationMessages = []
+                }
             }
         } catch {
             validationMessages = [error.localizedDescription]
