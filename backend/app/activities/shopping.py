@@ -184,15 +184,18 @@ async def extract_items(
     original_room_photo_urls: list[str],
     design_brief: DesignBrief | None,
     revision_history: list[RevisionRecord],
+    *,
+    source_urls: list[str] | None = None,
 ) -> list[dict[str, Any]]:
     """Step 1: Extract purchasable items from the design image."""
     from app.utils.llm_cache import get_cached, set_cached
 
     prompt_text = _load_extraction_prompt(design_brief, revision_history)
 
-    # Dev/test cache: avoid redundant Claude calls when prompt/inputs
-    # haven't changed. Will be removed in production.
-    cache_key = [prompt_text, design_image_url, *original_room_photo_urls]
+    # Dev/test cache: use stable R2 keys (not presigned URLs) to prevent
+    # cache misses when signatures rotate. Will be removed in production.
+    stable_urls = source_urls or [design_image_url, *original_room_photo_urls]
+    cache_key = [prompt_text, *stable_urls]
     cached = get_cached("claude_extraction", cache_key)
     if cached and isinstance(cached, list):
         return cached  # type: ignore[no-any-return]
@@ -919,6 +922,7 @@ async def generate_shopping_list(
             original_room_photo_urls,
             input.design_brief,
             input.revision_history,
+            source_urls=[input.design_image_url, *input.original_room_photo_urls],
         )
     except anthropic.RateLimitError as e:
         log.warning("shopping_extraction_rate_limited")

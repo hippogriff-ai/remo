@@ -150,7 +150,11 @@ async def _generate_single_option(
     ]
     cached_png = get_cached_bytes("gemini_gen", cache_key)
     if cached_png:
-        return Image.open(io.BytesIO(cached_png))
+        try:
+            return Image.open(io.BytesIO(cached_png))
+        except Exception:
+            logger.warning("gemini_cache_corrupt", option=option_index)
+            # Fall through to real Gemini call
 
     client = get_client()
 
