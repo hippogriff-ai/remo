@@ -635,10 +635,20 @@ def build_brief(brief_data: dict[str, Any]) -> DesignBrief:
                 )
             )
 
+    # Merge lifestyle into occupants for downstream compat: iOS Models.swift
+    # doesn't have the lifestyle field yet, so it drops it on round-trip.
+    # Keep both the merged occupants and the separate lifestyle field.
+    occupants = brief_data.get("occupants")
+    lifestyle = brief_data.get("lifestyle")
+    if lifestyle and occupants:
+        occupants = f"{occupants} — {lifestyle}"
+    elif lifestyle:
+        occupants = lifestyle
+
     return DesignBrief(
         room_type=brief_data.get("room_type", ""),
-        occupants=brief_data.get("occupants"),
-        lifestyle=brief_data.get("lifestyle"),
+        occupants=occupants,
+        lifestyle=lifestyle,
         pain_points=brief_data.get("pain_points", []),
         keep_items=brief_data.get("keep_items", []),
         style_profile=style_profile,

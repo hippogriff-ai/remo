@@ -620,16 +620,28 @@ class TestBuildBrief:
         assert brief.renovation_willingness is None
         assert brief.room_analysis_hypothesis is None
 
-    def test_brief_lifestyle_separate_from_occupants(self):
-        """Lifestyle is stored as its own field, not merged into occupants."""
+    def test_brief_lifestyle_merged_and_preserved(self):
+        """Lifestyle is merged into occupants for iOS compat AND stored separately."""
         data = {
             "room_type": "living room",
             "occupants": "couple, 30s",
             "lifestyle": "Morning yoga, weekend hosting",
         }
         brief = build_brief(data)
-        assert brief.occupants == "couple, 30s"
+        # Merged for backward compat (iOS doesn't have lifestyle field yet)
+        assert brief.occupants == "couple, 30s — Morning yoga, weekend hosting"
+        # Also preserved as separate field for new consumers
         assert brief.lifestyle == "Morning yoga, weekend hosting"
+
+    def test_brief_lifestyle_only_no_occupants(self):
+        """When occupants is absent, lifestyle becomes occupants."""
+        data = {
+            "room_type": "bedroom",
+            "lifestyle": "Remote worker, needs quiet space",
+        }
+        brief = build_brief(data)
+        assert brief.occupants == "Remote worker, needs quiet space"
+        assert brief.lifestyle == "Remote worker, needs quiet space"
 
 
 # === Options Building Tests ===
