@@ -74,12 +74,24 @@ def _load_prompt(name: str) -> str:
 
 
 def _build_edit_instructions(annotations: list[AnnotationRegion]) -> str:
-    """Build edit instruction text from annotation regions."""
+    """Build edit instruction text from annotation regions.
+
+    Includes action, avoid, and constraints when present to give Gemini
+    full context about the intended edit.
+    """
     color_names = {1: "red", 2: "blue", 3: "green"}
     lines = []
     for ann in annotations:
         color = color_names.get(ann.region_id, "red")
-        lines.append(f"{ann.region_id} ({color} circle) — {ann.instruction}")
+        parts = [f"{ann.region_id} ({color} circle)"]
+        if ann.action:
+            parts.append(f"Action: {ann.action}.")
+        parts.append(ann.instruction)
+        if ann.avoid:
+            parts.append(f"Avoid: {', '.join(ann.avoid)}.")
+        if ann.constraints:
+            parts.append(f"Constraints: {', '.join(ann.constraints)}.")
+        lines.append(" — ".join(parts))
     return "\n".join(lines)
 
 

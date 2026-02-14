@@ -800,6 +800,19 @@ async def score_product(
             cached["price_cents"] = _price_to_cents(_extract_price_text(product))
         return cached  # type: ignore[no-any-return]
 
+    # Dev/test cache: avoid redundant Claude scoring calls when prompt
+    # hasn't changed. Will be removed in production.
+    cache_key = [prompt]
+    cached = get_cached("claude_scoring", cache_key)
+    if cached and isinstance(cached, dict):
+        # Restore product metadata (not included in scored output)
+        cached["product_url"] = product.get("url", "")
+        cached["product_name"] = product.get("title", "Unknown")
+        cached["image_url"] = product.get("image")
+        if "price_cents" not in cached:
+            cached["price_cents"] = _price_to_cents(_extract_price_text(product))
+        return cached  # type: ignore[no-any-return]
+
     response = await client.messages.create(
         model=SCORING_MODEL,
         max_tokens=1024,

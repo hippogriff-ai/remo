@@ -84,6 +84,37 @@ async def generate_shopping_list(
     )
 
 
+_MOCK_SKILLS: dict[str, StyleSkillPack] = {
+    "mid-century-modern": StyleSkillPack(
+        skill_id="mid-century-modern",
+        name="Mid-Century Modern",
+        description="Clean lines, organic curves, and a love of different materials",
+        style_tags=["retro", "organic", "minimal"],
+        knowledge={"principles": ["form follows function", "less is more"]},
+    ),
+    "japandi": StyleSkillPack(
+        skill_id="japandi",
+        name="Japandi",
+        description="Japanese minimalism meets Scandinavian warmth",
+        style_tags=["minimal", "natural", "warm"],
+        knowledge={"principles": ["wabi-sabi", "hygge", "natural materials"]},
+    ),
+}
+
+
+@activity.defn
+async def load_style_skill(input: LoadSkillInput) -> LoadSkillOutput:
+    """Mock skill loader — returns sample skill packs for known IDs."""
+    packs = []
+    not_found = []
+    for skill_id in input.skill_ids:
+        if skill_id in _MOCK_SKILLS:
+            packs.append(_MOCK_SKILLS[skill_id])
+        else:
+            not_found.append(skill_id)
+    return LoadSkillOutput(skill_packs=packs, not_found=not_found)
+
+
 @activity.defn
 async def analyze_room_photos(
     input: AnalyzeRoomPhotosInput,
@@ -132,37 +163,6 @@ async def analyze_room_photos(
             photo_count=len(input.room_photo_urls),
         )
     )
-
-
-_MOCK_SKILLS: dict[str, StyleSkillPack] = {
-    "mid-century-modern": StyleSkillPack(
-        skill_id="mid-century-modern",
-        name="Mid-Century Modern",
-        description="Clean lines, organic curves, and a love of different materials",
-        style_tags=["retro", "organic", "minimal"],
-        knowledge={"principles": ["form follows function", "less is more"]},
-    ),
-    "japandi": StyleSkillPack(
-        skill_id="japandi",
-        name="Japandi",
-        description="Japanese minimalism meets Scandinavian warmth",
-        style_tags=["minimal", "natural", "warm"],
-        knowledge={"principles": ["wabi-sabi", "hygge", "natural materials"]},
-    ),
-}
-
-
-@activity.defn
-async def load_style_skill(input: LoadSkillInput) -> LoadSkillOutput:
-    """Mock skill loader — returns sample skill packs for known IDs."""
-    packs = []
-    not_found = []
-    for skill_id in input.skill_ids:
-        if skill_id in _MOCK_SKILLS:
-            packs.append(_MOCK_SKILLS[skill_id])
-        else:
-            not_found.append(skill_id)
-    return LoadSkillOutput(skill_packs=packs, not_found=not_found)
 
 
 @activity.defn

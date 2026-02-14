@@ -77,15 +77,14 @@ class TestCheckResolution:
         img = _make_image(800, 600)
         ok, msg = _check_resolution(img)
         assert ok is False
-        assert "600px" in msg
-        assert str(MIN_RESOLUTION) in msg
+        assert "too low resolution" in msg
 
     def test_fails_one_side_below(self) -> None:
         """2000x512 image — shortest side 512 < 1024."""
         img = _make_image(2000, 512)
         ok, msg = _check_resolution(img)
         assert ok is False
-        assert "512px" in msg
+        assert "too low resolution" in msg
 
     def test_square_at_minimum(self) -> None:
         """1024x1024 square should pass."""
@@ -250,7 +249,7 @@ class TestCheckContent:
     @patch("app.activities.validation._detect_media_type", return_value="image/jpeg")
     @patch("app.activities.validation._get_anthropic_client")
     def test_room_photo_rejected(self, mock_get_client: MagicMock, _mock_media: MagicMock) -> None:
-        """NO response for a room photo should fail with reason."""
+        """NO response for a room photo should fail with spec-compliant message."""
         mock_client = MagicMock()
         mock_client.messages.create.return_value = _mock_anthropic_response(
             "NO. This appears to be a photo of a cat."
@@ -259,8 +258,10 @@ class TestCheckContent:
 
         ok, msg = _check_content(b"fake-image-data", "room")
         assert ok is False
-        assert "room" in msg
-        assert "cat" in msg
+        expected = (
+            "We couldn't identify a room in this photo. Please upload a photo of an interior space."
+        )
+        assert msg == expected
 
     @patch("app.activities.validation._detect_media_type", return_value="image/jpeg")
     @patch("app.activities.validation._get_anthropic_client")
@@ -316,7 +317,7 @@ class TestCheckContent:
     def test_room_rejection_still_uses_generic_message(
         self, mock_get_client: MagicMock, _mock_media: MagicMock
     ) -> None:
-        """Room photo rejection still uses the generic message with Claude's reason."""
+        """Room photo rejection uses the fixed spec-compliant message."""
         mock_client = MagicMock()
         mock_client.messages.create.return_value = _mock_anthropic_response(
             "NO. This is an outdoor landscape photo."
@@ -325,8 +326,10 @@ class TestCheckContent:
 
         ok, msg = _check_content(b"fake-image-data", "room")
         assert ok is False
-        assert "valid room photo" in msg
-        assert "outdoor landscape" in msg
+        expected = (
+            "We couldn't identify a room in this photo. Please upload a photo of an interior space."
+        )
+        assert msg == expected
 
     @patch("app.activities.validation._detect_media_type", return_value="image/jpeg")
     @patch("app.activities.validation._get_anthropic_client")
@@ -454,7 +457,7 @@ class TestValidatePhoto:
 
     @patch(
         "app.activities.validation._check_blur",
-        return_value=(False, "Image appears blurry (score: 20, minimum: 60)."),
+        return_value=(False, "This photo looks blurry. Please retake with a steady hand."),
     )
     def test_blurry_image_fails(self, _mock_blur: MagicMock) -> None:
         """Image failing blur check should return blurry failure."""
@@ -467,7 +470,7 @@ class TestValidatePhoto:
 
     @patch(
         "app.activities.validation._check_blur",
-        return_value=(False, "Image appears blurry (score: 10, minimum: 60)."),
+        return_value=(False, "This photo looks blurry. Please retake with a steady hand."),
     )
     def test_both_resolution_and_blur_can_fail(self, _mock_blur: MagicMock) -> None:
         """Small blurry image should report both failures."""

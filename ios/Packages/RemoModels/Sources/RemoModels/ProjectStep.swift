@@ -13,8 +13,19 @@ public enum ProjectStep: String, Codable, Hashable, CaseIterable, Sendable, Comp
     case approval = "approval"
     case shopping = "shopping"
     case completed = "completed"
+    case abandoned = "abandoned"
+    case cancelled = "cancelled"
+
+    /// Whether this step is a terminal state (project has ended).
+    public var isTerminal: Bool {
+        switch self {
+        case .completed, .abandoned, .cancelled: true
+        default: false
+        }
+    }
 
     /// Ordinal position in the workflow flow (0-based).
+    /// Terminal states sort after completed.
     private var ordinal: Int {
         switch self {
         case .photoUpload: 0
@@ -26,6 +37,8 @@ public enum ProjectStep: String, Codable, Hashable, CaseIterable, Sendable, Comp
         case .approval: 6
         case .shopping: 7
         case .completed: 8
+        case .abandoned: 9
+        case .cancelled: 10
         }
     }
 

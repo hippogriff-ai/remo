@@ -8,7 +8,7 @@ public struct DesignSelectionScreen: View {
     let client: any WorkflowClientProtocol
 
     @State private var selectedIndex: Int?
-    @State private var showSideBySide = false
+    @AppStorage("remo_show_side_by_side") private var showSideBySide = false
     @State private var isSelecting = false
     @State private var errorMessage: String?
     @State private var showStartOverConfirmation = false

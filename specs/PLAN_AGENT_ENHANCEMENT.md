@@ -508,7 +508,7 @@ Add `_compute_room_constraints(room_dimensions: RoomDimensions) -> dict[str, dic
 - Sofa: max width ~75% of longer usable wall (wall minus 1.2m clearance)
 - Coffee table: ~2/3 of max sofa width
 - Rug: ~80% of shorter wall x ~70% of longer wall
-- Dining table: room minus 1.8m clearance each side (90cm per side for chairs)
+- Dining table: room minus 1.8m total clearance (0.9m per side for chairs)
 - Lighting: floor lamp max = ceiling height - 0.3m, pendant hangs at 60% height
 
 Add `_format_room_constraints_for_prompt(room_context, room_dimensions) -> str`:
@@ -591,6 +591,7 @@ Fix 3: _compute_room_constraints() + extraction prompt  [shared helper]
 **Fix 6:** test_scoring_weights_sum_to_one, test_scoring_prompt_lidar_weights, test_scoring_prompt_default_weights
 
 ---
+
 
 ## Verification
 

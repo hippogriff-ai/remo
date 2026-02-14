@@ -57,6 +57,12 @@ public struct OutputScreen: View {
                 }
             }
 
+            Text("Save your design image and copy your specs.\nProject data will be deleted after 24 hours.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+                .padding(.horizontal)
+
             // Action buttons
             VStack(spacing: 12) {
                 Button {

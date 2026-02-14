@@ -10,6 +10,7 @@ public struct IntakeChatScreen: View {
 
     @State private var inputText = ""
     @State private var isSending = false
+    @State private var selectedMode: String?
     @State private var showSkipConfirmation = false
     @State private var errorMessage: String?
 
@@ -19,6 +20,102 @@ public struct IntakeChatScreen: View {
     }
 
     public var body: some View {
+        VStack(spacing: 0) {
+            if selectedMode == nil && projectState.chatMessages.isEmpty {
+                modeSelectionView
+            } else {
+                chatView
+            }
+        }
+        .navigationTitle("Design Chat")
+        #if os(iOS)
+        .navigationBarTitleDisplayMode(.inline)
+        #endif
+        .confirmationDialog("Skip Intake?", isPresented: $showSkipConfirmation, titleVisibility: .visible) {
+            Button("Skip", role: .destructive) {
+                Task { await skipIntake() }
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("The intake helps Remo understand your style and needs. Designs are significantly better with it. Skip anyway?")
+        }
+        .alert("Error", isPresented: .init(get: { errorMessage != nil }, set: { if !$0 { errorMessage = nil } })) {
+            Button("OK") { errorMessage = nil }
+        } message: {
+            Text(errorMessage ?? "")
+        }
+    }
+
+    // MARK: - Mode Selection
+
+    private var modeSelectionView: some View {
+        ScrollView {
+            VStack(spacing: 16) {
+                Text("How would you like to tell us about your style?")
+                    .font(.title3.bold())
+                    .multilineTextAlignment(.center)
+                    .padding(.top, 24)
+
+                ModeButton(
+                    title: "Quick Intake",
+                    subtitle: "~3 questions, ~2 minutes",
+                    icon: "bolt.fill",
+                    identifier: "mode_quick"
+                ) {
+                    Task { await selectMode("quick") }
+                }
+
+                ModeButton(
+                    title: "Full Intake",
+                    subtitle: "~10 questions, ~8 minutes",
+                    icon: "list.bullet.clipboard",
+                    identifier: "mode_full"
+                ) {
+                    Task { await selectMode("full") }
+                }
+
+                ModeButton(
+                    title: "Open Conversation",
+                    subtitle: "Tell us everything, take your time",
+                    icon: "bubble.left.and.bubble.right",
+                    identifier: "mode_open"
+                ) {
+                    Task { await selectMode("open") }
+                }
+
+                if projectState.inspirationPhotoCount > 0 {
+                    Button {
+                        showSkipConfirmation = true
+                    } label: {
+                        Text("Skip — jump straight to design")
+                            .font(.subheadline)
+                            .foregroundStyle(.secondary)
+                    }
+                    .accessibilityIdentifier("mode_skip")
+                    .padding(.top, 8)
+                }
+                if isSending {
+                    ProgressView("Starting conversation...")
+                        .padding(.top, 8)
+                }
+            }
+            .padding(.horizontal)
+            .disabled(isSending)
+        }
+    }
+
+    private func selectMode(_ mode: String) async {
+        isSending = true
+        defer { isSending = false }
+        await startConversation(mode: mode)
+        if errorMessage == nil {
+            selectedMode = mode
+        }
+    }
+
+    // MARK: - Chat View
+
+    private var chatView: some View {
         VStack(spacing: 0) {
             // Progress bar
             if let progress = projectState.currentIntakeOutput?.progress {
@@ -37,6 +134,10 @@ public struct IntakeChatScreen: View {
             ScrollViewReader { proxy in
                 ScrollView {
                     LazyVStack(spacing: 12) {
+                        if projectState.chatMessages.isEmpty {
+                            ProgressView("Starting conversation...")
+                                .padding(.top, 48)
+                        }
                         ForEach(Array(projectState.chatMessages.enumerated()), id: \.offset) { index, message in
                             ChatBubble(message: message)
                                 .id(index)
@@ -52,8 +153,14 @@ public struct IntakeChatScreen: View {
                         // Summary card
                         if projectState.currentIntakeOutput?.isSummary == true,
                            let brief = projectState.currentIntakeOutput?.partialBrief {
-                            SummaryCard(brief: brief) {
-                                Task { await confirmBrief(brief) }
+                            SummaryCard(brief: brief) { action in
+                                Task {
+                                    if action == .confirm {
+                                        await confirmBrief(brief)
+                                    } else {
+                                        await sendMessage("I want to change something")
+                                    }
+                                }
                             }
                         }
                     }
@@ -89,37 +196,6 @@ public struct IntakeChatScreen: View {
                 .padding()
             }
         }
-        .navigationTitle("Design Chat")
-        #if os(iOS)
-        .navigationBarTitleDisplayMode(.inline)
-        #endif
-        .toolbar {
-            if projectState.inspirationPhotoCount > 0 {
-                ToolbarItem(placement: .primaryAction) {
-                    Button("Skip") {
-                        showSkipConfirmation = true
-                    }
-                    .font(.subheadline)
-                    .accessibilityIdentifier("chat_skip")
-                }
-            }
-        }
-        .confirmationDialog("Skip Intake?", isPresented: $showSkipConfirmation, titleVisibility: .visible) {
-            Button("Skip", role: .destructive) {
-                Task { await skipIntake() }
-            }
-            Button("Cancel", role: .cancel) {}
-        } message: {
-            Text("Skipping will use your inspiration photos without additional style preferences. This may reduce design quality.")
-        }
-        .task {
-            if projectState.chatMessages.isEmpty { await startConversation() }
-        }
-        .alert("Error", isPresented: .init(get: { errorMessage != nil }, set: { if !$0 { errorMessage = nil } })) {
-            Button("OK") { errorMessage = nil }
-        } message: {
-            Text(errorMessage ?? "")
-        }
     }
 
     private var shouldShowTextInput: Bool {
@@ -127,14 +203,14 @@ public struct IntakeChatScreen: View {
         return output?.isOpenEnded == true || (output?.options == nil && !projectState.chatMessages.isEmpty && output?.isSummary != true)
     }
 
-    private func startConversation() async {
+    private func startConversation(mode: String) async {
         guard let projectId = projectState.projectId else {
             assertionFailure("startConversation() called without projectId")
             errorMessage = "Project not initialized"
             return
         }
         do {
-            let output = try await client.startIntake(projectId: projectId, mode: "full")
+            let output = try await client.startIntake(projectId: projectId, mode: mode)
             projectState.chatMessages.append(ChatMessage(role: "assistant", content: output.agentMessage))
             projectState.currentIntakeOutput = output
         } catch {
@@ -261,11 +337,18 @@ struct QuickReplyChips: View {
     }
 }
 
+// MARK: - Summary Action
+
+enum SummaryAction {
+    case confirm
+    case change
+}
+
 // MARK: - Summary Card
 
 struct SummaryCard: View {
     let brief: DesignBrief
-    let onConfirm: () -> Void
+    let onAction: (SummaryAction) -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -283,14 +366,57 @@ struct SummaryCard: View {
             }
 
             Button("Looks Good!") {
-                onConfirm()
+                onAction(.confirm)
             }
             .buttonStyle(.borderedProminent)
             .frame(maxWidth: .infinity)
             .accessibilityIdentifier("chat_confirm_brief")
+
+            Button("I want to change something") {
+                onAction(.change)
+            }
+            .buttonStyle(.bordered)
+            .frame(maxWidth: .infinity)
+            .accessibilityIdentifier("chat_change_brief")
         }
         .padding()
         .background(Color.secondary.opacity(0.12))
         .clipShape(RoundedRectangle(cornerRadius: 16))
+    }
+}
+
+// MARK: - Mode Button
+
+struct ModeButton: View {
+    let title: String
+    let subtitle: String
+    let icon: String
+    let identifier: String
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 14) {
+                Image(systemName: icon)
+                    .font(.title2)
+                    .foregroundStyle(Color.accentColor)
+                    .frame(width: 40)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(title)
+                        .font(.headline)
+                    Text(subtitle)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                Spacer()
+                Image(systemName: "chevron.right")
+                    .foregroundStyle(.tertiary)
+            }
+            .padding()
+            .background(Color.secondary.opacity(0.12))
+            .clipShape(RoundedRectangle(cornerRadius: 14))
+        }
+        .buttonStyle(.plain)
+        .accessibilityIdentifier(identifier)
     }
 }

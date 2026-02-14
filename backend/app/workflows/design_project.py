@@ -320,6 +320,18 @@ class DesignProjectWorkflow:
         self.photos.append(photo)
 
     @workflow.signal
+    async def update_photo_note(self, photo_id: str, note: str | None) -> None:
+        for photo in self.photos:
+            if photo.photo_id == photo_id:
+                photo.note = note
+                return
+        workflow.logger.warning(
+            "update_photo_note: photo_id %s not found for project %s",
+            photo_id,
+            self._project_id,
+        )
+
+    @workflow.signal
     async def remove_photo(self, photo_id: str) -> None:
         before = len(self.photos)
         self.photos = [p for p in self.photos if p.photo_id != photo_id]
