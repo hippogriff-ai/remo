@@ -94,14 +94,23 @@ public struct IntakeChatScreen: View {
                     .accessibilityIdentifier("mode_skip")
                     .padding(.top, 8)
                 }
+                if isSending {
+                    ProgressView("Starting conversation...")
+                        .padding(.top, 8)
+                }
             }
             .padding(.horizontal)
+            .disabled(isSending)
         }
     }
 
     private func selectMode(_ mode: String) async {
-        selectedMode = mode
+        isSending = true
+        defer { isSending = false }
         await startConversation(mode: mode)
+        if errorMessage == nil {
+            selectedMode = mode
+        }
     }
 
     // MARK: - Chat View
