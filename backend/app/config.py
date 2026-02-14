@@ -26,6 +26,9 @@ class Settings(BaseSettings):
     exa_api_key: str = ""
     gemini_model: str = "gemini-3-pro-image-preview"
 
+    # Eval
+    eval_mode: str = "off"  # "off", "fast", "full"
+
     # App
     environment: str = "development"
     log_level: str = "INFO"

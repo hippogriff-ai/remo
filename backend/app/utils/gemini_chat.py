@@ -43,6 +43,7 @@ MAX_INSPIRATION_PHOTOS = 3  # Product limit: max 3 inspiration photos
 
 IMAGE_CONFIG = types.GenerateContentConfig(
     response_modalities=["TEXT", "IMAGE"],
+    image_config=types.ImageConfig(image_size="2K"),
 )
 
 CHAT_HISTORY_KEY_TEMPLATE = "projects/{project_id}/gemini_chat_history.json"

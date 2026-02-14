@@ -23,17 +23,22 @@ import anthropic
 import httpx
 
 from app.activities.shopping import (
+    _COLOR_SYNONYMS,
+    _RETAILER_DOMAINS,
     EXA_MAX_RETRIES,
     MAX_CONCURRENT_SCORES,
+    SCORING_WEIGHTS_DEFAULT,
     _build_extraction_messages,
     _build_fit_detail,
     _build_scoring_prompt,
     _build_search_queries,
     _compute_room_constraints,
+    _expand_color_synonym,
     _extract_json,
     _extract_price_text,
     _extract_retailer,
     _format_room_constraints_for_prompt,
+    _get_scoring_weights,
     _google_shopping_url,
     _load_extraction_prompt,
     _load_scoring_prompt,
@@ -243,8 +248,8 @@ class TestBuildSearchQueries:
         queries = _build_search_queries(item)
         assert all(q.strip() for q in queries)
 
-    def test_queries_include_shopping_intent(self):
-        """Queries should include 'buy' or 'shop' to steer toward product pages."""
+    def test_queries_use_natural_descriptions(self):
+        """Queries should use natural descriptions without buy/shop prefixes."""
         item = {
             "source_tag": "BRIEF_ANCHORED",
             "source_reference": "velvet sofa",
@@ -253,8 +258,10 @@ class TestBuildSearchQueries:
             "material": "velvet",
         }
         queries = _build_search_queries(item)
-        has_intent = any("buy" in q or "shop" in q for q in queries)
-        assert has_intent, f"Queries should include shopping intent. Got: {queries}"
+        has_buy_shop = any("buy" in q or "shop" in q for q in queries)
+        assert not has_buy_shop, f"Queries should not include buy/shop. Got: {queries}"
+        assert any("velvet sofa" in q for q in queries)
+        assert any("furniture" in q for q in queries)
 
     def test_description_query_added_for_image_only(self):
         """IMAGE_ONLY items should get a description-based query."""
@@ -280,10 +287,10 @@ class TestBuildSearchQueries:
             "material": "walnut",
         }
         queries = _build_search_queries(item)
-        # "buy warm walnut coffee table" appears once from source_ref,
+        # "warm walnut coffee table" appears once from source_ref,
         # description query is skipped because it matches source_ref
-        buy_ref_count = sum(1 for q in queries if "warm walnut coffee table" in q)
-        assert buy_ref_count == 1
+        ref_count = sum(1 for q in queries if "warm walnut coffee table" in q)
+        assert ref_count == 1
 
     def test_description_query_added_for_brief_anchored_with_different_desc(self):
         """BRIEF_ANCHORED gets description query when desc differs from ref."""
@@ -350,6 +357,289 @@ class TestRoomSizeLabel:
         """Exactly 25 sqm is medium (upper bound inclusive)."""
         dims = RoomDimensions(width_m=5.0, length_m=5.0, height_m=2.7)  # 25 sqm
         assert _room_size_label(dims) == "medium"
+
+
+# === B1: No buy/shop prefixes ===
+
+
+class TestNoBuyShopPrefixes:
+    def test_brief_anchored_no_buy(self):
+        item = {
+            "source_tag": "BRIEF_ANCHORED",
+            "source_reference": "warm walnut coffee table",
+            "category": "Tables",
+            "style": "mid-century modern",
+            "material": "walnut",
+            "color": "warm brown",
+        }
+        queries = _build_search_queries(item)
+        for q in queries:
+            assert "buy" not in q.lower(), f"'buy' found in query: {q}"
+            assert q != "shop" and not q.endswith(" shop"), f"'shop' suffix in: {q}"
+
+    def test_iteration_anchored_no_buy(self):
+        item = {
+            "source_tag": "ITERATION_ANCHORED",
+            "source_reference": "replace with marble coffee table",
+            "category": "Tables",
+            "material": "marble",
+            "color": "white",
+            "style": "modern",
+        }
+        queries = _build_search_queries(item)
+        for q in queries:
+            assert "buy" not in q.lower(), f"'buy' found in query: {q}"
+
+    def test_image_only_no_buy(self):
+        item = {
+            "source_tag": "IMAGE_ONLY",
+            "category": "Seating",
+            "material": "velvet",
+            "color": "navy",
+            "style": "modern",
+        }
+        queries = _build_search_queries(item)
+        for q in queries:
+            assert "buy" not in q.lower(), f"'buy' found in query: {q}"
+
+    def test_uses_furniture_suffix_instead(self):
+        item = {
+            "source_tag": "BRIEF_ANCHORED",
+            "source_reference": "velvet sofa",
+            "category": "Seating",
+            "style": "modern",
+            "material": "velvet",
+        }
+        queries = _build_search_queries(item)
+        assert any("furniture" in q for q in queries)
+
+
+# === B5: Color Synonym Expansion ===
+
+
+class TestColorSynonymExpansion:
+    def test_known_color_gets_synonym(self):
+        assert _expand_color_synonym("ivory") == "cream"
+        assert _expand_color_synonym("navy") == "dark blue"
+        assert _expand_color_synonym("sage") == "muted green"
+
+    def test_unknown_color_returns_none(self):
+        assert _expand_color_synonym("fluorescent pink") is None
+        assert _expand_color_synonym("") is None
+
+    def test_case_insensitive_matching(self):
+        assert _expand_color_synonym("Ivory") == "cream"
+        assert _expand_color_synonym("NAVY blue") == "dark blue"
+
+    def test_no_false_positive_substring_match(self):
+        """'ash' should not match 'washed', 'clashing', etc."""
+        assert _expand_color_synonym("washed oak") is None
+        assert _expand_color_synonym("clashing red") is None
+        assert _expand_color_synonym("flashy gold") is None
+
+    def test_compound_color_with_key_as_word(self):
+        """'ash gray' should match because 'ash' is a full word."""
+        assert _expand_color_synonym("ash gray") == "light gray"
+        assert _expand_color_synonym("coral pink") == "salmon"
+
+    def test_synonym_query_added_to_search(self):
+        item = {
+            "source_tag": "IMAGE_ONLY",
+            "category": "Rug",
+            "material": "wool",
+            "color": "ivory",
+            "style": "modern",
+        }
+        queries = _build_search_queries(item)
+        assert any("cream" in q for q in queries), f"Expected synonym query. Got: {queries}"
+
+    def test_no_synonym_query_for_unknown_color(self):
+        item = {
+            "source_tag": "IMAGE_ONLY",
+            "category": "Rug",
+            "material": "wool",
+            "color": "electric blue",
+            "style": "modern",
+        }
+        queries = _build_search_queries(item)
+        # Should not crash or add spurious queries
+        assert all(q.strip() for q in queries)
+
+    def test_synonyms_dict_has_reasonable_coverage(self):
+        assert len(_COLOR_SYNONYMS) >= 25
+        for key, synonyms in _COLOR_SYNONYMS.items():
+            assert len(synonyms) >= 2, f"{key} should have at least 2 synonyms"
+
+
+# === B3: Retailer Domains ===
+
+
+class TestRetailerDomains:
+    def test_retailer_domains_match_retailer_names(self):
+        """_RETAILER_DOMAINS should cover the same retailers as _RETAILER_NAMES."""
+        assert len(_RETAILER_DOMAINS) >= 20
+        assert "wayfair.com" in _RETAILER_DOMAINS
+        assert "amazon.com" in _RETAILER_DOMAINS
+        assert "westelm.com" in _RETAILER_DOMAINS
+
+    def test_all_domains_are_valid(self):
+        for domain in _RETAILER_DOMAINS:
+            assert "." in domain, f"Invalid domain: {domain}"
+            assert not domain.startswith("http"), f"Domain should not be a URL: {domain}"
+
+
+# === B2/B3/B4: search_products_for_item dual-pass ===
+
+
+class TestSearchProductsDualPass:
+    def test_high_priority_uses_deep_search(self):
+        """HIGH-priority items should trigger 'deep' search type."""
+        calls = []
+
+        async def mock_search(http, q, key, num, *, search_type="auto", **kwargs):
+            calls.append({"query": q, "search_type": search_type, **kwargs})
+            return []
+
+        item = {
+            "source_tag": "IMAGE_ONLY",
+            "category": "Sofa",
+            "material": "velvet",
+            "color": "navy",
+            "style": "modern",
+            "search_priority": "HIGH",
+        }
+
+        with patch("app.activities.shopping._search_exa", side_effect=mock_search):
+            asyncio.run(search_products_for_item(MagicMock(), item, "key"))
+
+        # All calls should use "deep" for HIGH priority
+        assert all(c["search_type"] == "deep" for c in calls), (
+            f"Expected deep search type for HIGH priority. Got: {[c['search_type'] for c in calls]}"
+        )
+
+    def test_medium_priority_uses_auto_search(self):
+        """MEDIUM-priority items should use 'auto' search type."""
+        calls = []
+
+        async def mock_search(http, q, key, num, *, search_type="auto", **kwargs):
+            calls.append({"search_type": search_type})
+            return []
+
+        item = {
+            "source_tag": "IMAGE_ONLY",
+            "category": "Lamp",
+            "material": "brass",
+            "color": "gold",
+            "style": "modern",
+            "search_priority": "MEDIUM",
+        }
+
+        with patch("app.activities.shopping._search_exa", side_effect=mock_search):
+            asyncio.run(search_products_for_item(MagicMock(), item, "key"))
+
+        assert all(c["search_type"] == "auto" for c in calls)
+
+    def test_dual_pass_sends_retailer_domains(self):
+        """Pass 1 should include retailer domains and 'add to cart' text."""
+        calls = []
+
+        async def mock_search(http, q, key, num, *, search_type="auto", **kwargs):
+            calls.append(kwargs)
+            return []
+
+        item = {
+            "source_tag": "IMAGE_ONLY",
+            "category": "Table",
+            "material": "wood",
+            "color": "brown",
+            "style": "modern",
+        }
+
+        with patch("app.activities.shopping._search_exa", side_effect=mock_search):
+            asyncio.run(search_products_for_item(MagicMock(), item, "key"))
+
+        # Half of calls should have include_domains (pass 1), half should not (pass 2)
+        with_domains = [c for c in calls if c.get("include_domains")]
+        without_domains = [c for c in calls if not c.get("include_domains")]
+        assert len(with_domains) > 0, "Pass 1 should include retailer domains"
+        assert len(without_domains) > 0, "Pass 2 should not include retailer domains"
+
+    def test_dual_pass_pass1_has_include_text(self):
+        """Pass 1 should include 'add to cart' text filter."""
+        calls = []
+
+        async def mock_search(http, q, key, num, *, search_type="auto", **kwargs):
+            calls.append(kwargs)
+            return []
+
+        item = {
+            "source_tag": "IMAGE_ONLY",
+            "category": "Chair",
+            "material": "leather",
+            "color": "tan",
+            "style": "modern",
+        }
+
+        with patch("app.activities.shopping._search_exa", side_effect=mock_search):
+            asyncio.run(search_products_for_item(MagicMock(), item, "key"))
+
+        with_text = [c for c in calls if c.get("include_text")]
+        assert len(with_text) > 0, "Pass 1 should include 'add to cart' filter"
+        assert with_text[0]["include_text"] == ["add to cart"]
+
+    def test_dual_pass_deduplicates_results(self):
+        """Results from both passes should be deduplicated by URL."""
+        call_count = [0]
+
+        async def mock_search(http, q, key, num, *, search_type="auto", **kwargs):
+            call_count[0] += 1
+            # Both passes return the same product
+            return [{"url": "https://wayfair.com/sofa-1", "title": "Navy Sofa"}]
+
+        item = {
+            "source_tag": "IMAGE_ONLY",
+            "category": "Sofa",
+            "material": "velvet",
+            "color": "navy",
+            "style": "modern",
+        }
+
+        with patch("app.activities.shopping._search_exa", side_effect=mock_search):
+            results = asyncio.run(search_products_for_item(MagicMock(), item, "key"))
+
+        # Should have called search multiple times but deduped to 1 result
+        assert call_count[0] > 1
+        assert len(results) == 1
+        assert results[0]["url"] == "https://wayfair.com/sofa-1"
+
+
+# === Cache Key Collision Tests ===
+
+
+class TestCacheKeyCollision:
+    def test_different_params_produce_different_cache_keys(self):
+        """Dual-pass searches with same query but different params must not collide."""
+        from app.activities.shopping import _exa_cache_path
+
+        with patch("app.activities.shopping._EXA_CACHE_DIR", "/tmp/test-cache"):
+            path_pass1 = _exa_cache_path(
+                "navy sofa",
+                3,
+                search_type="auto",
+                include_domains=["wayfair.com"],
+                include_text=["add to cart"],
+            )
+            path_pass2 = _exa_cache_path("navy sofa", 3, search_type="auto")
+            assert path_pass1 != path_pass2, "Pass 1 and pass 2 must have distinct cache keys"
+
+    def test_same_params_produce_same_cache_key(self):
+        """Identical params should produce the same cache key."""
+        from app.activities.shopping import _exa_cache_path
+
+        with patch("app.activities.shopping._EXA_CACHE_DIR", "/tmp/test-cache"):
+            path_a = _exa_cache_path("navy sofa", 3, search_type="deep")
+            path_b = _exa_cache_path("navy sofa", 3, search_type="deep")
+            assert path_a == path_b
 
 
 # === Search Priority Tests ===
@@ -743,20 +1033,20 @@ class TestBuildScoringPrompt:
 
     def test_default_weights_without_lidar(self):
         """Without room_dimensions, uses default weights (dim=0.1)."""
-        item = {"category": "Sofa", "description": "velvet sofa"}
-        product = {"title": "Sofa", "url": "https://example.com"}
+        item = {"category": "Planter", "description": "ceramic planter"}
+        product = {"title": "Planter", "url": "https://example.com"}
         prompt = _build_scoring_prompt(item, product, None, room_dimensions=None)
         assert "weight: 0.3" in prompt  # category default
         assert "weight: 0.1" in prompt  # dimensions default
 
     def test_lidar_weights_with_room_dims(self):
-        """With room_dimensions, dimensions weight increases to 0.2."""
+        """With room_dimensions, dimensions weight increases; renormalized to sum=1.0."""
         dims = RoomDimensions(width_m=4.0, length_m=5.0, height_m=2.7)
         item = {"category": "Sofa", "description": "velvet sofa"}
         product = {"title": "Sofa", "url": "https://example.com"}
         prompt = _build_scoring_prompt(item, product, None, room_dimensions=dims)
-        assert "weight: 0.25" in prompt  # category lidar
-        assert "weight: 0.2)" in prompt  # dimensions lidar
+        # Sofa overrides on LiDAR base, renormalized: material~0.25, dimensions~0.2
+        assert "weight: 0.24" in prompt or "weight: 0.25" in prompt  # material (renormalized)
         assert "LiDAR-measured" in prompt
         assert "4.0m" in prompt
 
@@ -766,6 +1056,247 @@ class TestBuildScoringPrompt:
         product = {"title": "Sofa", "url": "https://example.com"}
         prompt = _build_scoring_prompt(item, product, None, room_dimensions=None)
         assert "LiDAR-measured" not in prompt
+
+    def test_category_adaptive_weights_sofa(self):
+        """Sofa category should boost material weight and reduce color weight."""
+        from app.activities.shopping import _get_scoring_weights
+
+        item = {"category": "Sofa", "description": "velvet sofa"}
+        weights = _get_scoring_weights(item, has_lidar=False)
+        # Sofa overrides boosted material (0.25 pre-norm) and reduced color (0.15 pre-norm)
+        assert weights["material"] > weights["color"]
+        assert abs(sum(weights.values()) - 1.0) < 0.02  # renormalized
+
+    def test_category_adaptive_weights_rug(self):
+        """Rug category should boost color weight and reduce material weight."""
+        from app.activities.shopping import _get_scoring_weights
+
+        item = {"category": "Area Rug", "description": "wool rug"}
+        weights = _get_scoring_weights(item, has_lidar=False)
+        # Rug overrides: color boosted, material reduced
+        assert weights["color"] > weights["material"]
+        assert abs(sum(weights.values()) - 1.0) < 0.02  # renormalized
+
+    def test_category_adaptive_weights_lighting(self):
+        """Lighting category should boost style weight."""
+        from app.activities.shopping import _get_scoring_weights
+
+        item = {"category": "Floor Lamp", "description": "brass lamp"}
+        weights = _get_scoring_weights(item, has_lidar=False)
+        # Lamp overrides: style boosted above default
+        default_weights = _get_scoring_weights({"category": "Unknown"}, has_lidar=False)
+        assert weights["style"] > default_weights["style"]
+        assert abs(sum(weights.values()) - 1.0) < 0.02  # renormalized
+
+    def test_category_adaptive_with_lidar(self):
+        """Category overrides should apply on top of LiDAR base weights."""
+        from app.activities.shopping import _get_scoring_weights
+
+        dims = RoomDimensions(width_m=4.0, length_m=5.0, height_m=2.7)
+        item = {"category": "Rug", "description": "wool rug"}
+        product = {"title": "Rug", "url": "https://example.com"}
+        prompt = _build_scoring_prompt(item, product, None, room_dimensions=dims)
+        assert "LiDAR-measured" in prompt
+
+        weights = _get_scoring_weights(item, has_lidar=True)
+        # Rug overrides on LiDAR base: color should be highest, renormalized
+        assert weights["color"] > weights["material"]
+        assert abs(sum(weights.values()) - 1.0) < 0.02
+
+    def test_unknown_category_uses_default_weights(self):
+        """Unknown categories should use base weights unchanged."""
+        item = {"category": "Decorative Vase", "description": "ceramic vase"}
+        product = {"title": "Vase", "url": "https://example.com"}
+        prompt = _build_scoring_prompt(item, product, None)
+        # Default weights unchanged
+        assert "weight: 0.3)" in prompt  # category default
+        assert "weight: 0.1)" in prompt  # dimensions default
+
+    def test_summary_data_included_in_prompt(self):
+        """Exa summary data should appear in the product description."""
+        item = {"category": "Sofa", "description": "velvet sofa"}
+        product = {
+            "title": "Modern Velvet Sofa",
+            "text": "Luxurious seating...",
+            "url": "https://example.com",
+            "summary": {
+                "material": "velvet",
+                "color": "navy blue",
+                "dimensions": "84x36x32 inches",
+                "in_stock": True,
+            },
+        }
+        prompt = _build_scoring_prompt(item, product, None)
+        assert "Material: velvet" in prompt
+        assert "Color: navy blue" in prompt
+        assert "Dimensions: 84x36x32 inches" in prompt
+        assert "In stock: Yes" in prompt
+
+    def test_no_summary_data_graceful(self):
+        """Missing summary should not crash or add empty sections."""
+        item = {"category": "Sofa", "description": "velvet sofa"}
+        product = {"title": "Sofa", "text": "A cozy sofa.", "url": "https://example.com"}
+        prompt = _build_scoring_prompt(item, product, None)
+        assert "Structured data" not in prompt
+
+    def test_empty_summary_dict_graceful(self):
+        """Empty summary dict should not add structured data section."""
+        item = {"category": "Chair", "description": "accent chair"}
+        product = {
+            "title": "Chair",
+            "url": "https://example.com",
+            "summary": {},
+        }
+        prompt = _build_scoring_prompt(item, product, None)
+        assert "Structured data" not in prompt
+
+
+# === B6: Category-Adaptive Scoring Weights ===
+
+
+class TestCategoryAdaptiveWeights:
+    def _assert_normalized(self, weights: dict[str, float]) -> None:
+        assert abs(sum(weights.values()) - 1.0) < 0.05
+
+    def test_sofa_overrides(self):
+        weights = _get_scoring_weights({"category": "Sofa"}, has_lidar=False)
+        # Sofa: material boosted above color, dimensions boosted above default 0.10
+        assert weights["material"] > weights["color"]
+        assert weights["dimensions"] > SCORING_WEIGHTS_DEFAULT["dimensions"]
+        self._assert_normalized(weights)
+
+    def test_rug_overrides(self):
+        weights = _get_scoring_weights({"category": "Area Rug"}, has_lidar=False)
+        # Rug: color is the dominant weight, material is reduced
+        assert weights["color"] > weights["material"]
+        assert weights["color"] > weights["style"]
+        self._assert_normalized(weights)
+
+    def test_lighting_overrides(self):
+        weights = _get_scoring_weights({"category": "Floor Lamp"}, has_lidar=False)
+        # Lamp: style boosted above default
+        default = _get_scoring_weights({"category": "Unknown"}, has_lidar=False)
+        assert weights["style"] > default["style"]
+        self._assert_normalized(weights)
+
+    def test_wall_art_overrides(self):
+        weights = _get_scoring_weights({"category": "Wall Art"}, has_lidar=False)
+        # Wall art: style and color are the top two weights
+        assert weights["style"] >= weights["color"]
+        assert weights["style"] > weights["material"]
+        self._assert_normalized(weights)
+
+    def test_unknown_category_no_override(self):
+        weights = _get_scoring_weights({"category": "Planter"}, has_lidar=False)
+        assert weights == SCORING_WEIGHTS_DEFAULT
+
+    def test_lidar_base_with_category_override(self):
+        weights = _get_scoring_weights({"category": "Rug"}, has_lidar=True)
+        # Rug + LiDAR: color is the top weight
+        assert weights["color"] > weights["material"]
+        assert weights["color"] > weights["dimensions"]
+        self._assert_normalized(weights)
+
+    def test_case_insensitive_matching(self):
+        weights = _get_scoring_weights({"category": "SOFA"}, has_lidar=False)
+        # Sofa override applies regardless of case
+        assert weights["material"] > weights["color"]
+        self._assert_normalized(weights)
+
+    def test_empty_category_uses_default(self):
+        weights = _get_scoring_weights({"category": ""}, has_lidar=False)
+        assert weights == SCORING_WEIGHTS_DEFAULT
+
+    def test_missing_category_uses_default(self):
+        weights = _get_scoring_weights({}, has_lidar=False)
+        assert weights == SCORING_WEIGHTS_DEFAULT
+
+
+# === B7: Summary Price Extraction ===
+
+
+class TestSummaryPriceExtraction:
+    def test_summary_price_preferred_over_regex(self):
+        product = {
+            "text": "Great sofa for $999.00",
+            "summary": {"price_usd": 1299.99},
+        }
+        assert _extract_price_text(product) == "$1,299.99"
+
+    def test_falls_back_to_regex_without_summary(self):
+        product = {"text": "Price: $499.00"}
+        assert _extract_price_text(product) == "$499.00"
+
+    def test_falls_back_to_regex_with_empty_summary(self):
+        product = {"text": "Price: $299.99", "summary": {}}
+        assert _extract_price_text(product) == "$299.99"
+
+    def test_falls_back_to_regex_with_zero_price(self):
+        product = {"text": "Sale $199.00", "summary": {"price_usd": 0}}
+        assert _extract_price_text(product) == "$199.00"
+
+    def test_falls_back_to_regex_with_non_numeric_price(self):
+        product = {"text": "Price: $599.00", "summary": {"price_usd": "N/A"}}
+        assert _extract_price_text(product) == "$599.00"
+
+    def test_integer_price_from_summary(self):
+        product = {"text": "", "summary": {"price_usd": 500}}
+        assert _extract_price_text(product) == "$500.00"
+
+    def test_unknown_when_no_summary_no_text(self):
+        product = {"text": "No price here", "summary": {"product_name": "Sofa"}}
+        assert _extract_price_text(product) == "Unknown"
+
+    def test_summary_price_formats_with_commas(self):
+        product = {"text": "", "summary": {"price_usd": 12500.00}}
+        assert _extract_price_text(product) == "$12,500.00"
+
+
+# === B7: Exa Summary in Payload ===
+
+
+class TestExaSummaryPayload:
+    def test_payload_includes_summary_schema(self):
+        """_search_exa should include summary schema in the contents payload."""
+        captured_payload = {}
+
+        async def mock_post(url, **kwargs):
+            captured_payload.update(kwargs.get("json", {}))
+            return httpx.Response(
+                200,
+                json={"results": []},
+                request=httpx.Request("POST", url),
+            )
+
+        mock_http = MagicMock()
+        mock_http.post = mock_post
+
+        asyncio.run(_search_exa(mock_http, "sofa", "key"))
+        contents = captured_payload.get("contents", {})
+        assert "summary" in contents
+        assert contents["summary"]["query"] == "Extract product details"
+        assert "price_usd" in contents["summary"]["schema"]["properties"]
+        assert "material" in contents["summary"]["schema"]["properties"]
+
+    def test_payload_still_includes_text(self):
+        """Summary should be alongside text, not replace it."""
+        captured_payload = {}
+
+        async def mock_post(url, **kwargs):
+            captured_payload.update(kwargs.get("json", {}))
+            return httpx.Response(
+                200,
+                json={"results": []},
+                request=httpx.Request("POST", url),
+            )
+
+        mock_http = MagicMock()
+        mock_http.post = mock_post
+
+        asyncio.run(_search_exa(mock_http, "sofa", "key"))
+        contents = captured_payload.get("contents", {})
+        assert "text" in contents
+        assert contents["text"]["maxCharacters"] == 1000
 
 
 # === Extraction Message Building Tests ===
@@ -1758,7 +2289,7 @@ class TestSearchEdgeCases:
         """BaseException results from gather should be silently skipped."""
         call_count = 0
 
-        async def mock_search_alternating(http_client, query, api_key, num_results):
+        async def mock_search_alternating(http_client, query, api_key, num_results, **kwargs):
             nonlocal call_count
             call_count += 1
             if call_count % 2 == 0:
@@ -1928,6 +2459,99 @@ class TestExaSearchRetry:
     def test_config_constant(self):
         """EXA_MAX_RETRIES should be 1."""
         assert EXA_MAX_RETRIES == 1
+
+    def test_search_type_sent_in_payload(self):
+        """_search_exa should send the search_type in the payload."""
+        captured_payload = {}
+
+        async def mock_post(url, **kwargs):
+            captured_payload.update(kwargs.get("json", {}))
+            return httpx.Response(
+                200,
+                json={"results": []},
+                request=httpx.Request("POST", url),
+            )
+
+        mock_http = MagicMock()
+        mock_http.post = mock_post
+
+        asyncio.run(_search_exa(mock_http, "sofa", "key", search_type="deep"))
+        assert captured_payload["type"] == "deep"
+
+    def test_include_domains_sent_in_payload(self):
+        """_search_exa should send includeDomains when provided."""
+        captured_payload = {}
+
+        async def mock_post(url, **kwargs):
+            captured_payload.update(kwargs.get("json", {}))
+            return httpx.Response(
+                200,
+                json={"results": []},
+                request=httpx.Request("POST", url),
+            )
+
+        mock_http = MagicMock()
+        mock_http.post = mock_post
+
+        asyncio.run(
+            _search_exa(mock_http, "sofa", "key", include_domains=["wayfair.com", "amazon.com"])
+        )
+        assert captured_payload["includeDomains"] == ["wayfair.com", "amazon.com"]
+
+    def test_include_text_sent_in_payload(self):
+        """_search_exa should send includeText when provided."""
+        captured_payload = {}
+
+        async def mock_post(url, **kwargs):
+            captured_payload.update(kwargs.get("json", {}))
+            return httpx.Response(
+                200,
+                json={"results": []},
+                request=httpx.Request("POST", url),
+            )
+
+        mock_http = MagicMock()
+        mock_http.post = mock_post
+
+        asyncio.run(_search_exa(mock_http, "sofa", "key", include_text=["add to cart"]))
+        assert captured_payload["includeText"] == ["add to cart"]
+
+    def test_no_include_domains_when_not_provided(self):
+        """_search_exa should not include includeDomains when not provided."""
+        captured_payload = {}
+
+        async def mock_post(url, **kwargs):
+            captured_payload.update(kwargs.get("json", {}))
+            return httpx.Response(
+                200,
+                json={"results": []},
+                request=httpx.Request("POST", url),
+            )
+
+        mock_http = MagicMock()
+        mock_http.post = mock_post
+
+        asyncio.run(_search_exa(mock_http, "sofa", "key"))
+        assert "includeDomains" not in captured_payload
+        assert "includeText" not in captured_payload
+
+    def test_default_search_type_is_auto(self):
+        """Default search type should be 'auto' instead of 'neural'."""
+        captured_payload = {}
+
+        async def mock_post(url, **kwargs):
+            captured_payload.update(kwargs.get("json", {}))
+            return httpx.Response(
+                200,
+                json={"results": []},
+                request=httpx.Request("POST", url),
+            )
+
+        mock_http = MagicMock()
+        mock_http.post = mock_post
+
+        asyncio.run(_search_exa(mock_http, "sofa", "key"))
+        assert captured_payload["type"] == "auto"
 
 
 class TestValidateExtractedItems:
@@ -2352,8 +2976,8 @@ class TestScoringWeightValidation:
         """Non-positive dimensions should fall back to default scoring weights."""
         bad_dims = RoomDimensions(width_m=0.0, length_m=5.0, height_m=2.7)
         prompt = _build_scoring_prompt(
-            {"category": "Sofa", "description": "sofa"},
-            {"title": "Test Sofa", "url": "https://a.com", "text": ""},
+            {"category": "Planter", "description": "planter"},
+            {"title": "Test Planter", "url": "https://a.com", "text": ""},
             None,
             room_dimensions=bad_dims,
         )
@@ -2364,8 +2988,8 @@ class TestScoringWeightValidation:
         """Positive dimensions should use LiDAR scoring weights."""
         good_dims = RoomDimensions(width_m=4.0, length_m=5.0, height_m=2.7)
         prompt = _build_scoring_prompt(
-            {"category": "Sofa", "description": "sofa"},
-            {"title": "Test Sofa", "url": "https://a.com", "text": ""},
+            {"category": "Planter", "description": "planter"},
+            {"title": "Test Planter", "url": "https://a.com", "text": ""},
             None,
             room_dimensions=good_dims,
         )

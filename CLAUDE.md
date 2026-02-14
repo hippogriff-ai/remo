@@ -100,8 +100,12 @@ backend/
     activities/purge.py        # R2 cleanup activity
     utils/r2.py                # Cloudflare R2 client
     utils/lidar.py             # RoomPlan JSON â†’ RoomDimensions parser
+    utils/image_eval.py        # Fast eval layer (CLIP/SSIM/artifacts, $0)
+    utils/score_tracking.py    # Eval score JSONL history + regression detection
+    utils/prompt_versioning.py # Versioned prompt loading for A/B testing
+    activities/design_eval.py  # Deep eval layer (Claude Vision judge, ~$0.02)
     logging.py                 # Shared structlog config
-    config.py                  # pydantic-settings env vars
+    config.py                  # pydantic-settings env vars (incl. EVAL_MODE)
     main.py                    # FastAPI app (request ID middleware, error handlers)
     worker.py                  # Temporal worker entrypoint
   migrations/versions/         # Alembic (001_initial_schema.py)
@@ -126,6 +130,7 @@ Plans in `specs/` (tracked). Agent prompts in `specs/PROMPT_*.md` (gitignored â€
 
 | File | Purpose |
 |------|---------|
+| `docs/EVAL_PIPELINE.md` | Eval pipeline guide (setup, usage, metrics, rubrics) |
 | `specs/PRODUCT_SPEC.md` | Product requirements (source of truth for features) |
 | `specs/PLAN_FINAL.md` | Master implementation plan (architecture, contracts, phases, all teams) |
 | `specs/PLAN_T0_PLATFORM.md` | T0 sub-plan |
