@@ -483,6 +483,28 @@ cd backend && .venv/bin/python -m app.worker
 - The backend validates dimensions are between 0.3m and 50m — if outside this range,
   the exporter has a bug
 
+### T9: Maestro E2E Verification (Simulator) ✅ DONE
+
+**What**: Run both Maestro happy paths on the iOS Simulator to verify the full app
+flow works end-to-end — both the standard skip-scan path and the LiDAR fixture path.
+This is an automated step that must pass before looping in a human for device testing.
+
+**Prerequisites**: Backend running locally, app installed on booted simulator, Maestro + Java installed.
+
+**Flows**:
+- `happy-path.yaml` — standard path: create project → skip scan → intake chat → select design → iterate → approve → verify output + shopping list
+- `happy-path-lidar.yaml` — LiDAR path: same flow but uses `-lidar-fixture reference_room` to upload fixture scan data instead of skipping. Verifies the LiDAR banner is NOT shown in output (scan data was provided).
+
+**Commands**:
+```bash
+export JAVA_HOME="/opt/homebrew/opt/openjdk"
+export PATH="$JAVA_HOME/bin:$HOME/.maestro/bin:$PATH"
+maestro test ios/.maestro/flows/happy-path.yaml
+maestro test ios/.maestro/flows/happy-path-lidar.yaml
+```
+
+**Acceptance criteria**: Both flows pass with all assertions COMPLETED. No timeouts, no crashes.
+
 ---
 
 ## Execution Order
@@ -498,6 +520,8 @@ T4: Camera permission         ← depends on T3 (called at start of scan flow)
 T5: Backgrounding guard       ← depends on T3 (monitors state during scan)
  │
 T6: Unit tests                ← write alongside T1-T5, but don't block on them
+ │
+T9: Maestro E2E verification  ← AUTOMATED, runs on simulator (both happy paths)
  │
 T7: Fixture capture           ← HUMAN STEP, after T1-T5 deployed to device
  │
@@ -597,6 +621,7 @@ macOS test compatibility.
 - [ ] T7 — real fixture captured from device and committed
 - [ ] T8 — device test protocol completed, all steps pass
 - [x] `#warning` in release build path is gone (mock data deleted)
-- [x] Maestro happy-path-lidar.yaml passes on simulator (fixture path)
+- [x] Maestro `happy-path.yaml` passes on simulator (standard skip-scan path) — verified
+- [x] Maestro `happy-path-lidar.yaml` passes on simulator (fixture LiDAR path) — verified
 - [x] App builds without warnings for both Debug and Release (BUILD SUCCEEDED, zero Swift errors)
 - [ ] Backend receives and parses real device scan data correctly (awaiting T8)
