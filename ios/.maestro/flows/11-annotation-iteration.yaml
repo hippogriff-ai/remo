@@ -35,18 +35,26 @@ appId: com.hippogriff.remo
 # Tap the canvas to place an annotation circle (center of the image area)
 - tapOn:
     point: "50%,35%"
-# Bottom sheet auto-opens with the new region expanded
+# Bottom sheet auto-opens with the new region (may be collapsed)
 - assertVisible: "Edit Regions"
+# Expand the region row if collapsed
+- tapOn: "Tap to add instruction"
+# Wait for expansion animation
+- extendedWaitUntil:
+    visible: "Action"
+    timeout: 3000
 # Type instruction for the circle (min 10 chars)
-- tapOn: "Instruction (min 10 chars)"
+- tapOn: "Instruction \\(min 10 chars\\)"
 - inputText: "Replace this lamp with a modern floor lamp design"
+# Dismiss keyboard before tapping avoid field
+- hideKeyboard
 # Type avoid keywords (P3-01)
-- tapOn:
-    id: "region_avoid_1"
+- tapOn: "Avoid \\(comma-separated\\)"
 - inputText: "dark colors, heavy furniture"
+# Dismiss keyboard before tapping nudge chip
+- hideKeyboard
 # Toggle a style nudge chip (P3-01)
-- tapOn:
-    id: "nudge_more_modern"
+- tapOn: "more modern"
 # Dismiss the edit panel
 - tapOn: "Done"
 # Submit should now be enabled

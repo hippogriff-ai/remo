@@ -106,6 +106,20 @@ Apply these rules based on the detected room type:
 - Lighting: 30–40 fc ambient, 50–80 fc counter task (under-cabinet LED), 3500–4000K
 - Common pain points: poor lighting at prep areas, insufficient counter space, cook faces wall
 
+### Bathroom
+- Primary purpose: hygiene + restoration → spa-like retreat when possible
+- Key fixtures: vanity (36" standard, 30" comfort height), mirror with integrated lighting, storage
+- Lighting: 40–60 fc task at vanity (cross-lit to eliminate shadows), warm ambient (2700–3000K)
+- Ventilation critical: exhaust fan rated for room volume, humidity-resistant materials throughout
+- Common pain points: poor vanity lighting, insufficient storage, dated tile, no cohesive style
+
+### Dining Room
+- Primary purpose: shared meals + entertaining → social cohesion layout
+- Table size: 24" per person, 36" clearance from wall to chair back
+- Lighting: pendant/chandelier 30–36" above table, dimmable, warm (2700–3000K)
+- Acoustic: soft furnishings reduce echo (rug under table, curtains, upholstered seats)
+- Common pain points: harsh overhead light, table too large for space, no ambiance control
+
 ### Home Office
 - Primary purpose: focused work → detail-oriented cognitive mode
 - Desk facing into room (not against wall), view of door and window, back to wall
