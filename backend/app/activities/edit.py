@@ -46,6 +46,9 @@ from app.utils.image import draw_annotations
 
 logger = structlog.get_logger()
 
+# Strong references to background eval tasks to prevent GC before completion
+_background_tasks: set[asyncio.Task] = set()  # type: ignore[type-arg]
+
 PROMPTS_DIR = Path(__file__).parent.parent.parent / "prompts"
 
 CONTEXT_PROMPT = (
@@ -445,7 +448,7 @@ async def edit_design(input: EditDesignInput) -> EditDesignOutput:
             original_image = await download_image(resolved_input.base_image_url)
 
         # Run eval if enabled — fire-and-forget, never blocks the activity
-        asyncio.create_task(
+        task = asyncio.create_task(
             _maybe_run_edit_eval(
                 result_image=result_image,
                 original_image=original_image,
@@ -454,6 +457,8 @@ async def edit_design(input: EditDesignInput) -> EditDesignOutput:
                 instruction=_build_eval_instruction(input),
             )
         )
+        _background_tasks.add(task)
+        task.add_done_callback(_background_tasks.discard)
 
         return EditDesignOutput(
             revised_image_url=revised_url,

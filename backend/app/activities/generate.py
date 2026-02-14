@@ -41,6 +41,9 @@ from app.utils.prompt_versioning import get_active_version, load_versioned_promp
 
 logger = structlog.get_logger()
 
+# Strong references to background eval tasks to prevent GC before completion
+_background_tasks: set[asyncio.Task] = set()  # type: ignore[type-arg]
+
 PROMPTS_DIR = Path(__file__).parent.parent.parent / "prompts"
 
 # Gemini-supported aspect ratios and their numeric values (width/height)
@@ -515,7 +518,7 @@ async def generate_designs(input: GenerateDesignsInput) -> GenerateDesignsOutput
         url_1 = await asyncio.to_thread(_upload_image, option_1, project_id, "option_1.png")
 
         # Run eval if enabled — fire-and-forget, never blocks the activity
-        asyncio.create_task(
+        task = asyncio.create_task(
             _maybe_run_eval(
                 options=[option_0, option_1],
                 original=room_images[0],
@@ -524,6 +527,8 @@ async def generate_designs(input: GenerateDesignsInput) -> GenerateDesignsOutput
                 original_url=room_urls[0],
             )
         )
+        _background_tasks.add(task)
+        task.add_done_callback(_background_tasks.discard)
 
         return GenerateDesignsOutput(
             options=[
