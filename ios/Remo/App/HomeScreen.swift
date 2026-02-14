@@ -12,6 +12,7 @@ struct HomeScreen: View {
     @State private var isLoading = true
     @State private var errorMessage: String?
     @State private var navigationPath = NavigationPath()
+    @State private var showOnboardingTip = false
 
     private static let projectIdsKey = "remo_project_ids"
 
@@ -78,7 +79,19 @@ struct HomeScreen: View {
                 }
             }
             .task {
+                // Show onboarding tooltip on first launch
+                let isMaestroTest = UserDefaults.standard.bool(forKey: "maestro-test")
+                let hasSeenOnboarding = UserDefaults.standard.bool(forKey: "remo_has_seen_onboarding")
+                if !hasSeenOnboarding && !isMaestroTest {
+                    showOnboardingTip = true
+                    UserDefaults.standard.set(true, forKey: "remo_has_seen_onboarding")
+                }
                 await loadAndRefreshProjects()
+            }
+            .alert("Welcome to Remo", isPresented: $showOnboardingTip) {
+                Button("Got It") {}
+            } message: {
+                Text("Your design data is temporary — save your final image to Photos when you're done. We automatically delete all project data within 48 hours.")
             }
         }
     }
@@ -134,8 +147,8 @@ struct HomeScreen: View {
             guard let index = projects.firstIndex(where: { $0.id == projectId }) else { continue }
             if let state, !state.step.isEmpty {
                 projects[index].state.apply(state)
-                // Remove fully completed projects from the active list
-                if state.step == ProjectStep.completed.rawValue {
+                // Remove terminal projects from the active list
+                if let step = ProjectStep(rawValue: state.step), step.isTerminal {
                     purgedIds.insert(projectId)
                 }
             } else if state == nil {
@@ -229,8 +242,20 @@ struct ProjectRow: View {
                 }
 
             VStack(alignment: .leading, spacing: 4) {
-                Text(titleForStep(projectState.step))
-                    .font(.headline)
+                HStack(spacing: 6) {
+                    Text(titleForStep(projectState.step))
+                        .font(.headline)
+                    if projectState.step != .completed {
+                        Text("Resume")
+                            .font(.caption2.bold())
+                            .padding(.horizontal, 6)
+                            .padding(.vertical, 2)
+                            .background(Color.accentColor.opacity(0.15))
+                            .foregroundStyle(Color.accentColor)
+                            .clipShape(Capsule())
+                            .accessibilityIdentifier("resume_badge")
+                    }
+                }
                 Text(subtitleForStep(projectState.step))
                     .font(.caption)
                     .foregroundStyle(.secondary)
@@ -256,6 +281,8 @@ struct ProjectRow: View {
         case .approval: return "checkmark.seal"
         case .shopping: return "cart"
         case .completed: return "checkmark.circle.fill"
+        case .abandoned: return "clock.badge.xmark"
+        case .cancelled: return "xmark.circle"
         }
     }
 
@@ -270,6 +297,8 @@ struct ProjectRow: View {
         case .approval: return "Review Design"
         case .shopping: return "Shopping List"
         case .completed: return "Complete"
+        case .abandoned: return "Expired"
+        case .cancelled: return "Cancelled"
         }
     }
 
@@ -284,6 +313,8 @@ struct ProjectRow: View {
         case .approval: return "Approve final design"
         case .shopping: return "Browse matching products"
         case .completed: return "Your design is ready!"
+        case .abandoned: return "Deleted after 48h inactivity"
+        case .cancelled: return "This project was cancelled"
         }
     }
 }

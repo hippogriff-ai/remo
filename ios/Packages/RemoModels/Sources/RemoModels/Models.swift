@@ -106,26 +106,48 @@ public struct RoomDimensions: Codable, Hashable, Sendable {
     public var heightM: Double
     public var walls: [[String: AnyCodable]]
     public var openings: [[String: AnyCodable]]
+    public var furniture: [[String: AnyCodable]]
+    public var surfaces: [[String: AnyCodable]]
+    public var floorAreaSqm: Double?
 
     public init(
         widthM: Double,
         lengthM: Double,
         heightM: Double,
         walls: [[String: AnyCodable]] = [],
-        openings: [[String: AnyCodable]] = []
+        openings: [[String: AnyCodable]] = [],
+        furniture: [[String: AnyCodable]] = [],
+        surfaces: [[String: AnyCodable]] = [],
+        floorAreaSqm: Double? = nil
     ) {
         self.widthM = widthM
         self.lengthM = lengthM
         self.heightM = heightM
         self.walls = walls
         self.openings = openings
+        self.furniture = furniture
+        self.surfaces = surfaces
+        self.floorAreaSqm = floorAreaSqm
     }
 
     enum CodingKeys: String, CodingKey {
         case widthM = "width_m"
         case lengthM = "length_m"
         case heightM = "height_m"
-        case walls, openings
+        case walls, openings, furniture, surfaces
+        case floorAreaSqm = "floor_area_sqm"
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        widthM = try container.decode(Double.self, forKey: .widthM)
+        lengthM = try container.decode(Double.self, forKey: .lengthM)
+        heightM = try container.decode(Double.self, forKey: .heightM)
+        walls = try container.decodeIfPresent([[String: AnyCodable]].self, forKey: .walls) ?? []
+        openings = try container.decodeIfPresent([[String: AnyCodable]].self, forKey: .openings) ?? []
+        furniture = try container.decodeIfPresent([[String: AnyCodable]].self, forKey: .furniture) ?? []
+        surfaces = try container.decodeIfPresent([[String: AnyCodable]].self, forKey: .surfaces) ?? []
+        floorAreaSqm = try container.decodeIfPresent(Double.self, forKey: .floorAreaSqm)
     }
 }
 
@@ -135,13 +157,28 @@ public struct AnnotationRegion: Codable, Hashable, Sendable {
     public var centerY: Double
     public var radius: Double
     public var instruction: String
+    public var action: String?
+    public var avoid: [String]
+    public var constraints: [String]
 
-    public init(regionId: Int, centerX: Double, centerY: Double, radius: Double, instruction: String) {
+    public init(
+        regionId: Int,
+        centerX: Double,
+        centerY: Double,
+        radius: Double,
+        instruction: String,
+        action: String? = nil,
+        avoid: [String] = [],
+        constraints: [String] = []
+    ) {
         self.regionId = regionId
         self.centerX = centerX
         self.centerY = centerY
         self.radius = radius
         self.instruction = instruction
+        self.action = action
+        self.avoid = avoid
+        self.constraints = constraints
     }
 
     enum CodingKeys: String, CodingKey {
@@ -150,6 +187,21 @@ public struct AnnotationRegion: Codable, Hashable, Sendable {
         case centerY = "center_y"
         case radius
         case instruction
+        case action
+        case avoid
+        case constraints
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        regionId = try container.decode(Int.self, forKey: .regionId)
+        centerX = try container.decode(Double.self, forKey: .centerX)
+        centerY = try container.decode(Double.self, forKey: .centerY)
+        radius = try container.decode(Double.self, forKey: .radius)
+        instruction = try container.decode(String.self, forKey: .instruction)
+        action = try container.decodeIfPresent(String.self, forKey: .action)
+        avoid = try container.decodeIfPresent([String].self, forKey: .avoid) ?? []
+        constraints = try container.decodeIfPresent([String].self, forKey: .constraints) ?? []
     }
 }
 
@@ -586,11 +638,19 @@ public struct ErrorResponse: Codable, Sendable {
     public var message: String
     public var retryable: Bool
     public var detail: String?
+    /// X-Request-ID from the backend response header. Not decoded from JSON —
+    /// set by RealWorkflowClient after parsing the HTTP response.
+    public var requestId: String?
 
-    public init(error: String, message: String, retryable: Bool, detail: String? = nil) {
+    private enum CodingKeys: String, CodingKey {
+        case error, message, retryable, detail
+    }
+
+    public init(error: String, message: String, retryable: Bool, detail: String? = nil, requestId: String? = nil) {
         self.error = error
         self.message = message
         self.retryable = retryable
         self.detail = detail
+        self.requestId = requestId
     }
 }

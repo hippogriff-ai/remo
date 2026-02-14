@@ -33,7 +33,7 @@ _VALID = ValidatePhotoOutput(passed=True, failures=[], messages=["Photo looks gr
 _INVALID = ValidatePhotoOutput(
     passed=False,
     failures=["low_resolution"],
-    messages=["Image is too small (100px)."],
+    messages=["This photo is too low resolution. Please use a higher quality image."],
 )
 
 
@@ -556,6 +556,106 @@ class TestPhotoDelete:
         resp2 = await client.delete(f"/api/v1/projects/{project_id}/photos/once-only")
         assert resp2.status_code == 404
         assert resp2.json()["error"] == "photo_not_found"
+
+
+class TestPhotoNote:
+    """PATCH /api/v1/projects/{id}/photos/{photoId}/note"""
+
+    @pytest.mark.asyncio
+    async def test_update_note_on_inspiration_photo(self, client, project_id):
+        """Setting a note on an inspiration photo returns 200 and persists."""
+        _mock_states[project_id].photos.append(
+            PhotoData(
+                photo_id="inspo-1",
+                storage_key="s3://test/inspo.jpg",
+                photo_type="inspiration",
+            ),
+        )
+        resp = await client.patch(
+            f"/api/v1/projects/{project_id}/photos/inspo-1/note",
+            json={"note": "Love the color palette"},
+        )
+        assert resp.status_code == 200
+        assert resp.json()["status"] == "ok"
+        state = (await client.get(f"/api/v1/projects/{project_id}")).json()
+        inspo = next(p for p in state["photos"] if p["photo_id"] == "inspo-1")
+        assert inspo["note"] == "Love the color palette"
+
+    @pytest.mark.asyncio
+    async def test_clear_note(self, client, project_id):
+        """Setting note to null clears it."""
+        _mock_states[project_id].photos.append(
+            PhotoData(
+                photo_id="inspo-2",
+                storage_key="s3://test/inspo2.jpg",
+                photo_type="inspiration",
+                note="old note",
+            ),
+        )
+        resp = await client.patch(
+            f"/api/v1/projects/{project_id}/photos/inspo-2/note",
+            json={"note": None},
+        )
+        assert resp.status_code == 200
+        state = (await client.get(f"/api/v1/projects/{project_id}")).json()
+        inspo = next(p for p in state["photos"] if p["photo_id"] == "inspo-2")
+        assert inspo["note"] is None
+
+    @pytest.mark.asyncio
+    async def test_note_on_room_photo_rejected(self, client, project_id):
+        """Setting a note on a room photo returns 422."""
+        _mock_states[project_id].photos.append(
+            PhotoData(photo_id="room-1", storage_key="s3://test/room.jpg", photo_type="room"),
+        )
+        resp = await client.patch(
+            f"/api/v1/projects/{project_id}/photos/room-1/note",
+            json={"note": "some note"},
+        )
+        assert resp.status_code == 422
+        assert resp.json()["error"] == "note_not_allowed"
+
+    @pytest.mark.asyncio
+    async def test_note_too_long_rejected(self, client, project_id):
+        """A note longer than 200 chars is rejected."""
+        _mock_states[project_id].photos.append(
+            PhotoData(
+                photo_id="inspo-3",
+                storage_key="s3://test/inspo3.jpg",
+                photo_type="inspiration",
+            ),
+        )
+        resp = await client.patch(
+            f"/api/v1/projects/{project_id}/photos/inspo-3/note",
+            json={"note": "x" * 201},
+        )
+        assert resp.status_code == 422
+        assert resp.json()["error"] == "note_too_long"
+
+    @pytest.mark.asyncio
+    async def test_note_on_nonexistent_photo(self, client, project_id):
+        """Updating note on nonexistent photo returns 404."""
+        resp = await client.patch(
+            f"/api/v1/projects/{project_id}/photos/no-such-photo/note",
+            json={"note": "test"},
+        )
+        assert resp.status_code == 404
+
+    @pytest.mark.asyncio
+    async def test_note_wrong_step(self, client, project_id):
+        """Updating note after generation step returns 409."""
+        _mock_states[project_id].step = "generation"
+        _mock_states[project_id].photos.append(
+            PhotoData(
+                photo_id="inspo-4",
+                storage_key="s3://test/inspo4.jpg",
+                photo_type="inspiration",
+            ),
+        )
+        resp = await client.patch(
+            f"/api/v1/projects/{project_id}/photos/inspo-4/note",
+            json={"note": "test"},
+        )
+        assert resp.status_code == 409
 
 
 class TestScanEndpoints:

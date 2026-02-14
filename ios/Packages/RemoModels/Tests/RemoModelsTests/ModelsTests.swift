@@ -106,6 +106,57 @@ final class ModelsTests: XCTestCase {
         XCTAssertEqual(region.regionId, 1)
         XCTAssertEqual(region.centerX, 0.5)
         XCTAssertEqual(region.instruction, "Replace this lamp with a modern floor lamp")
+        // Verify backward compatibility: new optional fields get defaults
+        XCTAssertNil(region.action)
+        XCTAssertEqual(region.avoid, [])
+        XCTAssertEqual(region.constraints, [])
+    }
+
+    func testAnnotationRegionDecodingWithAllFields() throws {
+        let json = """
+        {"region_id": 2, "center_x": 0.3, "center_y": 0.7, "radius": 0.12, "instruction": "Remove this shelf entirely", "action": "Remove", "avoid": ["modern art", "glass"], "constraints": ["kid-friendly"]}
+        """.data(using: .utf8)!
+
+        let region = try JSONDecoder().decode(AnnotationRegion.self, from: json)
+        XCTAssertEqual(region.regionId, 2)
+        XCTAssertEqual(region.action, "Remove")
+        XCTAssertEqual(region.avoid, ["modern art", "glass"])
+        XCTAssertEqual(region.constraints, ["kid-friendly"])
+    }
+
+    func testAnnotationRegionRoundTrip() throws {
+        let original = AnnotationRegion(
+            regionId: 1, centerX: 0.5, centerY: 0.3, radius: 0.1,
+            instruction: "Replace with floor lamp",
+            action: "Replace", avoid: ["plastic"], constraints: ["budget"]
+        )
+        let data = try JSONEncoder().encode(original)
+        let decoded = try JSONDecoder().decode(AnnotationRegion.self, from: data)
+        XCTAssertEqual(original, decoded)
+    }
+
+    func testAnnotationRegionDecodingNullAction() throws {
+        // Explicit null for action should decode as nil (same as omitting)
+        let json = """
+        {"region_id": 1, "center_x": 0.5, "center_y": 0.3, "radius": 0.1, "instruction": "Test", "action": null, "avoid": [], "constraints": []}
+        """.data(using: .utf8)!
+
+        let region = try JSONDecoder().decode(AnnotationRegion.self, from: json)
+        XCTAssertNil(region.action)
+        XCTAssertEqual(region.avoid, [])
+        XCTAssertEqual(region.constraints, [])
+    }
+
+    func testAnnotationRegionPartialFields() throws {
+        // Action set but avoid/constraints omitted — should default to empty arrays
+        let json = """
+        {"region_id": 1, "center_x": 0.5, "center_y": 0.5, "radius": 0.1, "instruction": "Change color", "action": "Change finish"}
+        """.data(using: .utf8)!
+
+        let region = try JSONDecoder().decode(AnnotationRegion.self, from: json)
+        XCTAssertEqual(region.action, "Change finish")
+        XCTAssertEqual(region.avoid, [])
+        XCTAssertEqual(region.constraints, [])
     }
 
     func testShoppingListDecoding() throws {
@@ -175,6 +226,18 @@ final class ModelsTests: XCTestCase {
         let response = try JSONDecoder().decode(ErrorResponse.self, from: json)
         XCTAssertEqual(response.error, "wrong_step")
         XCTAssertFalse(response.retryable)
+        // requestId is set from HTTP header, not JSON — should be nil after decode
+        XCTAssertNil(response.requestId)
+    }
+
+    func testErrorResponseRequestIdNotDecodedFromJSON() throws {
+        // Even if JSON contains request_id, it should be ignored (excluded from CodingKeys)
+        let json = """
+        {"error": "server_error", "message": "Something failed", "retryable": true, "request_id": "req-from-json"}
+        """.data(using: .utf8)!
+
+        let response = try JSONDecoder().decode(ErrorResponse.self, from: json)
+        XCTAssertNil(response.requestId, "requestId should not be decoded from JSON — it's set from HTTP headers only")
     }
 
     // MARK: - JSON Encoding (for request bodies)
@@ -210,12 +273,28 @@ final class ModelsTests: XCTestCase {
         XCTAssertEqual(ProjectStep.approval.rawValue, "approval")
         XCTAssertEqual(ProjectStep.shopping.rawValue, "shopping")
         XCTAssertEqual(ProjectStep.completed.rawValue, "completed")
+        XCTAssertEqual(ProjectStep.abandoned.rawValue, "abandoned")
+        XCTAssertEqual(ProjectStep.cancelled.rawValue, "cancelled")
     }
 
     func testProjectStepFromString() {
         XCTAssertEqual(ProjectStep(rawValue: "photos"), .photoUpload)
         XCTAssertEqual(ProjectStep(rawValue: "completed"), .completed)
+        XCTAssertEqual(ProjectStep(rawValue: "abandoned"), .abandoned)
+        XCTAssertEqual(ProjectStep(rawValue: "cancelled"), .cancelled)
         XCTAssertNil(ProjectStep(rawValue: "invalid"))
+    }
+
+    func testProjectStepIsTerminal() {
+        // Non-terminal steps
+        let nonTerminal: [ProjectStep] = [.photoUpload, .scan, .intake, .generation, .selection, .iteration, .approval, .shopping]
+        for step in nonTerminal {
+            XCTAssertFalse(step.isTerminal, "\(step) should not be terminal")
+        }
+        // Terminal steps
+        XCTAssertTrue(ProjectStep.completed.isTerminal)
+        XCTAssertTrue(ProjectStep.abandoned.isTerminal)
+        XCTAssertTrue(ProjectStep.cancelled.isTerminal)
     }
 
     // MARK: - ProjectState.apply()
@@ -267,6 +346,24 @@ final class ModelsTests: XCTestCase {
         XCTAssertNil(state.error)
     }
 
+    func testApplyTerminalStateAbandoned() {
+        let state = ProjectState()
+        state.step = .iteration
+        let workflow = WorkflowState(step: "abandoned")
+        state.apply(workflow)
+        XCTAssertEqual(state.step, .abandoned)
+        XCTAssertTrue(state.step.isTerminal)
+    }
+
+    func testApplyTerminalStateCancelled() {
+        let state = ProjectState()
+        state.step = .generation
+        let workflow = WorkflowState(step: "cancelled")
+        state.apply(workflow)
+        XCTAssertEqual(state.step, .cancelled)
+        XCTAssertTrue(state.step.isTerminal)
+    }
+
     // MARK: - ProjectState.preview()
 
     func testPreviewFactoryPhotoUpload() {
@@ -291,11 +388,17 @@ final class ModelsTests: XCTestCase {
     // MARK: - ProjectStep ordering (Comparable)
 
     func testProjectStepOrderingFollowsWorkflow() {
-        let steps: [ProjectStep] = [.photoUpload, .scan, .intake, .generation, .selection, .iteration, .approval, .shopping, .completed]
+        let steps: [ProjectStep] = [.photoUpload, .scan, .intake, .generation, .selection, .iteration, .approval, .shopping, .completed, .abandoned, .cancelled]
         // Each step should be less than the next
         for i in 0..<steps.count - 1 {
             XCTAssertTrue(steps[i] < steps[i + 1], "\(steps[i]) should be < \(steps[i + 1])")
         }
+    }
+
+    func testTerminalStepsSortAfterCompleted() {
+        XCTAssertTrue(ProjectStep.completed < .abandoned)
+        XCTAssertTrue(ProjectStep.completed < .cancelled)
+        XCTAssertTrue(ProjectStep.abandoned < .cancelled)
     }
 
     func testProjectStepEqualityNotLessThan() {
@@ -465,6 +568,67 @@ final class ModelsTests: XCTestCase {
         // Verify nested wall data is accessible
         XCTAssertEqual(dims.walls[0]["height"], AnyCodable(2.7))
         XCTAssertEqual(dims.openings[0]["type"], AnyCodable("door"))
+    }
+
+    func testRoomDimensionsBackwardCompatMinimal() throws {
+        // Old backend JSON without new fields — should decode with defaults
+        let json = """
+        {
+            "width_m": 3.0,
+            "length_m": 4.0,
+            "height_m": 2.5
+        }
+        """.data(using: .utf8)!
+
+        let dims = try JSONDecoder().decode(RoomDimensions.self, from: json)
+        XCTAssertEqual(dims.widthM, 3.0)
+        XCTAssertEqual(dims.walls, [])
+        XCTAssertEqual(dims.openings, [])
+        XCTAssertEqual(dims.furniture, [])
+        XCTAssertEqual(dims.surfaces, [])
+        XCTAssertNil(dims.floorAreaSqm)
+    }
+
+    func testRoomDimensionsWithNewFields() throws {
+        let json = """
+        {
+            "width_m": 4.2,
+            "length_m": 5.8,
+            "height_m": 2.7,
+            "walls": [],
+            "openings": [],
+            "furniture": [
+                {"type": "sofa", "width": 2.1, "depth": 0.9}
+            ],
+            "surfaces": [
+                {"type": "floor", "material": "hardwood"}
+            ],
+            "floor_area_sqm": 24.36
+        }
+        """.data(using: .utf8)!
+
+        let dims = try JSONDecoder().decode(RoomDimensions.self, from: json)
+        XCTAssertEqual(dims.furniture.count, 1)
+        XCTAssertEqual(dims.furniture[0]["type"], AnyCodable("sofa"))
+        XCTAssertEqual(dims.surfaces.count, 1)
+        XCTAssertEqual(dims.surfaces[0]["material"], AnyCodable("hardwood"))
+        XCTAssertEqual(dims.floorAreaSqm, 24.36)
+    }
+
+    func testRoomDimensionsRoundTripWithNewFields() throws {
+        let dims = RoomDimensions(
+            widthM: 4.0,
+            lengthM: 5.0,
+            heightM: 2.5,
+            furniture: [["type": AnyCodable("table")]],
+            surfaces: [["type": AnyCodable("floor"), "material": AnyCodable("tile")]],
+            floorAreaSqm: 20.0
+        )
+        let data = try JSONEncoder().encode(dims)
+        let decoded = try JSONDecoder().decode(RoomDimensions.self, from: data)
+        XCTAssertEqual(decoded.furniture.count, 1)
+        XCTAssertEqual(decoded.surfaces.count, 1)
+        XCTAssertEqual(decoded.floorAreaSqm, 20.0)
     }
 
     // MARK: - Forward compatibility (unknown fields ignored)
