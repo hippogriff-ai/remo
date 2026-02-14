@@ -1027,6 +1027,22 @@ class TestActivityOutputRoundTrip:
         assert restored.progress == "2/4 domains covered"
         assert restored.partial_brief.style_profile.mood == "cozy"
 
+    def test_intake_chat_output_requested_skills_round_trip(self):
+        """IntakeChatOutput with requested_skills round-trips correctly."""
+        out = IntakeChatOutput(
+            agent_message="I see you want cozy!",
+            requested_skills=["cozy", "modern"],
+        )
+        restored = IntakeChatOutput.model_validate_json(out.model_dump_json())
+        assert restored.requested_skills == ["cozy", "modern"]
+
+    def test_intake_chat_output_requested_skills_default_empty(self):
+        """IntakeChatOutput defaults requested_skills to empty list."""
+        out = IntakeChatOutput(agent_message="Hello!")
+        assert out.requested_skills == []
+        restored = IntakeChatOutput.model_validate_json(out.model_dump_json())
+        assert restored.requested_skills == []
+
     def test_intake_chat_output_summary_round_trip(self):
         """IntakeChatOutput summary (is_summary=True) round-trips correctly."""
         out = IntakeChatOutput(

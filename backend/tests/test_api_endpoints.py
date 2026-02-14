@@ -3188,6 +3188,156 @@ class TestRealIntakeWiring:
         assert "room_analysis" not in ctx
         assert "room_context" not in ctx
 
+    @pytest.mark.asyncio
+    async def test_session_tracks_loaded_skill_ids(self, client, intake_project, mock_agent):
+        """After requesting 'cozy', session.loaded_skill_ids has it."""
+        pid = intake_project
+        await client.post(f"/api/v1/projects/{pid}/intake/start", json={"mode": "full"})
+
+        mock_agent.return_value = IntakeChatOutput(
+            agent_message="I see you like cozy styles!",
+            progress="Turn 1",
+            requested_skills=["cozy"],
+        )
+        await client.post(
+            f"/api/v1/projects/{pid}/intake/message",
+            json={"message": "I want something cozy"},
+        )
+
+        session = _intake_sessions[pid]
+        assert session.loaded_skill_ids == ["cozy"]
+
+    @pytest.mark.asyncio
+    async def test_loaded_skills_passed_to_prompt(self, client, intake_project, mock_agent):
+        """project_context includes loaded_skill_ids on subsequent turns."""
+        pid = intake_project
+        await client.post(f"/api/v1/projects/{pid}/intake/start", json={"mode": "full"})
+
+        # First turn: agent requests "cozy"
+        mock_agent.return_value = IntakeChatOutput(
+            agent_message="Cozy, got it!",
+            progress="Turn 1",
+            requested_skills=["cozy"],
+        )
+        await client.post(
+            f"/api/v1/projects/{pid}/intake/message",
+            json={"message": "cozy please"},
+        )
+
+        # Second turn: verify loaded_skill_ids in project_context
+        mock_agent.return_value = IntakeChatOutput(
+            agent_message="Tell me more.",
+            progress="Turn 2",
+        )
+        await client.post(
+            f"/api/v1/projects/{pid}/intake/message",
+            json={"message": "warm colors"},
+        )
+
+        call_args = mock_agent.call_args[0][0]
+        assert call_args.project_context["loaded_skill_ids"] == ["cozy"]
+
+    @pytest.mark.asyncio
+    async def test_loaded_skills_persist_across_turns(self, client, intake_project, mock_agent):
+        """Skills loaded in turn 1 persist through turn 3."""
+        pid = intake_project
+        await client.post(f"/api/v1/projects/{pid}/intake/start", json={"mode": "full"})
+
+        # Turn 1: request cozy
+        mock_agent.return_value = IntakeChatOutput(
+            agent_message="Cozy!", progress="Turn 1", requested_skills=["cozy"]
+        )
+        await client.post(f"/api/v1/projects/{pid}/intake/message", json={"message": "cozy"})
+
+        # Turn 2: no new skills requested
+        mock_agent.return_value = IntakeChatOutput(agent_message="More details?", progress="Turn 2")
+        await client.post(f"/api/v1/projects/{pid}/intake/message", json={"message": "yes"})
+
+        # Turn 3: verify cozy still in context
+        mock_agent.return_value = IntakeChatOutput(agent_message="Great!", progress="Turn 3")
+        await client.post(f"/api/v1/projects/{pid}/intake/message", json={"message": "plants"})
+
+        call_args = mock_agent.call_args[0][0]
+        assert call_args.project_context["loaded_skill_ids"] == ["cozy"]
+
+    @pytest.mark.asyncio
+    async def test_loaded_skills_cap_at_two(self, client, intake_project, mock_agent):
+        """Requesting a 3rd skill does not exceed cap of 2."""
+        pid = intake_project
+        await client.post(f"/api/v1/projects/{pid}/intake/start", json={"mode": "full"})
+
+        # Turn 1: load cozy + modern
+        mock_agent.return_value = IntakeChatOutput(
+            agent_message="Nice blend!",
+            progress="Turn 1",
+            requested_skills=["cozy", "modern"],
+        )
+        await client.post(f"/api/v1/projects/{pid}/intake/message", json={"message": "cozy modern"})
+        assert _intake_sessions[pid].loaded_skill_ids == ["cozy", "modern"]
+
+        # Turn 2: try to add a 3rd
+        mock_agent.return_value = IntakeChatOutput(
+            agent_message="Scandinavian too?",
+            progress="Turn 2",
+            requested_skills=["scandinavian"],
+        )
+        await client.post(
+            f"/api/v1/projects/{pid}/intake/message",
+            json={"message": "also scandinavian"},
+        )
+
+        # Cap at 2 — original two preserved
+        assert len(_intake_sessions[pid].loaded_skill_ids) == 2
+        assert _intake_sessions[pid].loaded_skill_ids == ["cozy", "modern"]
+
+    @pytest.mark.asyncio
+    async def test_start_over_clears_loaded_skills(self, client, intake_project, mock_agent):
+        """start_over creates a fresh session without loaded skills."""
+        pid = intake_project
+        await client.post(f"/api/v1/projects/{pid}/intake/start", json={"mode": "full"})
+
+        mock_agent.return_value = IntakeChatOutput(
+            agent_message="Cozy!", progress="Turn 1", requested_skills=["cozy"]
+        )
+        await client.post(f"/api/v1/projects/{pid}/intake/message", json={"message": "cozy"})
+        assert _intake_sessions[pid].loaded_skill_ids == ["cozy"]
+
+        # Start over removes session entirely
+        await client.post(f"/api/v1/projects/{pid}/start-over")
+        assert pid not in _intake_sessions
+
+    @pytest.mark.asyncio
+    async def test_loaded_skills_deduplicated(self, client, intake_project, mock_agent):
+        """Requesting the same skill twice doesn't duplicate it."""
+        pid = intake_project
+        await client.post(f"/api/v1/projects/{pid}/intake/start", json={"mode": "full"})
+
+        # Turn 1: load cozy
+        mock_agent.return_value = IntakeChatOutput(
+            agent_message="Cozy!", progress="Turn 1", requested_skills=["cozy"]
+        )
+        await client.post(f"/api/v1/projects/{pid}/intake/message", json={"message": "cozy"})
+
+        # Turn 2: request cozy again
+        mock_agent.return_value = IntakeChatOutput(
+            agent_message="Still cozy!", progress="Turn 2", requested_skills=["cozy"]
+        )
+        await client.post(f"/api/v1/projects/{pid}/intake/message", json={"message": "more cozy"})
+
+        assert _intake_sessions[pid].loaded_skill_ids == ["cozy"]
+
+    @pytest.mark.asyncio
+    async def test_loaded_skills_absent_when_none(self, client, intake_project, mock_agent):
+        """project_context omits loaded_skill_ids when empty (not sent as [])."""
+        pid = intake_project
+        await client.post(f"/api/v1/projects/{pid}/intake/start", json={"mode": "full"})
+
+        mock_agent.return_value = IntakeChatOutput(agent_message="Hello!", progress="Turn 1")
+        await client.post(f"/api/v1/projects/{pid}/intake/message", json={"message": "hi"})
+
+        call_args = mock_agent.call_args[0][0]
+        assert "loaded_skill_ids" not in call_args.project_context
+
 
 class TestForceFailureEndpoint:
     """POST /api/v1/debug/force-failure — error injection for E2E-11.

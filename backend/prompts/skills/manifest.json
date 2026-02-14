@@ -1,0 +1,74 @@
+{
+  "skills": [
+    {
+      "skill_id": "cozy",
+      "name": "Cozy & Warm",
+      "description": "Warm palettes, layered textiles, intimate furniture",
+      "style_tags": ["warm", "cozy", "intimate", "layered"],
+      "trigger_phrases": ["cozy", "warm", "snug", "comfortable", "inviting"]
+    },
+    {
+      "skill_id": "modern",
+      "name": "Modern & Clean",
+      "description": "Neutral base, geometric lines, sleek furniture, architectural lighting",
+      "style_tags": ["modern", "clean", "sleek", "geometric"],
+      "trigger_phrases": ["modern", "contemporary", "sleek", "clean lines", "minimalist modern"]
+    },
+    {
+      "skill_id": "bright_airy",
+      "name": "Bright & Airy",
+      "description": "Light palettes, sheer curtains, natural light, transparent materials",
+      "style_tags": ["bright", "airy", "light", "open"],
+      "trigger_phrases": ["bright", "airy", "light", "open", "spacious feeling"]
+    },
+    {
+      "skill_id": "calm",
+      "name": "Calm & Serene",
+      "description": "Cool muted tones, minimal pattern, sound-absorbing materials, biophilic elements",
+      "style_tags": ["calm", "serene", "peaceful", "zen"],
+      "trigger_phrases": ["calm", "serene", "peaceful", "zen", "tranquil", "relaxing"]
+    },
+    {
+      "skill_id": "luxurious",
+      "name": "Luxurious & Refined",
+      "description": "Rich fabrics, marble and brass, statement pieces, dramatic lighting",
+      "style_tags": ["luxurious", "elegant", "refined", "opulent"],
+      "trigger_phrases": ["luxurious", "luxury", "elegant", "refined", "opulent", "high-end", "premium"]
+    },
+    {
+      "skill_id": "rustic",
+      "name": "Rustic & Natural",
+      "description": "Reclaimed wood, wrought iron, natural stone, earth tones, artisanal objects",
+      "style_tags": ["rustic", "natural", "farmhouse", "country"],
+      "trigger_phrases": ["rustic", "farmhouse", "country", "natural wood", "cabin"]
+    },
+    {
+      "skill_id": "minimalist",
+      "name": "Minimalist & Intentional",
+      "description": "Monochromatic palette, architectural furniture, hidden storage, negative space",
+      "style_tags": ["minimalist", "simple", "intentional", "spare"],
+      "trigger_phrases": ["minimalist", "minimal", "simple", "less is more", "uncluttered"]
+    },
+    {
+      "skill_id": "bohemian",
+      "name": "Bohemian & Eclectic",
+      "description": "Saturated colors, mixed global patterns, layered textiles, abundant plants",
+      "style_tags": ["bohemian", "boho", "eclectic", "global"],
+      "trigger_phrases": ["bohemian", "boho", "eclectic", "free-spirited", "collected"]
+    },
+    {
+      "skill_id": "scandinavian",
+      "name": "Scandinavian & Hygge",
+      "description": "Pale neutrals, hygge textiles, functional furniture, plants, natural light",
+      "style_tags": ["scandinavian", "nordic", "hygge", "functional"],
+      "trigger_phrases": ["scandinavian", "scandi", "nordic", "hygge", "swedish"]
+    },
+    {
+      "skill_id": "more_space",
+      "name": "More Space & Openness",
+      "description": "Visual expansion techniques, multi-functional furniture, light palette, mirrors",
+      "style_tags": ["spacious", "open", "multi-functional", "compact"],
+      "trigger_phrases": ["more space", "bigger", "cramped", "small room", "open up", "feels tight"]
+    }
+  ]
+}

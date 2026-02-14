@@ -78,6 +78,7 @@ class _IntakeSession:
     mode: Literal["quick", "full", "open"]
     history: list[ChatMessage] = field(default_factory=list)
     last_partial_brief: DesignBrief | None = None
+    loaded_skill_ids: list[str] = field(default_factory=list)
 
 
 _intake_sessions: dict[str, _IntakeSession] = {}
@@ -757,6 +758,8 @@ async def _real_intake_message(
         project_context["room_analysis"] = state.room_analysis.model_dump()
     if state.room_context is not None:
         project_context["room_context"] = state.room_context.model_dump()
+    if session.loaded_skill_ids:
+        project_context["loaded_skill_ids"] = session.loaded_skill_ids
 
     intake_input = IntakeChatInput(
         mode=session.mode,
@@ -777,6 +780,16 @@ async def _real_intake_message(
     session.history.append(ChatMessage(role="assistant", content=result.agent_message))
     if result.partial_brief is not None:
         session.last_partial_brief = result.partial_brief
+    if result.requested_skills:
+        combined = list(dict.fromkeys(session.loaded_skill_ids + result.requested_skills))
+        if len(combined) > 2:
+            logger.warning(
+                "intake_skills_capped",
+                project_id=project_id,
+                kept=combined[:2],
+                dropped=combined[2:],
+            )
+        session.loaded_skill_ids = combined[:2]
 
     return result
 

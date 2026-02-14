@@ -16,6 +16,7 @@ import structlog
 from temporalio import activity
 from temporalio.exceptions import ApplicationError
 
+from app.activities import skill_loader
 from app.models.contracts import (
     ChatMessage,
     DesignBrief,
@@ -239,6 +240,15 @@ INTAKE_TOOLS: list[dict[str, Any]] = [
                         "texture, furniture, clutter, mood, lifestyle, constraints"
                     ),
                 },
+                "requested_skills": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": (
+                        "Style skill IDs to load for the NEXT turn. Request when you "
+                        "detect the user's style direction. Max 2. Check the skill "
+                        "summary table for valid IDs."
+                    ),
+                },
             },
             "required": ["message"],
         },
@@ -344,6 +354,7 @@ def load_system_prompt(
     turn_number: int,
     previous_brief: dict[str, Any] | None = None,
     room_analysis: dict[str, Any] | None = None,
+    loaded_skill_ids: list[str] | None = None,
 ) -> str:
     """Load and customize the system prompt for the given mode and turn.
 
@@ -351,6 +362,8 @@ def load_system_prompt(
     structured context so the model never loses gathered information.
     If room_analysis is provided (from eager photo analysis), it's injected
     as pre-observation context so the agent starts with a hypothesis.
+    If loaded_skill_ids is provided, the corresponding style guide content
+    is injected into the prompt for deep style knowledge.
     """
     global _system_prompt_cache  # noqa: PLW0603
     if _system_prompt_cache is None:
@@ -368,6 +381,17 @@ def load_system_prompt(
     # Inject room analysis context if available
     analysis_section = _format_room_analysis_section(room_analysis)
     prompt = prompt.replace("{room_analysis_section}", analysis_section)
+
+    # Inject skill system: compact summary table + loaded skill content
+    manifest = skill_loader.load_manifest()
+    prompt = prompt.replace(
+        "{skill_summary_table}",
+        skill_loader.build_skill_summary_block(manifest),
+    )
+    prompt = prompt.replace(
+        "{loaded_skills_section}",
+        skill_loader.build_loaded_skills_block(loaded_skill_ids or []),
+    )
 
     # Inject previous brief context so the model builds on prior turns
     if previous_brief and turn_number > 1:
@@ -695,7 +719,10 @@ async def _run_intake_core(input: IntakeChatInput) -> IntakeChatOutput:
     # Extract previous brief and room analysis from project context
     previous_brief: dict[str, Any] | None = input.project_context.get("previous_brief")
     room_analysis: dict[str, Any] | None = input.project_context.get("room_analysis")
-    system_prompt = load_system_prompt(input.mode, turn_number, previous_brief, room_analysis)
+    loaded_skill_ids: list[str] = input.project_context.get("loaded_skill_ids", [])
+    system_prompt = load_system_prompt(
+        input.mode, turn_number, previous_brief, room_analysis, loaded_skill_ids
+    )
 
     # Extract photos from project context for multimodal first turn
     room_photo_urls: list[str] = input.project_context.get("room_photos", [])
@@ -716,6 +743,7 @@ async def _run_intake_core(input: IntakeChatInput) -> IntakeChatOutput:
         has_room_photos=len(room_photo_urls) > 0,
         has_inspiration_photos=len(inspo_photo_urls) > 0,
         has_previous_brief=previous_brief is not None,
+        loaded_skill_ids=loaded_skill_ids,
         history_len=len(input.conversation_history),
     )
 
@@ -752,6 +780,17 @@ async def _run_intake_core(input: IntakeChatInput) -> IntakeChatOutput:
         fallback = "I'm here to help with your room design. Tell me about the room?"
         agent_message = " ".join(text_parts) if text_parts else fallback
         skill_data = {"message": agent_message}
+
+    # Extract requested_skills from interview_client calls
+    requested_skills: list[str] = []
+    if skill_name == "interview_client":
+        raw_skills = skill_data.get("requested_skills", [])
+        if not isinstance(raw_skills, list):
+            log.warning("intake_requested_skills_bad_type", got=type(raw_skills).__name__)
+            raw_skills = []
+        manifest = skill_loader.load_manifest()
+        valid_ids = {s.skill_id for s in manifest.skills}
+        requested_skills = [s for s in raw_skills if isinstance(s, str) and s in valid_ids][:2]
 
     # Build output based on which skill was chosen
     max_turns = MAX_TURNS.get(input.mode, 4)
@@ -795,6 +834,14 @@ async def _run_intake_core(input: IntakeChatInput) -> IntakeChatOutput:
         output_tokens=response.usage.output_tokens,
     )
 
+    # Build partial/complete brief and stamp loaded skills
+    partial_brief = build_brief(brief_data) if brief_data else None
+    if partial_brief:
+        if loaded_skill_ids:
+            partial_brief.style_skills_used = loaded_skill_ids
+        elif brief_data and isinstance(brief_data.get("style_skills_used"), list):
+            partial_brief.style_skills_used = brief_data["style_skills_used"]
+
     return IntakeChatOutput(
         agent_message=skill_data.get("message", ""),
         options=build_options(skill_data.get("options")),
@@ -804,7 +851,8 @@ async def _run_intake_core(input: IntakeChatInput) -> IntakeChatOutput:
             f" — {len(domains_covered)}/{total_domains} domains covered"
         ),
         is_summary=is_summary,
-        partial_brief=build_brief(brief_data) if brief_data else None,
+        partial_brief=partial_brief,
+        requested_skills=requested_skills,
     )
 
 
