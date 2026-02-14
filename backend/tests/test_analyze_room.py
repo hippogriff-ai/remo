@@ -404,6 +404,30 @@ class TestAnalyzeRoomPhotosActivity:
         assert exc_info.value.non_retryable is False
 
     @pytest.mark.asyncio
+    async def test_auth_error_non_retryable(self):
+        """401 Unauthorized should raise non-retryable ApplicationError."""
+        mock_client = MagicMock()
+        mock_client.messages.create = AsyncMock(
+            side_effect=anthropic.AuthenticationError(
+                message="Invalid API key",
+                response=MagicMock(status_code=401, headers={}),
+                body=None,
+            )
+        )
+
+        with (
+            patch.dict("os.environ", {"ANTHROPIC_API_KEY": "bad-key"}),
+            patch("app.activities.analyze_room.anthropic.AsyncAnthropic", return_value=mock_client),
+            pytest.raises(ApplicationError, match="API error") as exc_info,
+        ):
+            from app.activities.analyze_room import analyze_room_photos
+
+            input = AnalyzeRoomPhotosInput(room_photo_urls=["https://r2.example.com/room.jpg"])
+            await analyze_room_photos(input)
+
+        assert exc_info.value.non_retryable is True
+
+    @pytest.mark.asyncio
     async def test_r2_resolve_failure_propagates(self):
         """R2 URL resolution failure should propagate as an unhandled exception."""
         mock_resolve = MagicMock(side_effect=Exception("R2 service unavailable"))

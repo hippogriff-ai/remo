@@ -728,8 +728,9 @@ async def _run_intake_core(input: IntakeChatInput) -> IntakeChatOutput:
             log.error("intake_content_policy", turn=turn_number)
             raise ApplicationError(f"Content policy violation: {e}", non_retryable=True) from e
         log.error("intake_api_error", status=e.status_code, turn=turn_number)
+        non_retryable = 400 <= e.status_code < 500
         raise ApplicationError(
-            f"Claude API error ({e.status_code}): {e}", non_retryable=False
+            f"Claude API error ({e.status_code}): {e}", non_retryable=non_retryable
         ) from e
 
     skill_name, skill_data = extract_skill_call(response)

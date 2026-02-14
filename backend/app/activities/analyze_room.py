@@ -354,8 +354,9 @@ async def analyze_room_photos(
         raise ApplicationError(f"Claude rate limited: {e}", non_retryable=False) from e
     except anthropic.APIStatusError as e:
         log.error("analyze_room_api_error", status=e.status_code)
+        non_retryable = 400 <= e.status_code < 500
         raise ApplicationError(
-            f"Claude API error ({e.status_code}): {e}", non_retryable=False
+            f"Claude API error ({e.status_code}): {e}", non_retryable=non_retryable
         ) from e
 
     data = extract_analysis(response)

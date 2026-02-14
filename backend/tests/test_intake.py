@@ -1455,3 +1455,49 @@ class TestIntakeErrorHandling:
         with pytest.raises(ApplicationError) as exc_info:
             asyncio.run(_run_intake_core(self._make_input()))
         assert exc_info.value.non_retryable is False
+
+    @patch.dict("os.environ", {"ANTHROPIC_API_KEY": "test-key"})
+    @patch("app.activities.intake.anthropic.AsyncAnthropic")
+    def test_auth_error_is_non_retryable(self, mock_client_cls):
+        """401 Unauthorized should raise non-retryable ApplicationError."""
+        import anthropic
+        import pytest
+        from temporalio.exceptions import ApplicationError
+
+        error = anthropic.AuthenticationError(
+            message="Invalid API key",
+            response=_make_httpx_response(401),
+            body=None,
+        )
+        mock_instance = MagicMock()
+        mock_instance.messages = MagicMock()
+        mock_instance.messages.create = AsyncMock(side_effect=error)
+        mock_client_cls.return_value = mock_instance
+
+        with pytest.raises(ApplicationError) as exc_info:
+            asyncio.run(_run_intake_core(self._make_input()))
+        assert exc_info.value.non_retryable is True
+
+
+class TestRunIntakeChatWrapper:
+    """Test the Temporal activity wrapper delegates to _run_intake_core."""
+
+    @patch("app.activities.intake._run_intake_core")
+    def test_delegates_to_core(self, mock_core):
+        """run_intake_chat should directly call _run_intake_core with the same input."""
+        from app.activities.intake import run_intake_chat
+
+        mock_output = MagicMock()
+        mock_core.return_value = mock_output
+
+        input_data = IntakeChatInput(
+            mode="full",
+            project_context={"project_id": "test-proj"},
+            conversation_history=[],
+            user_message="hello",
+        )
+
+        result = asyncio.run(run_intake_chat(input_data))
+
+        mock_core.assert_called_once_with(input_data)
+        assert result is mock_output

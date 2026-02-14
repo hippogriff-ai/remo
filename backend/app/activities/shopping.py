@@ -1319,7 +1319,7 @@ async def generate_shopping_list(
         ) from e
     except anthropic.APIStatusError as e:
         log.error("shopping_extraction_api_error", status=e.status_code)
-        non_retryable = e.status_code == 400
+        non_retryable = 400 <= e.status_code < 500
         raise ApplicationError(
             f"Claude API error during extraction ({e.status_code}): {e}",
             non_retryable=non_retryable,
@@ -1360,7 +1360,7 @@ async def generate_shopping_list(
         ) from e
     except anthropic.APIStatusError as e:
         log.error("shopping_scoring_api_error", status=e.status_code)
-        non_retryable = e.status_code == 400
+        non_retryable = 400 <= e.status_code < 500
         raise ApplicationError(
             f"Claude API error during scoring ({e.status_code}): {e}",
             non_retryable=non_retryable,

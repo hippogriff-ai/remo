@@ -2089,3 +2089,223 @@ class TestParseProductDimsCmRugCategory:
         assert result is not None
         w, d, h = result
         assert abs(w - 84 * 2.54) < 1.0
+
+
+# === Gap Tests: search_all_items, auth errors, R2 resolution, caching ===
+
+
+class TestSearchAllItems:
+    """Direct tests for the search_all_items orchestrator."""
+
+    def test_gathers_results_for_multiple_items(self):
+        """search_all_items should return one result list per input item."""
+        items = [
+            {"category": "Sofa", "description": "velvet sofa"},
+            {"category": "Lamp", "description": "floor lamp"},
+            {"category": "Rug", "description": "area rug"},
+        ]
+
+        async def mock_search(http_client, item, api_key, **kwargs):
+            return [{"title": f"Result for {item['category']}", "url": "https://a.com"}]
+
+        with patch("app.activities.shopping.search_products_for_item", side_effect=mock_search):
+            from app.activities.shopping import search_all_items
+
+            results = asyncio.run(search_all_items(items, "fake-key"))
+
+        assert len(results) == 3
+        assert results[0][0]["title"] == "Result for Sofa"
+        assert results[1][0]["title"] == "Result for Lamp"
+        assert results[2][0]["title"] == "Result for Rug"
+
+    def test_passes_room_dimensions(self):
+        """search_all_items should forward room_dimensions to each search call."""
+        dims = RoomDimensions(width_m=4.0, length_m=5.0, height_m=2.7)
+        items = [{"category": "Sofa", "description": "sofa"}]
+        captured_kwargs: list[dict] = []
+
+        async def mock_search(http_client, item, api_key, **kwargs):
+            captured_kwargs.append(kwargs)
+            return []
+
+        with patch("app.activities.shopping.search_products_for_item", side_effect=mock_search):
+            from app.activities.shopping import search_all_items
+
+            asyncio.run(search_all_items(items, "fake-key", room_dimensions=dims))
+
+        assert captured_kwargs[0]["room_dimensions"] is dims
+
+    def test_empty_items_returns_empty(self):
+        """search_all_items with no items should return empty list."""
+        from app.activities.shopping import search_all_items
+
+        results = asyncio.run(search_all_items([], "fake-key"))
+        assert results == []
+
+
+class TestAuthErrorNonRetryable:
+    """401/403 auth errors should be non-retryable across all activities."""
+
+    def _make_input(self) -> GenerateShoppingListInput:
+        return GenerateShoppingListInput(
+            design_image_url="https://example.com/design.jpg",
+            original_room_photo_urls=["https://example.com/room.jpg"],
+        )
+
+    @patch.dict(
+        "os.environ",
+        {"ANTHROPIC_API_KEY": "test-key", "EXA_API_KEY": "test-exa"},
+    )
+    @patch("app.activities.shopping.extract_items")
+    def test_extraction_401_is_non_retryable(self, mock_extract):
+        """401 Unauthorized during extraction should be non-retryable."""
+        import pytest
+        from temporalio.exceptions import ApplicationError
+
+        mock_extract.side_effect = anthropic.AuthenticationError(
+            message="Invalid API key",
+            response=_make_httpx_response(401),
+            body=None,
+        )
+
+        with pytest.raises(ApplicationError) as exc_info:
+            asyncio.run(generate_shopping_list(self._make_input()))
+        assert exc_info.value.non_retryable is True
+
+    @patch.dict(
+        "os.environ",
+        {"ANTHROPIC_API_KEY": "test-key", "EXA_API_KEY": "test-exa"},
+    )
+    @patch("app.activities.shopping.extract_items")
+    def test_extraction_403_is_non_retryable(self, mock_extract):
+        """403 Forbidden during extraction should be non-retryable."""
+        import pytest
+        from temporalio.exceptions import ApplicationError
+
+        mock_extract.side_effect = anthropic.PermissionDeniedError(
+            message="Forbidden",
+            response=_make_httpx_response(403),
+            body=None,
+        )
+
+        with pytest.raises(ApplicationError) as exc_info:
+            asyncio.run(generate_shopping_list(self._make_input()))
+        assert exc_info.value.non_retryable is True
+
+    @patch.dict(
+        "os.environ",
+        {"ANTHROPIC_API_KEY": "test-key", "EXA_API_KEY": "test-exa"},
+    )
+    @patch("app.activities.shopping.score_all_products")
+    @patch("app.activities.shopping.search_all_items")
+    @patch("app.activities.shopping.extract_items")
+    def test_scoring_401_is_non_retryable(self, mock_extract, mock_search, mock_score):
+        """401 Unauthorized during scoring should be non-retryable."""
+        import pytest
+        from temporalio.exceptions import ApplicationError
+
+        mock_extract.return_value = [{"item_name": "Sofa", "search_priority": "HIGH"}]
+        mock_search.return_value = [[{"url": "https://example.com", "title": "Sofa"}]]
+        mock_score.side_effect = anthropic.AuthenticationError(
+            message="Invalid API key",
+            response=_make_httpx_response(401),
+            body=None,
+        )
+
+        with pytest.raises(ApplicationError) as exc_info:
+            asyncio.run(generate_shopping_list(self._make_input()))
+        assert exc_info.value.non_retryable is True
+
+
+class TestR2ResolutionInShopping:
+    """Verify R2 storage keys are resolved before use in the shopping pipeline."""
+
+    @patch.dict(
+        "os.environ",
+        {"ANTHROPIC_API_KEY": "test-key", "EXA_API_KEY": "test-exa"},
+    )
+    @patch("app.activities.shopping.extract_items")
+    @patch("app.utils.r2.resolve_url")
+    @patch("app.utils.r2.resolve_urls")
+    def test_r2_keys_resolved_to_presigned_urls(
+        self, mock_resolve_urls, mock_resolve_url, mock_extract
+    ):
+        """R2 storage keys should be resolved to presigned URLs before pipeline starts."""
+        mock_resolve_url.return_value = "https://presigned.r2/design.jpg"
+        mock_resolve_urls.return_value = ["https://presigned.r2/room.jpg"]
+        mock_extract.return_value = []  # short-circuit: no items → pipeline ends
+
+        input_data = GenerateShoppingListInput(
+            design_image_url="projects/p1/design.jpg",
+            original_room_photo_urls=["projects/p1/room.jpg"],
+        )
+
+        result = asyncio.run(generate_shopping_list(input_data))
+
+        mock_resolve_url.assert_called_once_with("projects/p1/design.jpg")
+        mock_resolve_urls.assert_called_once_with(["projects/p1/room.jpg"])
+        assert result.items == []
+
+
+class TestScoringCachePaths:
+    """Verify LLM response cache hit/miss paths in score_product."""
+
+    def _make_item(self) -> dict:
+        return {"category": "Sofa", "description": "velvet sofa", "style": "modern"}
+
+    def _make_product(self) -> dict:
+        return {"title": "Nice Sofa", "url": "https://store.com/sofa", "text": "$599"}
+
+    @patch("app.utils.llm_cache.get_cached")
+    @patch("app.utils.llm_cache.set_cached")
+    def test_cache_hit_returns_cached_scores(self, mock_set, mock_get):
+        """When cache has a hit, score_product should return cached data without API call."""
+        cached_data = {
+            "weighted_total": 0.85,
+            "why_matched": "cached match",
+            "category_score": 1.0,
+        }
+        mock_get.return_value = cached_data
+
+        mock_client = MagicMock()
+
+        result = asyncio.run(
+            score_product(mock_client, self._make_item(), self._make_product(), None)
+        )
+
+        # API should NOT be called
+        mock_client.messages.create.assert_not_called()
+        assert result["weighted_total"] == 0.85
+        # Product metadata should be restored
+        assert result["product_url"] == "https://store.com/sofa"
+        assert result["product_name"] == "Nice Sofa"
+        mock_set.assert_not_called()
+
+    @patch("app.utils.llm_cache.get_cached")
+    @patch("app.utils.llm_cache.set_cached")
+    def test_cache_miss_calls_api_and_caches(self, mock_set, mock_get):
+        """When cache misses, score_product should call API and cache the result."""
+        mock_get.return_value = None
+
+        mock_response = MagicMock()
+        mock_response.content = [
+            MagicMock(
+                text='{"weighted_total": 0.9, "why_matched": "great match", '
+                '"category_score": 1.0, "material_score": 0.8, '
+                '"color_score": 0.7, "style_score": 0.6, "dimensions_score": 0.5}'
+            )
+        ]
+        mock_response.usage.input_tokens = 100
+        mock_response.usage.output_tokens = 50
+
+        mock_client = MagicMock()
+        mock_client.messages = MagicMock()
+        mock_client.messages.create = AsyncMock(return_value=mock_response)
+
+        result = asyncio.run(
+            score_product(mock_client, self._make_item(), self._make_product(), None)
+        )
+
+        mock_client.messages.create.assert_called_once()
+        mock_set.assert_called_once()
+        assert result["weighted_total"] == 0.9
