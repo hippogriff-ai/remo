@@ -97,6 +97,16 @@ def _build_edit_instructions(annotations: list[AnnotationRegion]) -> str:
     return "\n".join(lines)
 
 
+def _build_eval_instruction(input: EditDesignInput) -> str:
+    """Build a combined instruction string for eval from annotations and/or feedback."""
+    parts = []
+    if input.annotations:
+        parts.append(_build_edit_instructions(input.annotations))
+    if input.feedback:
+        parts.append(input.feedback)
+    return "\n".join(parts) if parts else "edit"
+
+
 def _upload_image(image: Image.Image, project_id: str) -> str:
     """Upload revised image to R2 and return presigned URL."""
     import uuid
@@ -441,7 +451,7 @@ async def edit_design(input: EditDesignInput) -> EditDesignOutput:
                 original_image=original_image,
                 original_url=resolved_input.base_image_url,
                 revised_url=revised_url,
-                instruction=input.feedback or "annotation edit",
+                instruction=_build_eval_instruction(input),
             )
         )
 
