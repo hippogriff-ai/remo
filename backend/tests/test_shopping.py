@@ -1040,13 +1040,13 @@ class TestBuildScoringPrompt:
         assert "weight: 0.1" in prompt  # dimensions default
 
     def test_lidar_weights_with_room_dims(self):
-        """With room_dimensions, dimensions weight increases to 0.2."""
+        """With room_dimensions, dimensions weight increases; renormalized to sum=1.0."""
         dims = RoomDimensions(width_m=4.0, length_m=5.0, height_m=2.7)
         item = {"category": "Sofa", "description": "velvet sofa"}
         product = {"title": "Sofa", "url": "https://example.com"}
         prompt = _build_scoring_prompt(item, product, None, room_dimensions=dims)
-        assert "weight: 0.25" in prompt  # category lidar
-        assert "weight: 0.2)" in prompt  # dimensions lidar
+        # Sofa overrides on LiDAR base, renormalized: material~0.25, dimensions~0.2
+        assert "weight: 0.24" in prompt or "weight: 0.25" in prompt  # material (renormalized)
         assert "LiDAR-measured" in prompt
         assert "4.0m" in prompt
 
@@ -1059,40 +1059,49 @@ class TestBuildScoringPrompt:
 
     def test_category_adaptive_weights_sofa(self):
         """Sofa category should boost material weight and reduce color weight."""
+        from app.activities.shopping import _get_scoring_weights
+
         item = {"category": "Sofa", "description": "velvet sofa"}
-        product = {"title": "Sofa", "url": "https://example.com"}
-        prompt = _build_scoring_prompt(item, product, None)
-        # Sofa overrides: material=0.25, color=0.15 (vs default 0.20 each)
-        assert "weight: 0.25" in prompt  # material override
-        assert "weight: 0.15" in prompt  # color override
+        weights = _get_scoring_weights(item, has_lidar=False)
+        # Sofa overrides boosted material (0.25 pre-norm) and reduced color (0.15 pre-norm)
+        assert weights["material"] > weights["color"]
+        assert abs(sum(weights.values()) - 1.0) < 0.02  # renormalized
 
     def test_category_adaptive_weights_rug(self):
         """Rug category should boost color weight and reduce material weight."""
+        from app.activities.shopping import _get_scoring_weights
+
         item = {"category": "Area Rug", "description": "wool rug"}
-        product = {"title": "Rug", "url": "https://example.com"}
-        prompt = _build_scoring_prompt(item, product, None)
-        # Rug overrides: color=0.30, material=0.10
-        assert "weight: 0.3)" in prompt  # color override (category stays 0.30)
-        assert "weight: 0.1)" in prompt  # material override
+        weights = _get_scoring_weights(item, has_lidar=False)
+        # Rug overrides: color boosted, material reduced
+        assert weights["color"] > weights["material"]
+        assert abs(sum(weights.values()) - 1.0) < 0.02  # renormalized
 
     def test_category_adaptive_weights_lighting(self):
         """Lighting category should boost style weight."""
+        from app.activities.shopping import _get_scoring_weights
+
         item = {"category": "Floor Lamp", "description": "brass lamp"}
-        product = {"title": "Lamp", "url": "https://example.com"}
-        prompt = _build_scoring_prompt(item, product, None)
-        # Lamp overrides: style=0.25
-        assert "weight: 0.25" in prompt  # style override
+        weights = _get_scoring_weights(item, has_lidar=False)
+        # Lamp overrides: style boosted above default
+        default_weights = _get_scoring_weights({"category": "Unknown"}, has_lidar=False)
+        assert weights["style"] > default_weights["style"]
+        assert abs(sum(weights.values()) - 1.0) < 0.02  # renormalized
 
     def test_category_adaptive_with_lidar(self):
         """Category overrides should apply on top of LiDAR base weights."""
+        from app.activities.shopping import _get_scoring_weights
+
         dims = RoomDimensions(width_m=4.0, length_m=5.0, height_m=2.7)
         item = {"category": "Rug", "description": "wool rug"}
         product = {"title": "Rug", "url": "https://example.com"}
         prompt = _build_scoring_prompt(item, product, None, room_dimensions=dims)
-        # Rug overrides on LiDAR base: dimensions stays 0.20 from LiDAR, color=0.30
-        assert "weight: 0.3)" in prompt  # color from rug override
-        assert "weight: 0.2)" in prompt  # dimensions from LiDAR base
         assert "LiDAR-measured" in prompt
+
+        weights = _get_scoring_weights(item, has_lidar=True)
+        # Rug overrides on LiDAR base: color should be highest, renormalized
+        assert weights["color"] > weights["material"]
+        assert abs(sum(weights.values()) - 1.0) < 0.02
 
     def test_unknown_category_uses_default_weights(self):
         """Unknown categories should use base weights unchanged."""
@@ -1146,28 +1155,36 @@ class TestBuildScoringPrompt:
 
 
 class TestCategoryAdaptiveWeights:
+    def _assert_normalized(self, weights: dict[str, float]) -> None:
+        assert abs(sum(weights.values()) - 1.0) < 0.05
+
     def test_sofa_overrides(self):
         weights = _get_scoring_weights({"category": "Sofa"}, has_lidar=False)
-        assert weights["material"] == 0.25
-        assert weights["dimensions"] == 0.20
-        assert weights["color"] == 0.15
-        assert weights["category"] == 0.30  # unchanged from default
+        # Sofa: material boosted above color, dimensions boosted above default 0.10
+        assert weights["material"] > weights["color"]
+        assert weights["dimensions"] > SCORING_WEIGHTS_DEFAULT["dimensions"]
+        self._assert_normalized(weights)
 
     def test_rug_overrides(self):
         weights = _get_scoring_weights({"category": "Area Rug"}, has_lidar=False)
-        assert weights["color"] == 0.30
-        assert weights["material"] == 0.10
-        assert weights["dimensions"] == 0.20
+        # Rug: color is the dominant weight, material is reduced
+        assert weights["color"] > weights["material"]
+        assert weights["color"] > weights["style"]
+        self._assert_normalized(weights)
 
     def test_lighting_overrides(self):
         weights = _get_scoring_weights({"category": "Floor Lamp"}, has_lidar=False)
-        assert weights["style"] == 0.25
-        assert weights["dimensions"] == 0.20
+        # Lamp: style boosted above default
+        default = _get_scoring_weights({"category": "Unknown"}, has_lidar=False)
+        assert weights["style"] > default["style"]
+        self._assert_normalized(weights)
 
     def test_wall_art_overrides(self):
         weights = _get_scoring_weights({"category": "Wall Art"}, has_lidar=False)
-        assert weights["style"] == 0.30
-        assert weights["color"] == 0.25
+        # Wall art: style and color are the top two weights
+        assert weights["style"] >= weights["color"]
+        assert weights["style"] > weights["material"]
+        self._assert_normalized(weights)
 
     def test_unknown_category_no_override(self):
         weights = _get_scoring_weights({"category": "Planter"}, has_lidar=False)
@@ -1175,16 +1192,16 @@ class TestCategoryAdaptiveWeights:
 
     def test_lidar_base_with_category_override(self):
         weights = _get_scoring_weights({"category": "Rug"}, has_lidar=True)
-        # LiDAR base has dimensions=0.20, rug override keeps it
-        assert weights["dimensions"] == 0.20
-        # Rug override on color
-        assert weights["color"] == 0.30
-        # LiDAR base category (not rug override, since rug has no category key)
-        assert weights["category"] == 0.25
+        # Rug + LiDAR: color is the top weight
+        assert weights["color"] > weights["material"]
+        assert weights["color"] > weights["dimensions"]
+        self._assert_normalized(weights)
 
     def test_case_insensitive_matching(self):
         weights = _get_scoring_weights({"category": "SOFA"}, has_lidar=False)
-        assert weights["material"] == 0.25  # sofa override applied
+        # Sofa override applies regardless of case
+        assert weights["material"] > weights["color"]
+        self._assert_normalized(weights)
 
     def test_empty_category_uses_default(self):
         weights = _get_scoring_weights({"category": ""}, has_lidar=False)

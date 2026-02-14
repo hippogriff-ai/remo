@@ -514,13 +514,15 @@ async def generate_designs(input: GenerateDesignsInput) -> GenerateDesignsOutput
         url_0 = await asyncio.to_thread(_upload_image, option_0, project_id, "option_0.png")
         url_1 = await asyncio.to_thread(_upload_image, option_1, project_id, "option_1.png")
 
-        # Run eval if enabled — never blocks, never fails the activity
-        await _maybe_run_eval(
-            options=[option_0, option_1],
-            original=room_images[0],
-            brief=input.design_brief,
-            generated_urls=[url_0, url_1],
-            original_url=input.room_photo_urls[0],
+        # Run eval if enabled — fire-and-forget, never blocks the activity
+        asyncio.create_task(
+            _maybe_run_eval(
+                options=[option_0, option_1],
+                original=room_images[0],
+                brief=input.design_brief,
+                generated_urls=[url_0, url_1],
+                original_url=room_urls[0],
+            )
         )
 
         return GenerateDesignsOutput(

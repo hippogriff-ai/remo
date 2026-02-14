@@ -303,6 +303,7 @@ async def _continue_chat(
 
 async def _maybe_run_edit_eval(
     result_image: Image.Image,
+    original_image: Image.Image,
     original_url: str,
     revised_url: str,
     instruction: str,
@@ -315,7 +316,7 @@ async def _maybe_run_edit_eval(
     try:
         from app.utils.image_eval import run_fast_eval
 
-        fast = run_fast_eval(result_image, result_image, brief=None, is_edit=True)
+        fast = run_fast_eval(result_image, original_image, brief=None, is_edit=True)
         logger.info(
             "eval_edit_fast_result",
             composite=fast.composite_score,
@@ -383,9 +384,11 @@ async def edit_design(input: EditDesignInput) -> EditDesignOutput:
     )
 
     try:
+        original_image: Image.Image | None = None
         if resolved_input.chat_history_key is None:
             # First call: bootstrap — always needs the base image
             base_image = await download_image(resolved_input.base_image_url)
+            original_image = base_image
             chat, result_image = await _bootstrap_chat(resolved_input, base_image)
 
             if result_image is None:
@@ -408,6 +411,7 @@ async def edit_design(input: EditDesignInput) -> EditDesignOutput:
                 if resolved_input.annotations
                 else None
             )
+            original_image = cont_base
             result_image, updated_history = await _continue_chat(resolved_input, cont_base)
 
             if result_image is None:
@@ -426,12 +430,19 @@ async def edit_design(input: EditDesignInput) -> EditDesignOutput:
                 serialize_contents_to_r2, updated_history, resolved_input.project_id
             )
 
-        # Run eval if enabled — never blocks, never fails the activity
-        await _maybe_run_edit_eval(
-            result_image=result_image,
-            original_url=input.base_image_url,
-            revised_url=revised_url,
-            instruction=input.feedback or "annotation edit",
+        # Download original for eval if not already available (text-only continue path)
+        if original_image is None:
+            original_image = await download_image(resolved_input.base_image_url)
+
+        # Run eval if enabled — fire-and-forget, never blocks the activity
+        asyncio.create_task(
+            _maybe_run_edit_eval(
+                result_image=result_image,
+                original_image=original_image,
+                original_url=resolved_input.base_image_url,
+                revised_url=revised_url,
+                instruction=input.feedback or "annotation edit",
+            )
         )
 
         return EditDesignOutput(

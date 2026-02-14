@@ -255,7 +255,7 @@ class TestEvaluateGeneration:
             patch(
                 "app.activities.design_eval._load_image_base64",
                 new_callable=AsyncMock,
-                return_value="fake_b64",
+                return_value=("fake_b64", "image/jpeg"),
             ),
         ):
             result = await evaluate_generation(
@@ -292,7 +292,7 @@ class TestEvaluateGeneration:
             patch(
                 "app.activities.design_eval._load_image_base64",
                 new_callable=AsyncMock,
-                return_value="fake_b64",
+                return_value=("fake_b64", "image/jpeg"),
             ),
         ):
             result = await evaluate_generation(
@@ -340,7 +340,7 @@ class TestEvaluateEdit:
             patch(
                 "app.activities.design_eval._load_image_base64",
                 new_callable=AsyncMock,
-                return_value="fake_b64",
+                return_value=("fake_b64", "image/jpeg"),
             ),
         ):
             result = await evaluate_edit(
@@ -388,7 +388,7 @@ class TestEvaluateShoppingVisual:
             patch(
                 "app.activities.design_eval._load_image_base64",
                 new_callable=AsyncMock,
-                return_value="fake_b64",
+                return_value=("fake_b64", "image/jpeg"),
             ),
         ):
             result = await evaluate_shopping_visual(

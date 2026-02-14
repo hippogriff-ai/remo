@@ -535,11 +535,11 @@ def _build_search_queries(
 
     queries = []
     if tag == "BRIEF_ANCHORED":
-        ref = item.get("source_reference", description)
+        ref = str(item.get("source_reference") or description)
         queries.append(ref)
         queries.append(f"{category} {style} {material} furniture")
     elif tag == "ITERATION_ANCHORED":
-        ref = item.get("source_reference", description)
+        ref = str(item.get("source_reference") or description)
         queries.append(ref)
         queries.append(f"{category} {material} {color} furniture")
     else:
@@ -917,6 +917,10 @@ def _get_scoring_weights(
         if keyword in category:
             base.update(overrides)
             break
+    # Renormalize so weights sum to 1.0 after category overrides
+    total = sum(base.values())
+    if total > 0 and total != 1.0:
+        base = {k: round(v / total, 2) for k, v in base.items()}
     return base
 
 
@@ -989,7 +993,7 @@ def _build_scoring_prompt(
         )
 
     # Enrich product description with structured summary data when available
-    product_description = product.get("text", product.get("title", ""))
+    product_description = product.get("text") or product.get("title") or ""
     summary_section = _format_summary_section(product)
     if summary_section:
         product_description += summary_section

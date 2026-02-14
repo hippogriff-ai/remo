@@ -279,8 +279,8 @@ _SHOPPING_CRITERIA_MAX = {
 # ---------------------------------------------------------------------------
 
 
-async def _load_image_base64(url: str) -> str:
-    """Download an image from URL and return base64-encoded bytes."""
+async def _load_image_base64(url: str) -> tuple[str, str]:
+    """Download an image from URL and return (base64-encoded bytes, media_type)."""
     async with httpx.AsyncClient() as client:
         try:
             resp = await client.get(url, timeout=15.0)
@@ -291,7 +291,10 @@ async def _load_image_base64(url: str) -> str:
         except httpx.TimeoutException:
             log.error("eval_image_download_timeout", url=url)
             raise
-        return base64.standard_b64encode(resp.content).decode("ascii")
+        content_type = resp.headers.get("content-type", "").split(";")[0].strip()
+        if content_type not in ("image/jpeg", "image/png", "image/gif", "image/webp"):
+            content_type = "image/png" if url.lower().endswith(".png") else "image/jpeg"
+        return base64.standard_b64encode(resp.content).decode("ascii"), content_type
 
 
 def _image_content_block(base64_data: str, media_type: str = "image/jpeg") -> dict[str, Any]:
@@ -377,8 +380,8 @@ async def evaluate_generation(
     Downloads both images, sends them to Claude Sonnet with the brief
     and rubric, and returns per-criterion scores.
     """
-    orig_b64 = await _load_image_base64(original_photo_url)
-    gen_b64 = await _load_image_base64(generated_image_url)
+    orig_b64, orig_mime = await _load_image_base64(original_photo_url)
+    gen_b64, gen_mime = await _load_image_base64(generated_image_url)
 
     brief_json = brief.model_dump_json(indent=2)
     prompt_text = (
@@ -389,9 +392,9 @@ async def evaluate_generation(
 
     content = [
         _text_block("Original room photo:"),
-        _image_content_block(orig_b64),
+        _image_content_block(orig_b64, orig_mime),
         _text_block("AI-generated redesign:"),
-        _image_content_block(gen_b64),
+        _image_content_block(gen_b64, gen_mime),
         _text_block(prompt_text),
     ]
 
@@ -420,8 +423,8 @@ async def evaluate_edit(
     Downloads both images, sends them to Claude Sonnet with the edit
     instruction and rubric, and returns per-criterion scores.
     """
-    orig_b64 = await _load_image_base64(original_image_url)
-    edit_b64 = await _load_image_base64(edited_image_url)
+    orig_b64, orig_mime = await _load_image_base64(original_image_url)
+    edit_b64, edit_mime = await _load_image_base64(edited_image_url)
 
     prompt_text = (
         f"{_EDIT_RUBRIC}\n\n## Edit instruction:\n{edit_instruction}\n\n{_EDIT_RESPONSE_FORMAT}"
@@ -429,9 +432,9 @@ async def evaluate_edit(
 
     content = [
         _text_block("Original image (before edit):"),
-        _image_content_block(orig_b64),
+        _image_content_block(orig_b64, orig_mime),
         _text_block("Edited image (after edit):"),
-        _image_content_block(edit_b64),
+        _image_content_block(edit_b64, edit_mime),
         _text_block(prompt_text),
     ]
 
@@ -459,8 +462,8 @@ async def evaluate_shopping_visual(
     Downloads the room and product images, sends them to Claude Sonnet
     with the product description and rubric.
     """
-    room_b64 = await _load_image_base64(room_image_url)
-    product_b64 = await _load_image_base64(product_image_url)
+    room_b64, room_mime = await _load_image_base64(room_image_url)
+    product_b64, product_mime = await _load_image_base64(product_image_url)
 
     prompt_text = (
         f"{_SHOPPING_RUBRIC}\n\n"
@@ -470,9 +473,9 @@ async def evaluate_shopping_visual(
 
     content = [
         _text_block("Redesigned room:"),
-        _image_content_block(room_b64),
+        _image_content_block(room_b64, room_mime),
         _text_block("Product image:"),
-        _image_content_block(product_b64),
+        _image_content_block(product_b64, product_mime),
         _text_block(prompt_text),
     ]
 
