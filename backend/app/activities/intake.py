@@ -725,7 +725,11 @@ async def _run_intake_core(input: IntakeChatInput) -> IntakeChatOutput:
     )
 
     # Extract photos from project context for multimodal first turn
-    room_photo_urls: list[str] = input.project_context.get("room_photos", [])
+    room_photo_urls: list[str] = (
+        input.project_context.get("room_photos", [])
+        if not room_analysis
+        else []
+    )
     inspo_photo_urls: list[str] = input.project_context.get("inspiration_photos", [])
     inspo_notes: list[dict[str, Any]] | None = input.project_context.get("inspiration_notes")
     messages = build_messages(
