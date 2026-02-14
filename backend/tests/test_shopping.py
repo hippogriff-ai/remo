@@ -135,6 +135,35 @@ class TestFormatRoomConstraints:
         assert "gray sofa (worn) [keep]" in text
         assert "bookshelf (good)" in text
 
+    def test_full_designer_brain_context_no_direct_dims(self):
+        """Full path: photo furniture + LiDAR dims via context, no direct dims."""
+        analysis = RoomAnalysis(
+            furniture=[
+                FurnitureObservation(
+                    item="gray sofa",
+                    condition="worn",
+                    keep_candidate=True,
+                ),
+                FurnitureObservation(item="bookshelf", condition="good"),
+            ]
+        )
+        ctx = RoomContext(
+            photo_analysis=analysis,
+            room_dimensions=RoomDimensions(
+                width_m=4.0,
+                length_m=5.0,
+                height_m=2.5,
+            ),
+            enrichment_sources=["photos", "lidar"],
+        )
+        text = _format_room_constraints_for_prompt(ctx, None)
+        assert "4.0m x 5.0m" in text
+        assert "LiDAR scan" in text
+        assert "Per-category size limits" in text
+        assert "gray sofa (worn) [keep]" in text
+        assert "bookshelf (good)" in text
+        assert "Detected furniture" in text
+
     def test_no_dimensions_no_context(self):
         text = _format_room_constraints_for_prompt(None, None)
         assert "No room dimensions available" in text
@@ -2032,6 +2061,179 @@ class TestFormatRoomConstraintsInvalidDims:
         # Should still produce room line but no category limits
         assert "0.0m x 0.0m" in result
         assert "Sofa" not in result
+
+
+class TestFormatRoomConstraintsSourceLabel:
+    """G21: Source label should reflect actual data origin, not just parameter presence."""
+
+    def test_context_lidar_dims_labeled_correctly(self):
+        """When dims come from room_context (LiDAR enriched), source should say 'LiDAR scan'."""
+        dims = RoomDimensions(width_m=4.0, length_m=5.0, height_m=2.5)
+        ctx = RoomContext(
+            room_dimensions=dims,
+            enrichment_sources=["photos", "lidar"],
+        )
+        # Direct room_dimensions param is None — dims come from context fallback
+        result = _format_room_constraints_for_prompt(ctx, None)
+        assert "4.0m x 5.0m" in result
+        assert "LiDAR scan" in result
+        assert "Per-category size limits" in result
+
+    def test_context_photo_only_dims_labeled_correctly(self):
+        """When context has dims from photos only (no LiDAR), source should say 'photo analysis'."""
+        dims = RoomDimensions(width_m=4.0, length_m=5.0, height_m=2.5)
+        ctx = RoomContext(
+            room_dimensions=dims,
+            enrichment_sources=["photos"],
+        )
+        result = _format_room_constraints_for_prompt(ctx, None)
+        assert "4.0m x 5.0m" in result
+        assert "photo analysis" in result
+
+    def test_context_dims_without_photo_analysis(self):
+        """Context with LiDAR dims but no photo_analysis should still format constraints."""
+        dims = RoomDimensions(width_m=4.0, length_m=5.0, height_m=2.5)
+        ctx = RoomContext(
+            photo_analysis=None,
+            room_dimensions=dims,
+            enrichment_sources=["lidar"],
+        )
+        result = _format_room_constraints_for_prompt(ctx, None)
+        assert "4.0m x 5.0m" in result
+        assert "Sofa" in result
+        # No furniture section since photo_analysis is None
+        assert "Detected furniture" not in result
+
+    def test_context_dims_with_empty_enrichment_sources(self):
+        """Default empty enrichment_sources falls back to 'photo analysis' source label."""
+        dims = RoomDimensions(width_m=4.0, length_m=5.0, height_m=2.5)
+        ctx = RoomContext(room_dimensions=dims)  # enrichment_sources defaults to []
+        result = _format_room_constraints_for_prompt(ctx, None)
+        assert "4.0m x 5.0m" in result
+        assert "photo analysis" in result
+
+    def test_context_with_none_enrichment_sources_no_crash(self):
+        """Defensive: enrichment_sources=None should not crash (or [] guard)."""
+        dims = RoomDimensions(width_m=4.0, length_m=5.0, height_m=2.5)
+        ctx = RoomContext(room_dimensions=dims, enrichment_sources=["photos"])
+        ctx.enrichment_sources = None  # type: ignore[assignment]  # bypass Pydantic
+        result = _format_room_constraints_for_prompt(ctx, None)
+        assert "4.0m x 5.0m" in result
+        assert "photo analysis" in result  # defaults to photo since guard converts None to []
+
+
+class TestComputeRoomConstraintsTinyRoom:
+    """Verify max(0, ...) guards prevent negative constraints in tiny rooms."""
+
+    def test_tiny_room_sofa_max_zero(self):
+        """1m × 1m room: usable wall (100-120) goes negative → sofa max = 0."""
+        dims = RoomDimensions(width_m=1.0, length_m=1.0, height_m=2.0)
+        c = _compute_room_constraints(dims)
+        assert float(c["sofa"]["max_width_cm"]) == 0
+        assert float(c["coffee_table"]["max_width_cm"]) == 0
+        assert float(c["dining_table"]["max_length_cm"]) == 0
+
+
+class TestComputeRoomConstraintsMinimumRoom:
+    """Verify constraints at MIN_DIMENSION_M boundary (0.3m × 0.3m × 0.3m).
+
+    This is the smallest valid room per the parser (G27). All constraints
+    should be zero or near-zero — the room is too small for any furniture.
+    """
+
+    def test_minimum_room_all_constraints_zero(self):
+        """0.3m room: all constraint values should be 0 (clamped by max(0,...))."""
+        dims = RoomDimensions(width_m=0.3, length_m=0.3, height_m=0.3)
+        c = _compute_room_constraints(dims)
+        assert float(c["sofa"]["max_width_cm"]) == 0
+        assert float(c["coffee_table"]["max_width_cm"]) == 0
+        assert float(c["dining_table"]["max_length_cm"]) == 0
+        assert float(c["floor_lamp"]["max_height_cm"]) == 0
+
+    def test_minimum_room_rug_positive(self):
+        """Rug constraint uses percentage, so it's positive even for tiny rooms."""
+        dims = RoomDimensions(width_m=0.3, length_m=0.3, height_m=0.3)
+        c = _compute_room_constraints(dims)
+        # 30cm * 0.80 = 24cm; 30cm * 0.70 = 21cm — small but positive
+        assert float(c["rug"]["width_cm"]) > 0
+        assert float(c["rug"]["length_cm"]) > 0
+
+
+class TestFormatRoomConstraintsEstimatedDimsFallback:
+    """Verify photo-estimated dimensions fallback path in _format_room_constraints_for_prompt.
+
+    When no precise dims (LiDAR or context.room_dimensions) exist,
+    the function should fall back to photo_analysis.estimated_dimensions.
+    """
+
+    def test_photo_estimated_dims_used_when_no_precise_dims(self):
+        """Context with photo_analysis but no room_dimensions uses estimated dims."""
+        analysis = RoomAnalysis(
+            room_type="living room",
+            estimated_dimensions="4m x 5m (approximate)",
+        )
+        ctx = RoomContext(
+            photo_analysis=analysis,
+            room_dimensions=None,
+            enrichment_sources=["photos"],
+        )
+        result = _format_room_constraints_for_prompt(ctx, None)
+        assert "4m x 5m (approximate)" in result
+        assert "photo analysis" in result.lower()
+        # Should NOT have per-category limits (no precise dims to compute from)
+        assert "Sofa" not in result
+
+    def test_no_dims_no_analysis_returns_unavailable(self):
+        """Completely empty context returns 'No room dimensions available.'"""
+        ctx = RoomContext(photo_analysis=None, room_dimensions=None)
+        result = _format_room_constraints_for_prompt(ctx, None)
+        assert "No room dimensions available" in result
+
+
+class TestFormatRoomConstraintsPrecedence:
+    """Verify direct room_dimensions takes precedence over room_context.room_dimensions.
+
+    In the real workflow, both come from the same source (scan_data.room_dimensions),
+    but the function signature allows them to differ. The direct parameter should win
+    per line 216: `dims = room_dimensions or (room_context.room_dimensions ...)`.
+    """
+
+    def test_direct_dims_override_context_dims(self):
+        """When both params differ, direct room_dimensions should be used in prompt."""
+        direct_dims = RoomDimensions(width_m=10.0, length_m=12.0, height_m=3.0)
+        context_dims = RoomDimensions(width_m=4.0, length_m=5.0, height_m=2.5)
+        ctx = RoomContext(
+            room_dimensions=context_dims,
+            enrichment_sources=["photos", "lidar"],
+        )
+        result = _format_room_constraints_for_prompt(ctx, direct_dims)
+        # Direct dims (10.0 x 12.0) should appear, not context dims (4.0 x 5.0)
+        assert "10.0m x 12.0m" in result
+        assert "4.0m x 5.0m" not in result
+        assert "LiDAR scan" in result
+
+    def test_context_dims_used_when_direct_is_none(self):
+        """When direct param is None, context.room_dimensions should be used."""
+        context_dims = RoomDimensions(width_m=4.0, length_m=5.0, height_m=2.5)
+        ctx = RoomContext(
+            room_dimensions=context_dims,
+            enrichment_sources=["photos"],
+        )
+        result = _format_room_constraints_for_prompt(ctx, None)
+        assert "4.0m x 5.0m" in result
+        assert "photo analysis" in result
+
+
+class TestDimensionFilterZeroDims:
+    """Verify filter_by_dimensions with zero-valued RoomDimensions."""
+
+    def test_zero_dims_no_annotation(self):
+        """Zero dimensions → empty constraints → products pass through without room_fit."""
+        dims = RoomDimensions(width_m=0, length_m=0, height_m=0)
+        items = [{"category": "Sofa"}]
+        scored = [[{"weighted_total": 0.8, "dimensions": "84x36x32 inches"}]]
+        result = filter_by_dimensions(items, scored, dims)
+        assert "room_fit" not in result[0][0]
 
 
 class TestDimensionFilterListMismatch:

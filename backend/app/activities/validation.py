@@ -131,9 +131,11 @@ _anthropic_client: anthropic.Anthropic | None = None
 
 def _get_anthropic_client() -> anthropic.Anthropic:
     """Lazy singleton for Anthropic client — reuses connection pool across calls."""
+    from app.utils.tracing import wrap_anthropic
+
     global _anthropic_client
     if _anthropic_client is None:
-        _anthropic_client = anthropic.Anthropic(api_key=settings.anthropic_api_key)
+        _anthropic_client = wrap_anthropic(anthropic.Anthropic(api_key=settings.anthropic_api_key))
     return _anthropic_client
 
 

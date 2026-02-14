@@ -26,6 +26,25 @@ from PIL import Image, ImageDraw, ImageFilter
 
 BASE_URL = os.environ.get("E2E_BASE_URL", "http://localhost:8100")
 _NEW_PROJECT = {"has_lidar": False, "device_fingerprint": "e2e-test"}
+_NEW_PROJECT_LIDAR = {"has_lidar": True, "device_fingerprint": "e2e-test-lidar"}
+
+# Reference scan data matching the backend parser schema (see specs/PLAN_LIDAR_UTILIZATION.md).
+_SCAN_DATA = {
+    "room": {"width": 4.2, "length": 5.8, "height": 2.7, "unit": "meters"},
+    "walls": [
+        {"id": "wall_0", "width": 4.2, "height": 2.7, "orientation": 0.0},
+        {"id": "wall_1", "width": 5.8, "height": 2.7, "orientation": 90.0},
+    ],
+    "openings": [
+        {"type": "door", "wall_id": "wall_0", "width": 0.9, "height": 2.1},
+    ],
+    "furniture": [
+        {"type": "sofa", "width": 2.1, "depth": 0.9, "height": 0.8},
+        {"type": "table", "width": 1.2, "depth": 0.8, "height": 0.75},
+    ],
+    "surfaces": [{"type": "floor"}],
+    "floor_area_sqm": 24.36,
+}
 
 # Detect if backend is running with real AI activities (not mocks).
 # Used to enable real-mode assertions in tests that work both ways.
@@ -498,6 +517,120 @@ class TestE2E03Scan:
 
 
 # ---------------------------------------------------------------------------
+# G3: Full Path with Scan Data (LiDAR-present flow)
+# ---------------------------------------------------------------------------
+
+
+class TestG3ScanDataFullPath:
+    """G3: Verify scan data flows through the full pipeline.
+
+    All existing E2E tests use skip_scan. This class verifies the LiDAR-present
+    path: photos → scan(submit) → intake → generation → selection → iteration →
+    approval → completed(shopping). Scan data must persist and be accessible at
+    every step.
+    """
+
+    async def test_scan_data_persists_at_intake(self, client: httpx.AsyncClient):
+        """G3: After scan submit, scan_data is present at intake step."""
+        pid = await _advance_to_intake_with_scan(client)
+        r = await client.get(f"/api/v1/projects/{pid}")
+        assert r.status_code == 200, f"GET project failed: {r.status_code} {r.text}"
+        state = r.json()
+        assert state["step"] == "intake"
+        assert state["scan_data"] is not None
+        dims = state["scan_data"]["room_dimensions"]
+        assert dims["width_m"] == pytest.approx(4.2, abs=0.1)
+        assert dims["length_m"] == pytest.approx(5.8, abs=0.1)
+        assert dims["height_m"] == pytest.approx(2.7, abs=0.1)
+
+    async def test_scan_data_persists_through_generation(self, client: httpx.AsyncClient):
+        """G3: Scan data persists through intake → generation → selection."""
+        pid = await _advance_to_intake_with_scan(client)
+        await _complete_mock_intake(client, pid)
+        state = await _poll_step(client, pid, "selection")
+        # scan_data must survive generation
+        assert state["scan_data"] is not None
+        assert state["scan_data"]["room_dimensions"]["width_m"] == pytest.approx(4.2, abs=0.1)
+        assert len(state["generated_options"]) == 2
+
+    async def test_scan_data_persists_through_iteration(self, client: httpx.AsyncClient):
+        """G3: Scan data survives through selection → iteration."""
+        pid = await _advance_to_intake_with_scan(client)
+        await _complete_mock_intake(client, pid)
+        await _poll_step(client, pid, "selection")
+        r = await client.post(f"/api/v1/projects/{pid}/select", json={"index": 0})
+        assert r.status_code == 200, f"select failed: {r.status_code} {r.text}"
+        state = await _poll_step(client, pid, "iteration", timeout=10.0)
+        assert state["scan_data"] is not None
+        assert state["scan_data"]["room_dimensions"]["width_m"] == pytest.approx(4.2, abs=0.1)
+
+    async def test_full_path_with_scan_data_to_completed(self, client: httpx.AsyncClient):
+        """G3: Full LiDAR happy path — photos → scan → intake → generation →
+        selection → approve → completed with shopping list.
+
+        Verifies scan data persists end-to-end and shopping list is generated.
+        """
+        pid = await _advance_to_intake_with_scan(client)
+        await _complete_mock_intake(client, pid)
+        await _poll_step(client, pid, "selection")
+        r = await client.post(f"/api/v1/projects/{pid}/select", json={"index": 0})
+        assert r.status_code == 200, f"select failed: {r.status_code} {r.text}"
+        await _poll_step(client, pid, "iteration", timeout=10.0)
+        r = await client.post(f"/api/v1/projects/{pid}/approve")
+        assert r.status_code == 200, f"approve failed: {r.status_code} {r.text}"
+        state = await _poll_step(client, pid, "completed")
+
+        # Scan data persists to completed
+        assert state["scan_data"] is not None
+        dims = state["scan_data"]["room_dimensions"]
+        assert dims["width_m"] == pytest.approx(4.2, abs=0.1)
+        assert dims["length_m"] == pytest.approx(5.8, abs=0.1)
+        assert dims["height_m"] == pytest.approx(2.7, abs=0.1)
+        assert dims["floor_area_sqm"] == pytest.approx(24.36, abs=0.1)
+
+        # Shopping list generated
+        assert state["approved"] is True
+        shopping = state["shopping_list"]
+        assert shopping is not None
+        assert len(shopping["items"]) > 0
+
+    async def test_scan_data_furniture_and_openings_parsed(self, client: httpx.AsyncClient):
+        """G3: Furniture and opening details from scan are parsed correctly."""
+        pid = await _advance_to_intake_with_scan(client)
+        r = await client.get(f"/api/v1/projects/{pid}")
+        assert r.status_code == 200, f"GET project failed: {r.status_code} {r.text}"
+        state = r.json()
+        dims = state["scan_data"]["room_dimensions"]
+        # Furniture from _SCAN_DATA
+        assert len(dims.get("furniture", [])) == 2
+        assert dims["furniture"][0]["type"] == "sofa"
+        # Openings from _SCAN_DATA
+        assert len(dims.get("openings", [])) == 1
+        assert dims["openings"][0]["type"] == "door"
+
+    async def test_scan_data_survives_start_over(self, client: httpx.AsyncClient):
+        """G3: Scan data and photos survive start-over (preserved by design)."""
+        pid = await _advance_to_intake_with_scan(client)
+        await _complete_mock_intake(client, pid)
+        await _poll_step(client, pid, "selection")
+        r = await client.post(f"/api/v1/projects/{pid}/select", json={"index": 0})
+        assert r.status_code == 200, f"select failed: {r.status_code} {r.text}"
+        await _poll_step(client, pid, "iteration", timeout=10.0)
+
+        # Start over — should preserve photos + scan data
+        r = await client.post(f"/api/v1/projects/{pid}/start-over")
+        assert r.status_code == 200
+        await _poll_step(client, pid, "intake", timeout=10.0)
+        r = await client.get(f"/api/v1/projects/{pid}")
+        assert r.status_code == 200, f"GET project failed: {r.status_code} {r.text}"
+        state = r.json()
+        assert state["step"] == "intake"
+        assert state["scan_data"] is not None
+        assert state["scan_data"]["room_dimensions"]["width_m"] == pytest.approx(4.2, abs=0.1)
+        assert len(state["photos"]) == 2
+
+
+# ---------------------------------------------------------------------------
 # E2E-12: Delete Photo
 # ---------------------------------------------------------------------------
 
@@ -561,6 +694,29 @@ async def _advance_to_intake(client: httpx.AsyncClient) -> str:
     pid = await _create_project_with_photos(client)
     r = await client.post(f"/api/v1/projects/{pid}/scan/skip")
     assert r.status_code == 200, f"scan/skip failed: {r.status_code} {r.text}"
+    await _poll_step(client, pid, "intake", timeout=10.0)
+    return pid
+
+
+async def _advance_to_intake_with_scan(
+    client: httpx.AsyncClient,
+    scan_data: dict | None = None,
+) -> str:
+    """Create project (has_lidar=True), upload 2 room photos, submit scan data.
+
+    Returns pid at 'intake' with scan_data populated.
+    Uses _SCAN_DATA by default (4.2m x 5.8m room with furniture + openings).
+    """
+    resp = await client.post("/api/v1/projects", json=_NEW_PROJECT_LIDAR)
+    assert resp.status_code == 201
+    pid = resp.json()["project_id"]
+    sharp = _make_sharp_jpeg()
+    for _ in range(2):
+        r = await _upload_photo(client, pid, sharp)
+        assert r.status_code == 200, f"upload failed: {r.status_code} {r.text}"
+    await _poll_step(client, pid, "scan", timeout=10.0)
+    r = await client.post(f"/api/v1/projects/{pid}/scan", json=scan_data or _SCAN_DATA)
+    assert r.status_code == 200, f"scan submit failed: {r.status_code} {r.text}"
     await _poll_step(client, pid, "intake", timeout=10.0)
     return pid
 

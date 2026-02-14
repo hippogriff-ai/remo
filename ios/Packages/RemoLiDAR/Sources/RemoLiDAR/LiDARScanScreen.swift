@@ -1,6 +1,11 @@
+import Foundation
 import SwiftUI
 import RemoModels
 import RemoNetworking
+
+#if canImport(ARKit)
+import ARKit
+#endif
 
 /// LiDAR scan screen: device capability check, scan flow, skip option.
 public struct LiDARScanScreen: View {
@@ -16,11 +21,18 @@ public struct LiDARScanScreen: View {
         self.client = client
     }
 
-    // Simplified LiDAR check — full check uses ARWorldTrackingConfiguration
     private var hasLiDAR: Bool {
-        // In P2: check ARWorldTrackingConfiguration.supportsSceneReconstruction(.mesh)
-        // For now, always show the option (mock will succeed)
-        true
+        #if DEBUG
+        // Fixture mode: always show scan button so Maestro can trigger fixture path
+        if UserDefaults.standard.string(forKey: "lidar-fixture") != nil {
+            return true
+        }
+        #endif
+        #if canImport(ARKit)
+        return ARWorldTrackingConfiguration.supportsSceneReconstruction(.mesh)
+        #else
+        return false
+        #endif
     }
 
     public var body: some View {
@@ -95,18 +107,61 @@ public struct LiDARScanScreen: View {
         isScanning = true
         defer { isScanning = false }
 
-        // In P2: present RoomCaptureView, get USDZ/JSON, upload
-        // Mock: simulate a successful scan
         do {
-            try await client.uploadScan(projectId: projectId, scanData: [
-                "rooms": [["width": 4.2, "length": 5.8, "height": 2.7]],
-            ])
+            let scanData: [String: Any]
+
+            #if DEBUG
+            if let fixtureName = UserDefaults.standard.string(forKey: "lidar-fixture") {
+                // TEST-ONLY: Load saved fixture JSON for Maestro/CI automated testing.
+                // Bypasses RoomCaptureView — fixture is a snapshot of real RoomPlan output
+                // captured once from a physical device (B1) or hand-written reference (B3).
+                scanData = try Self.loadFixture(named: fixtureName)
+            } else {
+                // Mock: simulate a successful scan (replaced by real RoomCaptureView in Phase A)
+                scanData = [
+                    "room": ["width": 4.2, "length": 5.8, "height": 2.7, "unit": "meters"] as [String: Any],
+                    "walls": [] as [[String: Any]],
+                    "openings": [] as [[String: Any]],
+                    "floor_area_sqm": 24.36,
+                ]
+            }
+            #else
+            #warning("Release build uses mock scan data — replace with real RoomCaptureView in Phase A")
+            scanData = [
+                "room": ["width": 4.2, "length": 5.8, "height": 2.7, "unit": "meters"] as [String: Any],
+                "walls": [] as [[String: Any]],
+                "openings": [] as [[String: Any]],
+                "floor_area_sqm": 24.36,
+            ]
+            #endif
+
+            try await client.uploadScan(projectId: projectId, scanData: scanData)
             let newState = try await client.getState(projectId: projectId)
             projectState.apply(newState)
         } catch {
             errorMessage = error.localizedDescription
         }
     }
+
+    #if DEBUG
+    /// Load a fixture JSON file from the app bundle (test-only).
+    private static func loadFixture(named name: String) throws -> [String: Any] {
+        guard let url = Bundle.main.url(forResource: name, withExtension: "json") else {
+            throw NSError(
+                domain: "LiDAR", code: 1,
+                userInfo: [NSLocalizedDescriptionKey: "Fixture '\(name)' not found in bundle"]
+            )
+        }
+        let data = try Data(contentsOf: url)
+        guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            throw NSError(
+                domain: "LiDAR", code: 2,
+                userInfo: [NSLocalizedDescriptionKey: "Fixture '\(name)' is not a valid JSON object"]
+            )
+        }
+        return json
+    }
+    #endif
 
     private func skipScan() async {
         guard let projectId = projectState.projectId else {

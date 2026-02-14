@@ -78,6 +78,453 @@ class TestEditInputGuards:
         with pytest.raises(ValueError, match="Unknown edit action type"):
             wf._extract_instructions("bogus", "payload")
 
+    def test_edit_input_includes_room_dimensions_when_scan_present(self) -> None:
+        """G2: _edit_input passes room_dimensions from scan_data."""
+        wf = self._make_workflow()
+        dims = RoomDimensions(width_m=4.5, length_m=6.0, height_m=2.7)
+        wf.scan_data = ScanData(storage_key="test/scan.json", room_dimensions=dims)
+        wf.room_context = None
+        result = wf._edit_input("feedback", "make it brighter please")
+        assert result.room_dimensions is not None
+        assert result.room_dimensions.width_m == 4.5
+
+    def test_edit_input_includes_room_context_when_available(self) -> None:
+        """G2: _edit_input passes room_context (Designer Brain + LiDAR fusion)."""
+        from app.models.contracts import RoomAnalysis, RoomContext
+
+        wf = self._make_workflow()
+        wf.room_context = RoomContext(
+            photo_analysis=RoomAnalysis(room_type="living room"),
+            enrichment_sources=["photos"],
+        )
+        result = wf._edit_input("feedback", "make it brighter please")
+        assert result.room_context is not None
+        assert result.room_context.enrichment_sources == ["photos"]
+
+    def test_edit_input_none_when_no_scan(self) -> None:
+        """G2: _edit_input passes None when no scan data exists."""
+        wf = self._make_workflow()
+        wf.scan_data = None
+        wf.room_context = None
+        result = wf._edit_input("feedback", "make it brighter please")
+        assert result.room_dimensions is None
+        assert result.room_context is None
+
+
+class TestPreShoppingAnalysisCollection:
+    """G22: Verify _resolve_analysis collects late-arriving analysis before shopping."""
+
+    def _make_workflow(self) -> DesignProjectWorkflow:
+        wf = DesignProjectWorkflow.__new__(DesignProjectWorkflow)
+        wf.__init__()
+        wf._project_id = "test-proj"
+        wf.current_image = "https://example.com/img.png"
+        wf.photos = [PhotoData(photo_id="r1", storage_key="k1", photo_type="room")]
+        wf.design_brief = None
+        wf.chat_history_key = None
+        return wf
+
+    def _analysis_stub(self):
+        from app.models.contracts import RoomAnalysis
+
+        return RoomAnalysis(room_type="living room", room_type_confidence=0.85)
+
+    async def test_late_analysis_collected_before_shopping(self) -> None:
+        """G22: Analysis that timed out at intake gets collected before shopping."""
+        from app.models.contracts import AnalyzeRoomPhotosOutput
+
+        wf = self._make_workflow()
+        # Simulate: analysis completed after intake timed out
+        # (shield kept the activity alive; it finished in the background)
+        # Note: asyncio.Future substitutes for Temporal ActivityHandle here
+        loop = asyncio.get_running_loop()
+        completed = loop.create_future()
+        completed.set_result(AnalyzeRoomPhotosOutput(analysis=self._analysis_stub()))
+        wf._analysis_handle = completed
+        wf.room_analysis = None  # Intake couldn't collect it (timed out)
+        wf.room_context = None
+
+        # Pre-shopping _resolve_analysis should pick up the late result
+        await wf._resolve_analysis()
+        assert wf.room_analysis is not None
+        assert wf.room_analysis.room_type == "living room"
+        assert wf.room_context is not None
+        assert wf.room_context.enrichment_sources == ["photos"]
+        assert wf._analysis_handle is None  # Cleared after success
+
+    async def test_late_analysis_with_lidar_enrichment(self) -> None:
+        """G22: Late analysis + existing LiDAR → full enrichment at shopping."""
+        from app.models.contracts import AnalyzeRoomPhotosOutput
+
+        wf = self._make_workflow()
+        dims = RoomDimensions(width_m=4.0, length_m=5.0, height_m=2.5)
+        wf.scan_data = ScanData(storage_key="test/scan.json", room_dimensions=dims)
+
+        loop = asyncio.get_running_loop()
+        completed = loop.create_future()
+        completed.set_result(AnalyzeRoomPhotosOutput(analysis=self._analysis_stub()))
+        wf._analysis_handle = completed
+        wf.room_analysis = None
+        wf.room_context = None
+
+        await wf._resolve_analysis()
+        assert wf.room_context is not None
+        assert wf.room_context.enrichment_sources == ["photos", "lidar"]
+        assert wf.room_context.room_dimensions is not None
+        assert wf.room_context.room_dimensions.width_m == 4.0
+        assert wf._analysis_handle is None
+
+    async def test_resolve_noop_after_intake_collected(self) -> None:
+        """Second _resolve_analysis (pre-shopping) is no-op: handle cleared at intake."""
+        from app.models.contracts import RoomContext
+
+        wf = self._make_workflow()
+        analysis = self._analysis_stub()
+        # Simulate: intake already collected and cleared the handle
+        wf._analysis_handle = None
+        wf.room_analysis = analysis
+        wf.room_context = RoomContext(
+            photo_analysis=analysis,
+            enrichment_sources=["photos"],
+        )
+
+        # Pre-shopping call is a no-op (handle already cleared)
+        await wf._resolve_analysis()
+        assert wf.room_context is not None
+        assert wf.room_context.enrichment_sources == ["photos"]
+
+    async def test_resolve_noop_when_no_handle(self) -> None:
+        """_resolve_analysis is a no-op when no analysis was ever started."""
+        wf = self._make_workflow()
+        wf._analysis_handle = None
+        wf.room_context = None
+
+        await wf._resolve_analysis()
+        assert wf.room_context is None  # Nothing to collect
+
+    async def test_failed_analysis_clears_handle(self) -> None:
+        """Failed analysis clears handle to prevent duplicate log entries."""
+        from unittest.mock import MagicMock, patch
+
+        loop = asyncio.get_running_loop()
+        failed = loop.create_future()
+        failed.set_exception(RuntimeError("model unavailable"))
+
+        wf = self._make_workflow()
+        wf._analysis_handle = failed
+        wf.room_analysis = None
+        wf.room_context = None
+
+        # Patch Temporal's workflow.logger (requires runtime outside sandbox)
+        with patch("temporalio.workflow.logger", MagicMock()):
+            # First call: catches exception, clears handle
+            await wf._resolve_analysis()
+            assert wf._analysis_handle is None
+            assert wf.room_context is None
+
+            # Second call: no-op (handle already cleared)
+            await wf._resolve_analysis()
+            assert wf.room_context is None
+
+    async def test_timeout_keeps_handle_alive(self) -> None:
+        """TimeoutError preserves handle — shield keeps activity running for retry."""
+        from unittest.mock import MagicMock, patch
+
+        loop = asyncio.get_running_loop()
+        pending = loop.create_future()
+
+        wf = self._make_workflow()
+        wf._analysis_handle = pending
+        wf.room_analysis = None
+        wf.room_context = None
+
+        with (
+            patch("temporalio.workflow.logger", MagicMock()) as mock_logger,
+            patch("asyncio.wait_for", side_effect=TimeoutError),
+            patch("asyncio.shield", wraps=asyncio.shield) as mock_shield,
+        ):
+            await wf._resolve_analysis()
+
+        # Verify shield was used to protect the handle from cancellation
+        mock_shield.assert_called_once_with(pending)
+        # Handle preserved AND not cancelled (viable for later retry)
+        assert wf._analysis_handle is pending
+        assert not pending.cancelled()
+        assert wf.room_analysis is None
+        assert wf.room_context is None
+        mock_logger.warning.assert_called_once_with(
+            "read_the_room still running after 30s for project %s",
+            "test-proj",
+        )
+
+    async def test_cancelled_clears_handle(self) -> None:
+        """CancelledError (BaseException, not Exception) clears handle permanently."""
+        from unittest.mock import MagicMock, patch
+
+        loop = asyncio.get_running_loop()
+        pending = loop.create_future()
+
+        wf = self._make_workflow()
+        wf._analysis_handle = pending
+        wf.room_analysis = None
+        wf.room_context = None
+
+        with (
+            patch("temporalio.workflow.logger", MagicMock()) as mock_logger,
+            patch("asyncio.wait_for", side_effect=asyncio.CancelledError),
+        ):
+            # Must not propagate CancelledError (BaseException) to caller
+            await wf._resolve_analysis()
+
+        # Handle cleared — cancellation is terminal
+        assert wf._analysis_handle is None
+        assert wf.room_analysis is None
+        assert wf.room_context is None
+        mock_logger.warning.assert_called_once_with(
+            "read_the_room cancelled for project %s",
+            "test-proj",
+        )
+
+
+class TestStartOverAnalysisCancellation:
+    """Verify start_over cancels in-flight analysis handle (workflow.py:424-425).
+
+    Integration-level tests (TestStartOver) exercise the full Temporal path.
+    These unit tests verify the analysis handle cancellation logic specifically.
+    """
+
+    def _make_workflow(self) -> DesignProjectWorkflow:
+        # Construct outside Temporal sandbox to unit-test signal handler logic.
+        wf = DesignProjectWorkflow.__new__(DesignProjectWorkflow)
+        wf.__init__()
+        wf._project_id = "test-proj"
+        return wf
+
+    async def test_cancels_pending_analysis(self) -> None:
+        """start_over cancels in-flight analysis and resets dirty state."""
+        from unittest.mock import MagicMock, patch
+
+        from app.models.contracts import RoomAnalysis, RoomContext
+
+        loop = asyncio.get_running_loop()
+        pending = loop.create_future()
+
+        wf = self._make_workflow()
+        wf._analysis_handle = pending
+        wf.step = "intake"
+        # Set dirty state so assertions prove the reset actually works
+        wf.generated_options = [DesignOption(image_url="u", caption="stale")]
+        wf.selected_option = 1
+        wf.current_image = "some_image.png"
+        wf.design_brief = DesignBrief(room_type="office")
+        wf.room_analysis = RoomAnalysis(room_type="office")
+        wf.room_context = RoomContext(enrichment_sources=["photos"])
+        wf._action_queue.append(("feedback", "stale"))
+
+        with patch("temporalio.workflow.logger", MagicMock()):
+            await wf.start_over()
+
+        assert pending.cancelled()
+        assert wf._analysis_handle is None
+        assert wf.room_analysis is None
+        assert wf.room_context is None
+        assert wf._restart_requested is True
+        # Verify full reset (not just analysis fields)
+        assert wf.generated_options == []
+        assert wf.selected_option is None
+        assert wf.current_image is None
+        assert wf.design_brief is None
+        assert len(wf._action_queue) == 0
+
+    async def test_no_handle_clears_stale_analysis(self) -> None:
+        """start_over with no handle still clears stale analysis state."""
+        from unittest.mock import MagicMock, patch
+
+        from app.models.contracts import RoomAnalysis, RoomContext
+
+        wf = self._make_workflow()
+        wf._analysis_handle = None
+        wf.step = "generation"
+        # Set stale analysis to verify cleanup happens even without a handle
+        wf.room_analysis = RoomAnalysis(room_type="bedroom")
+        wf.room_context = RoomContext(enrichment_sources=["photos"])
+
+        with patch("temporalio.workflow.logger", MagicMock()):
+            await wf.start_over()
+
+        assert wf._analysis_handle is None
+        assert wf.room_analysis is None
+        assert wf.room_context is None
+        assert wf._restart_requested is True
+
+    async def test_terminal_step_preserves_handle(self) -> None:
+        """start_over in terminal step is a no-op — handle NOT cancelled."""
+        from unittest.mock import MagicMock, patch
+
+        loop = asyncio.get_running_loop()
+        pending = loop.create_future()
+
+        wf = self._make_workflow()
+        wf._analysis_handle = pending
+        wf.step = "shopping"
+
+        with patch("temporalio.workflow.logger", MagicMock()) as mock_logger:
+            await wf.start_over()
+
+        assert not pending.cancelled()
+        assert wf._restart_requested is False
+        assert wf._analysis_handle is pending  # Untouched
+        mock_logger.warning.assert_called_once()
+
+
+class TestUpdatePhotoNote:
+    """Verify update_photo_note signal handles found and not-found photos."""
+
+    def _make_workflow(self) -> DesignProjectWorkflow:
+        # Construct outside Temporal sandbox to unit-test signal handler logic.
+        wf = DesignProjectWorkflow.__new__(DesignProjectWorkflow)
+        wf.__init__()
+        wf._project_id = "test-proj"
+        return wf
+
+    async def test_sets_note_on_matching_photo(self) -> None:
+        """update_photo_note sets note on matching photo, leaves others unchanged."""
+        wf = self._make_workflow()
+        wf.photos = [
+            PhotoData(photo_id="p1", storage_key="k1", photo_type="room"),
+            PhotoData(photo_id="p2", storage_key="k2", photo_type="room", note="keep me"),
+        ]
+
+        await wf.update_photo_note("p1", "nice lighting")
+
+        assert wf.photos[0].note == "nice lighting"
+        assert wf.photos[1].note == "keep me"  # Untouched
+
+    async def test_clears_existing_note(self) -> None:
+        """update_photo_note with None clears an existing note."""
+        wf = self._make_workflow()
+        wf.photos = [
+            PhotoData(
+                photo_id="p1",
+                storage_key="k1",
+                photo_type="room",
+                note="old note",
+            ),
+        ]
+        assert wf.photos[0].note == "old note"  # Pre-condition
+
+        await wf.update_photo_note("p1", None)
+
+        assert wf.photos[0].note is None
+
+    async def test_photo_not_found_logs_warning(self) -> None:
+        """update_photo_note with non-existent photo_id logs warning, preserves state."""
+        from unittest.mock import MagicMock, patch
+
+        wf = self._make_workflow()
+        wf.photos = [
+            PhotoData(
+                photo_id="p1",
+                storage_key="k1",
+                photo_type="room",
+                note="original",
+            ),
+        ]
+
+        with patch("temporalio.workflow.logger", MagicMock()) as mock_logger:
+            await wf.update_photo_note("nonexistent", "some note")
+
+        assert wf.photos[0].note == "original"  # Preserved, not clobbered
+        mock_logger.warning.assert_called_once()
+        args = mock_logger.warning.call_args[0]
+        assert "nonexistent" in str(args)
+        assert "test-proj" in str(args)
+
+
+class TestBuildRoomContext:
+    """Verify _build_room_context() deterministic merge logic and idempotency."""
+
+    def _make_workflow(self) -> DesignProjectWorkflow:
+        wf = DesignProjectWorkflow.__new__(DesignProjectWorkflow)
+        wf.__init__()
+        wf._project_id = "test-proj"
+        return wf
+
+    def test_idempotent_with_lidar(self) -> None:
+        """Calling _build_room_context() twice with same state produces identical result."""
+        from app.models.contracts import RoomAnalysis
+
+        wf = self._make_workflow()
+        wf.room_analysis = RoomAnalysis(room_type="bedroom", room_type_confidence=0.9)
+        dims = RoomDimensions(width_m=4.0, length_m=5.0, height_m=2.5)
+        wf.scan_data = ScanData(storage_key="test/scan.json", room_dimensions=dims)
+        wf.room_context = None
+
+        wf._build_room_context()
+        first_context = wf.room_context
+        assert first_context is not None
+        assert first_context.enrichment_sources == ["photos", "lidar"]
+        assert first_context.room_dimensions is not None
+        assert first_context.room_dimensions.width_m == 4.0
+
+        # Second call should produce equivalent result (idempotent)
+        wf._build_room_context()
+        assert wf.room_context is not None
+        assert wf.room_context.enrichment_sources == first_context.enrichment_sources
+        assert wf.room_context.room_dimensions == first_context.room_dimensions
+        assert wf.room_context.photo_analysis == first_context.photo_analysis
+
+    def test_idempotent_photos_only(self) -> None:
+        """Idempotent when scan has no room_dimensions (photos-only path)."""
+        from app.models.contracts import RoomAnalysis
+
+        wf = self._make_workflow()
+        wf.room_analysis = RoomAnalysis(room_type="kitchen")
+        wf.scan_data = ScanData(storage_key="test/scan.json", room_dimensions=None)
+        wf.room_context = None
+
+        wf._build_room_context()
+        first_context = wf.room_context
+        assert first_context is not None
+        assert first_context.enrichment_sources == ["photos"]
+        assert first_context.room_dimensions is None
+
+        wf._build_room_context()
+        assert wf.room_context.enrichment_sources == first_context.enrichment_sources
+        assert wf.room_context.room_dimensions == first_context.room_dimensions
+
+    def test_noop_when_no_analysis(self) -> None:
+        """_build_room_context() is a no-op when room_analysis is None."""
+        wf = self._make_workflow()
+        wf.room_analysis = None
+        wf.scan_data = ScanData(
+            storage_key="test/scan.json",
+            room_dimensions=RoomDimensions(width_m=4.0, length_m=5.0, height_m=2.5),
+        )
+        wf.room_context = None
+
+        wf._build_room_context()
+        assert wf.room_context is None  # Still None — early return
+
+    def test_lidar_updates_estimated_dimensions(self) -> None:
+        """_build_room_context() overwrites estimated_dimensions with precise LiDAR values."""
+        from app.models.contracts import RoomAnalysis
+
+        wf = self._make_workflow()
+        wf.room_analysis = RoomAnalysis(
+            room_type="living room",
+            estimated_dimensions="about 3m x 4m",
+        )
+        dims = RoomDimensions(width_m=3.2, length_m=4.1, height_m=2.8)
+        wf.scan_data = ScanData(storage_key="test/scan.json", room_dimensions=dims)
+        wf.room_context = None
+
+        wf._build_room_context()
+        assert wf.room_context is not None
+        # estimated_dimensions now reflects precise LiDAR measurements
+        assert wf.room_analysis.estimated_dimensions == "3.2m x 4.1m (ceiling 2.8m)"
+        assert "about" not in wf.room_analysis.estimated_dimensions
+
 
 @pytest.fixture(scope="module")
 async def workflow_env():
@@ -221,6 +668,21 @@ _FAILING_SHOPPING_ACTIVITIES = [
     generate_designs,
     edit_design,
     _failing_shopping,
+    purge_project_data,
+]
+
+
+@activity.defn(name="analyze_room_photos")
+async def _failing_analyze(_input) -> None:
+    """Always-failing analyze_room_photos for testing shopping-without-analysis."""
+    raise RuntimeError("Room analysis service unavailable")
+
+
+_NO_ANALYSIS_ACTIVITIES = [
+    _failing_analyze,
+    generate_designs,
+    edit_design,
+    generate_shopping_list,
     purge_project_data,
 ]
 
@@ -836,6 +1298,43 @@ class TestScanPhase:
             assert state.scan_data.room_dimensions is not None
             assert state.scan_data.room_dimensions.width_m == 4.5
 
+    async def test_complete_scan_ignored_at_wrong_step(self, workflow_env, tq):
+        """G6: complete_scan signal is ignored when step is not 'scan'."""
+
+        async with Worker(
+            workflow_env.client,
+            task_queue=tq,
+            workflows=[DesignProjectWorkflow],
+            activities=ALL_ACTIVITIES,
+        ):
+            handle = await _start_workflow(workflow_env, tq)
+            await handle.signal(DesignProjectWorkflow.add_photo, _photo(0))
+            await handle.signal(DesignProjectWorkflow.add_photo, _photo(1))
+            await asyncio.sleep(0.5)
+            await handle.signal(DesignProjectWorkflow.skip_scan)
+            await asyncio.sleep(0.5)
+
+            # Now at intake step — complete_scan should be ignored
+            state = await handle.query(DesignProjectWorkflow.get_state)
+            assert state.step == "intake"
+            assert state.scan_data is None
+
+            scan = ScanData(
+                storage_key="projects/test/lidar/late_scan.json",
+                room_dimensions=RoomDimensions(
+                    width_m=5.0,
+                    length_m=7.0,
+                    height_m=3.0,
+                ),
+            )
+            await handle.signal(DesignProjectWorkflow.complete_scan, scan)
+            await asyncio.sleep(0.5)
+
+            # Scan should have been ignored — scan_data unchanged
+            state = await handle.query(DesignProjectWorkflow.get_state)
+            assert state.step == "intake"
+            assert state.scan_data is None
+
 
 class TestIntakePhase:
     """Tests for intake (complete or skip)."""
@@ -960,6 +1459,11 @@ class TestGenerationInput:
             assert _captured_generation_input.inspiration_notes == []
             # Skipped scan → no dimensions
             assert _captured_generation_input.room_dimensions is None
+            # G26: room_context still available from photo analysis (no LiDAR)
+            assert _captured_generation_input.room_context is not None
+            assert _captured_generation_input.room_context.enrichment_sources == ["photos"]
+            assert _captured_generation_input.room_context.photo_analysis is not None
+            assert _captured_generation_input.room_context.room_dimensions is None  # No scan
 
     async def test_generation_input_includes_brief_and_dimensions(self, workflow_env, tq):
         """Verifies design brief and room dimensions are passed to generation.
@@ -1014,6 +1518,15 @@ class TestGenerationInput:
             assert _captured_generation_input.room_dimensions.width_m == 4.5
             assert len(_captured_generation_input.inspiration_notes) == 1
             assert _captured_generation_input.inspiration_notes[0].note == "Love the lighting"
+            # G26: room_context includes photo analysis + LiDAR fusion
+            assert _captured_generation_input.room_context is not None
+            assert _captured_generation_input.room_context.enrichment_sources == [
+                "photos",
+                "lidar",
+            ]
+            assert _captured_generation_input.room_context.room_dimensions is not None
+            assert _captured_generation_input.room_context.room_dimensions.width_m == 4.5
+            assert _captured_generation_input.room_context.photo_analysis is not None
 
     async def test_generation_input_with_null_dimensions(self, workflow_env, tq):
         """Verifies generation input passes None dimensions when scan has no room data.
@@ -1056,6 +1569,12 @@ class TestGenerationInput:
 
             assert _captured_generation_input is not None
             assert _captured_generation_input.room_dimensions is None
+            # room_context still available from photo analysis (LiDAR parse failed
+            # but analysis ran) — enrichment_sources is photos-only, no "lidar"
+            assert _captured_generation_input.room_context is not None
+            assert _captured_generation_input.room_context.enrichment_sources == ["photos"]
+            assert _captured_generation_input.room_context.room_dimensions is None
+            assert _captured_generation_input.room_context.photo_analysis is not None
 
     async def test_photo_notes_fallback_when_intake_skipped(self, workflow_env, tq):
         """IMP-7: Photo notes are passed to generation when intake is skipped.
@@ -1118,6 +1637,11 @@ class TestGenerationInput:
             assert _captured_generation_input.inspiration_notes[0].note == "Love the warm lighting"
             # Both inspiration photos should still be in the URL list
             assert len(_captured_generation_input.inspiration_photo_urls) == 2
+            # Scan was skipped but analysis still ran → photos-only context
+            assert _captured_generation_input.room_context is not None
+            assert _captured_generation_input.room_context.enrichment_sources == ["photos"]
+            assert _captured_generation_input.room_context.photo_analysis is not None
+            assert _captured_generation_input.room_dimensions is None
 
 
 class TestShoppingInput:
@@ -1223,6 +1747,9 @@ class TestShoppingInput:
             # Room context forwarded (analysis ran during scan)
             assert _captured_shopping_input.room_context is not None
             assert _captured_shopping_input.room_context.enrichment_sources == ["photos", "lidar"]
+            assert _captured_shopping_input.room_context.photo_analysis is not None
+            assert _captured_shopping_input.room_context.room_dimensions is not None
+            assert _captured_shopping_input.room_context.room_dimensions.width_m == 3.5
 
     async def test_shopping_input_with_minimal_state(self, workflow_env, tq):
         """Verifies shopping input handles skipped scan + skipped intake.
@@ -1268,6 +1795,59 @@ class TestShoppingInput:
             # Room context still available (analysis runs even without LiDAR)
             assert _captured_shopping_input.room_context is not None
             assert _captured_shopping_input.room_context.enrichment_sources == ["photos"]
+            assert _captured_shopping_input.room_context.photo_analysis is not None
+            assert _captured_shopping_input.room_context.room_dimensions is None  # No scan
+
+    async def test_shopping_proceeds_without_analysis(self, workflow_env, tq):
+        """When analyze_room_photos fails, shopping still proceeds without room analysis.
+
+        Exercises the code path at design_project.py line 260 where room_context
+        stays None after analysis failure. The warning log itself is verified by
+        TestPreShoppingAnalysisCollection unit tests; this integration test confirms
+        the end-to-end workflow completes successfully despite analysis unavailability.
+        """
+        async with Worker(
+            workflow_env.client,
+            task_queue=tq,
+            workflows=[DesignProjectWorkflow],
+            activities=_NO_ANALYSIS_ACTIVITIES,
+        ):
+            handle = await _start_workflow(workflow_env, tq)
+
+            # Photos → scan (skip) → intake → generation → selection → approve
+            # Analysis fails instantly (2 retries exhaust in <100ms),
+            # so 0.5s is ample for workflow to reach each phase.
+            await handle.signal(DesignProjectWorkflow.add_photo, _photo(0))
+            await handle.signal(DesignProjectWorkflow.add_photo, _photo(1))
+            await asyncio.sleep(0.5)
+
+            await handle.signal(DesignProjectWorkflow.skip_scan)
+            await asyncio.sleep(0.5)
+
+            await handle.signal(DesignProjectWorkflow.complete_intake, _brief())
+            await asyncio.sleep(0.5)
+
+            state = await handle.query(DesignProjectWorkflow.get_state)
+            assert state.step == "selection"
+
+            await handle.signal(DesignProjectWorkflow.select_option, 0)
+            await asyncio.sleep(0.5)
+
+            await handle.signal(DesignProjectWorkflow.approve_design)
+            await asyncio.sleep(0.5)
+
+            # Workflow reaches completed — analysis failure is non-fatal
+            state = await handle.query(DesignProjectWorkflow.get_state)
+            assert state.step == "completed"
+            assert state.approved is True
+            assert state.error is None  # Analysis failure does not surface to user
+            # room_context is None because analysis failed
+            assert state.room_context is None
+            assert state.room_analysis is None
+            # Shopping still produces results despite missing analysis
+            assert state.shopping_list is not None
+            assert len(state.shopping_list.items) > 0
+            assert state.shopping_list.total_estimated_cost_cents > 0
 
 
 class TestEditInput:
@@ -1321,6 +1901,11 @@ class TestEditInput:
             assert len(_captured_edit_input.annotations) == 1
             assert _captured_edit_input.annotations[0].region_id == 1
             assert "sectional" in _captured_edit_input.annotations[0].instruction
+            # Scan was skipped → no LiDAR dims, but photo analysis still ran
+            assert _captured_edit_input.room_dimensions is None
+            assert _captured_edit_input.room_context is not None
+            assert _captured_edit_input.room_context.enrichment_sources == ["photos"]
+            assert _captured_edit_input.room_context.photo_analysis is not None
 
     async def test_feedback_edit_input_includes_brief_feedback_and_history(self, workflow_env, tq):
         """Verifies feedback edit input contains room photos, brief, feedback, and history.
@@ -1412,6 +1997,11 @@ class TestEditInput:
             assert _captured_edit_input.feedback == "Make it brighter and more modern"
             # Chat history key forwarded from prior edit
             assert _captured_edit_input.chat_history_key is not None
+            # Scan was skipped → no LiDAR dims, but photo analysis still ran
+            assert _captured_edit_input.room_dimensions is None
+            assert _captured_edit_input.room_context is not None
+            assert _captured_edit_input.room_context.enrichment_sources == ["photos"]
+            assert _captured_edit_input.room_context.photo_analysis is not None
 
     async def test_feedback_edit_input_with_skipped_intake(self, workflow_env, tq):
         """Verifies feedback edit input has design_brief=None when intake was skipped.
@@ -1452,6 +2042,69 @@ class TestEditInput:
             assert _captured_edit_input.design_brief is None
             assert _captured_edit_input.feedback == "Make it more modern"
             assert _captured_edit_input.base_image_url != ""
+            # Scan was skipped → no LiDAR dims, but photo analysis ran
+            # (analysis is eager — fires after photos, independent of intake)
+            assert _captured_edit_input.room_dimensions is None
+            assert _captured_edit_input.room_context is not None
+            assert _captured_edit_input.room_context.enrichment_sources == ["photos"]
+            assert _captured_edit_input.room_context.photo_analysis is not None
+
+    async def test_edit_input_includes_room_dimensions_and_context(self, workflow_env, tq):
+        """G2: Verifies edit_design input includes room_dimensions and room_context
+        when scan data is available. Before this fix, edits were blind to room
+        context while shopping got full context.
+        """
+        global _captured_edit_input
+        _captured_edit_input = None
+
+        async with Worker(
+            workflow_env.client,
+            task_queue=tq,
+            workflows=[DesignProjectWorkflow],
+            activities=_CAPTURING_EDIT_ACTIVITIES,
+        ):
+            handle = await _start_workflow(workflow_env, tq)
+            await handle.signal(DesignProjectWorkflow.add_photo, _photo(0))
+            await handle.signal(DesignProjectWorkflow.add_photo, _photo(1))
+            await asyncio.sleep(0.5)
+
+            # Complete scan with room dimensions
+            scan = ScanData(
+                storage_key="projects/test/lidar/scan.json",
+                room_dimensions=RoomDimensions(
+                    width_m=4.2,
+                    length_m=5.8,
+                    height_m=2.7,
+                    furniture=[{"type": "sofa", "width": 2.1, "depth": 0.9, "height": 0.8}],
+                ),
+            )
+            await handle.signal(DesignProjectWorkflow.complete_scan, scan)
+            await asyncio.sleep(0.5)
+
+            await handle.signal(DesignProjectWorkflow.complete_intake, _brief())
+            await asyncio.sleep(1.0)
+
+            await handle.signal(DesignProjectWorkflow.select_option, 0)
+            await asyncio.sleep(0.5)
+
+            await handle.signal(
+                DesignProjectWorkflow.submit_text_feedback,
+                "Make it warmer and more inviting",
+            )
+            await asyncio.sleep(1.0)
+
+            assert _captured_edit_input is not None
+            # G2: room_dimensions now forwarded to edit activity
+            assert _captured_edit_input.room_dimensions is not None
+            assert _captured_edit_input.room_dimensions.width_m == 4.2
+            assert _captured_edit_input.room_dimensions.length_m == 5.8
+            assert len(_captured_edit_input.room_dimensions.furniture) == 1
+            # G2: room_context now forwarded (includes photo analysis + LiDAR)
+            assert _captured_edit_input.room_context is not None
+            assert _captured_edit_input.room_context.enrichment_sources == ["photos", "lidar"]
+            assert _captured_edit_input.room_context.photo_analysis is not None
+            assert _captured_edit_input.room_context.room_dimensions is not None
+            assert _captured_edit_input.room_context.room_dimensions.width_m == 4.2
 
 
 class TestStartOver:
@@ -3222,6 +3875,8 @@ class TestEagerAnalysis:
             handle = await _start_workflow(workflow_env, tq)
             await handle.signal(DesignProjectWorkflow.add_photo, _photo(0))
             await handle.signal(DesignProjectWorkflow.add_photo, _photo(1))
+            # Wait for photos to be processed and step to transition to 'scan'
+            await asyncio.sleep(0.5)
             # Analysis fires after 2+ photos; scan proceeds in parallel
             await handle.signal(DesignProjectWorkflow.complete_scan, _scan_with_dims())
             await asyncio.sleep(1.0)
@@ -3243,6 +3898,8 @@ class TestEagerAnalysis:
             handle = await _start_workflow(workflow_env, tq)
             await handle.signal(DesignProjectWorkflow.add_photo, _photo(0))
             await handle.signal(DesignProjectWorkflow.add_photo, _photo(1))
+            # Wait for photos to be processed and step to transition to 'scan'
+            await asyncio.sleep(0.5)
             await handle.signal(DesignProjectWorkflow.complete_scan, _scan_with_dims())
             await asyncio.sleep(1.0)
 
@@ -3290,19 +3947,65 @@ class TestEagerAnalysis:
             await handle.signal(DesignProjectWorkflow.skip_scan)
             await asyncio.sleep(1.0)
 
-            # Verify analysis populated
+            # Verify analysis populated (no scan → photos-only context)
             state = await handle.query(DesignProjectWorkflow.get_state)
             assert state.room_analysis is not None
+            assert state.room_context is not None
+            assert state.room_context.enrichment_sources == ["photos"]
 
-            # Start over: clears analysis, but while-loop re-fires it
+            # Start over: clears analysis + room_context, but while-loop re-fires
             await handle.signal(DesignProjectWorkflow.start_over)
             await asyncio.sleep(1.0)
 
-            # After settling, analysis should be re-populated (same photos)
+            # After settling, analysis AND context should be re-populated (same photos)
             state = await handle.query(DesignProjectWorkflow.get_state)
             assert state.step == "intake"
             assert state.room_analysis is not None
             assert state.room_analysis.room_type == "living room"
+            assert state.room_context is not None
+            assert state.room_context.enrichment_sources == ["photos"]
+            assert state.room_context.room_dimensions is None  # No scan data
+
+    async def test_start_over_with_lidar_rebuilds_context(self, workflow_env, tq):
+        """start_over with LiDAR scan preserves scan_data and rebuilds full context.
+
+        Key invariant: scan_data is preserved across restarts (re-scanning is expensive),
+        so after start_over, the re-fired analysis merges with the original LiDAR dims
+        to produce the same enriched context (["photos", "lidar"]).
+        """
+        async with Worker(
+            workflow_env.client,
+            task_queue=tq,
+            workflows=[DesignProjectWorkflow],
+            activities=ALL_ACTIVITIES,
+        ):
+            handle = await _start_workflow(workflow_env, tq)
+            await handle.signal(DesignProjectWorkflow.add_photo, _photo(0))
+            await handle.signal(DesignProjectWorkflow.add_photo, _photo(1))
+            await asyncio.sleep(0.5)
+            await handle.signal(DesignProjectWorkflow.complete_scan, _scan_with_dims())
+            await asyncio.sleep(1.0)
+
+            # Verify full LiDAR-enriched context
+            state = await handle.query(DesignProjectWorkflow.get_state)
+            assert state.room_context is not None
+            assert state.room_context.enrichment_sources == ["photos", "lidar"]
+            assert state.room_context.room_dimensions is not None
+            assert state.room_context.room_dimensions.width_m == 4.0
+
+            # Start over: clears analysis/context but preserves scan_data
+            await handle.signal(DesignProjectWorkflow.start_over)
+            await asyncio.sleep(1.5)
+
+            # After settling, full context should be rebuilt from preserved scan_data
+            state = await handle.query(DesignProjectWorkflow.get_state)
+            assert state.step == "intake"
+            assert state.scan_data is not None  # Preserved across restart
+            assert state.room_analysis is not None  # Re-fired and collected
+            assert state.room_context is not None
+            assert state.room_context.enrichment_sources == ["photos", "lidar"]
+            assert state.room_context.room_dimensions is not None
+            assert state.room_context.room_dimensions.width_m == 4.0
 
     async def test_start_over_during_intake_restarts_cleanly(self, workflow_env, tq):
         """start_over during intake wait should restart without wasting generation."""
@@ -3371,6 +4074,8 @@ class TestEagerAnalysis:
             handle = await _start_workflow(workflow_env, tq)
             await handle.signal(DesignProjectWorkflow.add_photo, _photo(0))
             await handle.signal(DesignProjectWorkflow.add_photo, _photo(1))
+            # Wait for photos to be processed and step to transition to 'scan'
+            await asyncio.sleep(0.5)
             await handle.signal(DesignProjectWorkflow.complete_scan, _scan_with_dims())
             await asyncio.sleep(1.0)
             await handle.signal(DesignProjectWorkflow.complete_intake, _brief())
