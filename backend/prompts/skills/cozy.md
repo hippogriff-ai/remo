@@ -54,7 +54,17 @@
 - **Cozy + Rustic**: Natural amplification — distressed wood, woven textiles, wrought iron, earth tones. More texture, less polish.
 - **Cozy + Bohemian**: Maximalist warmth — kilim rugs, global textiles, warm tones + jewel accents, plants everywhere, layered everything.
 
+## Probing Steps
+After loading this skill, ask these style-specific questions (pick 2-3 most relevant to the room):
+1. "Do you want warmth everywhere or concentrated in a reading/relaxation zone?"
+2. "How layered should the textiles feel — subtle warmth or full cocoon?"
+3. "Do you prefer rich earth tones (terracotta, amber) or softer warm neutrals (cream, oatmeal)?"
+4. "Is a fireplace or focal warmth element (real or faux) something you'd want?"
+
 ## Example Partial Brief
+
+**User said:** "I want my living room to feel like a warm cocoon — somewhere I can disappear with a book and a blanket on a rainy day."
+
 ```json
 {
   "style_profile": {

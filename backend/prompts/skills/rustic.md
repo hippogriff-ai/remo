@@ -65,7 +65,17 @@
 - **Rustic + Scandinavian**: "Nordic cabin" — lighter woods (pine, birch), simpler forms, cleaner lines, but same natural materials and handcraft emphasis.
 - **Rustic + Bohemian**: "Collected cabin" — kilim rugs on wood floors, mixed global textiles, plants in handmade pottery, eclectic art on wood walls.
 
+## Probing Steps
+After loading this skill, ask these style-specific questions (pick 2-3 most relevant to the room):
+1. "Do you prefer lighter woods (pine, birch) or darker reclaimed/distressed looks?"
+2. "How rough-hewn should it feel — polished farmhouse or raw cabin?"
+3. "Is stone a material you'd like to feature (fireplace, accent wall, counters)?"
+4. "Would you like handmade/artisanal objects as decor, or keep it simpler?"
+
 ## Example Partial Brief
+
+**User said:** "I love natural wood and stone — something with real character, like a warm cabin with handmade touches."
+
 ```json
 {
   "style_profile": {

@@ -90,6 +90,29 @@ def build_loaded_skills_block(skill_ids: list[str]) -> str:
     return "\n\n---\n\n".join(sections)
 
 
+ORTHOGONAL_SKILL_ID = "more_space"
+MAX_STYLE_SKILLS = 2
+
+
+def cap_skills(skill_ids: list[str]) -> list[str]:
+    """Cap style skills at MAX_STYLE_SKILLS while keeping more_space orthogonal.
+
+    more_space is a spatial optimization skill that stacks with any style skill
+    and does not count toward the style cap.  Deduplicates input preserving order.
+    """
+    deduped = list(dict.fromkeys(skill_ids))
+    style = [s for s in deduped if s != ORTHOGONAL_SKILL_ID]
+    space = [s for s in deduped if s == ORTHOGONAL_SKILL_ID]
+    capped_style = style[:MAX_STYLE_SKILLS]
+    if len(style) > MAX_STYLE_SKILLS:
+        log.warning(
+            "skills_capped",
+            kept=capped_style + space,
+            dropped=style[MAX_STYLE_SKILLS:],
+        )
+    return capped_style + space
+
+
 def clear_caches() -> None:
     """Clear all module-level caches. Used in tests."""
     global _manifest_cache  # noqa: PLW0603

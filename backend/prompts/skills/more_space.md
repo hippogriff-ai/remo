@@ -1,7 +1,7 @@
 # More Space & Openness Style Guide
 
 ## Core Parameters
-- **Palette**: Light colors (LRV 70+) — white, pale gray, soft cream; consistent across connected spaces
+- **Palette**: Light tones expand perceived space — coordinate shade/LRV with your style palette; keep consistent across connected spaces
 - **Mirrors**: Strategic placement opposite windows to amplify light and perceived depth
 - **Furniture**: Transparent/glass where possible, multi-functional, visible legs (shows floor space)
 - **Flooring**: Consistent throughout connected areas — visual continuity expands perceived space
@@ -16,7 +16,7 @@
 - Glass or acrylic coffee table — visual pass-through
 - Wall-mounted TV and floating shelves — free up floor area
 - One large mirror opposite or adjacent to primary window
-- Light, consistent area rug that blends with flooring
+- Area rug that blends with flooring for visual continuity
 - Multi-functional furniture: storage ottoman, nesting side tables, console with drawers
 - Keep traffic paths clear: 36"+ between furniture pieces
 
@@ -24,7 +24,6 @@
 - Bed with visible legs or platform bed with under-bed storage
 - Wall-mounted nightstands or floating shelves — no floor-standing bedside tables
 - Built-in closet system (maximize vertical space, eliminate freestanding wardrobe)
-- Light bedding colors — no heavy dark duvets
 - Mirror on closet door or wall opposite window
 - One overhead light + wall-mounted reading lights (no floor lamps eating floor space)
 
@@ -40,7 +39,6 @@
 - Wall-mounted or fold-down desk to reclaim floor when not working
 - Vertical storage: wall-mounted shelves, pegboard, magnetic strips
 - Under-desk cable management (no visual clutter on floor)
-- Light colors throughout — desk, chair, walls
 - Task lamp that clamps to desk (no floor lamp)
 
 ## Furniture Recommendations
@@ -58,7 +56,7 @@
 - DO use vertical space — wall-mounted storage, tall bookcases, hang curtains at ceiling height
 - DO use floor-to-ceiling curtains (even on standard windows) to increase perceived height
 - DO paint ceiling slightly lighter than walls (or same white) for height
-- DON'T block natural light — keep windows unobstructed, use sheer curtains at most
+- DON'T block natural light paths — keep windows unobstructed (see your style guide for curtain specifics)
 - DON'T use dark colors on walls in small rooms (they absorb light and close in)
 - DON'T place large furniture across traffic paths — circulation is the first priority
 - DON'T use too many small items (multiple small tables, scattered decor) — fewer larger pieces feel less cluttered
@@ -72,7 +70,17 @@
 - **More Space + Scandinavian**: Excellent match — both value light, simplicity, and function. Blonde wood furniture with visible legs, white walls, strategic mirrors.
 - **More Space + Bohemian**: Challenging but possible — wall-mounted plant shelves, vertical textile displays, nesting tables, multi-functional seating (storage poufs). Edit the collection but keep the spirit.
 
+## Probing Steps
+After loading this skill, ask these style-specific questions (pick 2-3 most relevant to the room):
+1. "What feels most cramped — is it floor space, visual clutter, or low ceilings?"
+2. "Are you open to multi-functional furniture (storage ottomans, fold-down desks, murphy beds)?"
+3. "Would you remove any existing furniture to gain space, or is every piece needed?"
+4. "Is there a specific traffic path that feels blocked or tight?"
+
 ## Example Partial Brief
+
+**User said:** "This room feels really cramped — I need to make it feel bigger and more functional without losing any seating."
+
 ```json
 {
   "style_profile": {

@@ -790,7 +790,11 @@ async def _run_intake_core(input: IntakeChatInput) -> IntakeChatOutput:
             raw_skills = []
         manifest = skill_loader.load_manifest()
         valid_ids = {s.skill_id for s in manifest.skills}
-        requested_skills = [s for s in raw_skills if isinstance(s, str) and s in valid_ids][:2]
+        validated = [s for s in raw_skills if isinstance(s, str) and s in valid_ids]
+        invalid = [s for s in raw_skills if not isinstance(s, str) or s not in valid_ids]
+        if invalid:
+            log.warning("intake_requested_skills_invalid", invalid=invalid, valid=validated)
+        requested_skills = skill_loader.cap_skills(validated)
 
     # Build output based on which skill was chosen
     max_turns = MAX_TURNS.get(input.mode, 4)

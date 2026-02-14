@@ -69,7 +69,17 @@
 - **Scandinavian + Modern**: "Scandi-modern" — shared clean lines, but warmer materials than pure modern. Blonde wood replaces metal; linen replaces leather.
 - **Scandinavian + Bright & Airy**: Natural partners — both maximize light and use pale palettes. Scandi adds warmth through textiles and candles that bright-airy may lack.
 
+## Probing Steps
+After loading this skill, ask these style-specific questions (pick 2-3 most relevant to the room):
+1. "Do you want the full hygge experience (candles, sheepskin, knits) or a sleeker Nordic look?"
+2. "How plant-heavy should it be — a few accent plants or greenery as the main decor?"
+3. "Do you prefer all-white walls or some warmth (light gray, soft wood paneling)?"
+4. "Are you drawn to round organic shapes or straighter clean lines for furniture?"
+
 ## Example Partial Brief
+
+**User said:** "I love that Nordic look — simple, functional, lots of light and plants, cozy but not cluttered."
+
 ```json
 {
   "style_profile": {

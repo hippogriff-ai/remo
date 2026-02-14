@@ -63,7 +63,17 @@
 - **Luxurious + Minimalist**: "Quiet luxury" — fewer pieces but each is exquisite. Monochromatic with one rich material (marble, cashmere). Negative space amplifies each object.
 - **Luxurious + Bohemian**: "Boho glam" — kilim rugs with brass tables, velvet poufs, eclectic global art with gold frames. More is more, but every piece has weight.
 
+## Probing Steps
+After loading this skill, ask these style-specific questions (pick 2-3 most relevant to the room):
+1. "Do you lean toward jewel tones (emerald, sapphire) or sophisticated neutrals (charcoal, navy)?"
+2. "Is a statement chandelier or dramatic light fixture something you'd want as a focal point?"
+3. "How do you feel about marble — love it for surfaces, or prefer warm wood?"
+4. "Are you going for 'boutique hotel' or more 'classic estate' in feel?"
+
 ## Example Partial Brief
+
+**User said:** "I want it to feel like a high-end hotel suite — dramatic lighting, rich materials, sophisticated but not gaudy."
+
 ```json
 {
   "style_profile": {

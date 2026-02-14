@@ -3286,9 +3286,72 @@ class TestRealIntakeWiring:
             json={"message": "also scandinavian"},
         )
 
-        # Cap at 2 — original two preserved
+        # Cap at 2 style skills — original two preserved, scandinavian dropped
         assert len(_intake_sessions[pid].loaded_skill_ids) == 2
         assert _intake_sessions[pid].loaded_skill_ids == ["cozy", "modern"]
+
+    @pytest.mark.asyncio
+    async def test_more_space_stacks_beyond_style_cap(self, client, intake_project, mock_agent):
+        """more_space is orthogonal — stacks with 2 style skills (total 3)."""
+        pid = intake_project
+        await client.post(f"/api/v1/projects/{pid}/intake/start", json={"mode": "full"})
+
+        # Turn 1: load cozy + modern + more_space
+        mock_agent.return_value = IntakeChatOutput(
+            agent_message="Cozy modern, needs space!",
+            progress="Turn 1",
+            requested_skills=["cozy", "modern", "more_space"],
+        )
+        await client.post(
+            f"/api/v1/projects/{pid}/intake/message",
+            json={"message": "cozy modern but cramped"},
+        )
+
+        # All 3 survive — more_space doesn't count toward the 2-style cap
+        assert _intake_sessions[pid].loaded_skill_ids == ["cozy", "modern", "more_space"]
+
+    @pytest.mark.asyncio
+    async def test_more_space_persists_when_styles_capped(self, client, intake_project, mock_agent):
+        """Adding a 3rd style skill doesn't evict more_space."""
+        pid = intake_project
+        await client.post(f"/api/v1/projects/{pid}/intake/start", json={"mode": "full"})
+
+        # Turn 1: load cozy + more_space
+        mock_agent.return_value = IntakeChatOutput(
+            agent_message="Cozy and needs space!",
+            progress="Turn 1",
+            requested_skills=["cozy", "more_space"],
+        )
+        await client.post(
+            f"/api/v1/projects/{pid}/intake/message",
+            json={"message": "cozy cramped"},
+        )
+        assert _intake_sessions[pid].loaded_skill_ids == ["cozy", "more_space"]
+
+        # Turn 2: add modern — now cozy + modern + more_space
+        mock_agent.return_value = IntakeChatOutput(
+            agent_message="Modern too!",
+            progress="Turn 2",
+            requested_skills=["modern"],
+        )
+        await client.post(f"/api/v1/projects/{pid}/intake/message", json={"message": "also modern"})
+        assert _intake_sessions[pid].loaded_skill_ids == ["cozy", "modern", "more_space"]
+
+        # Turn 3: try to add scandinavian — style cap prevents, but more_space stays
+        mock_agent.return_value = IntakeChatOutput(
+            agent_message="Scandi too?",
+            progress="Turn 3",
+            requested_skills=["scandinavian"],
+        )
+        await client.post(
+            f"/api/v1/projects/{pid}/intake/message",
+            json={"message": "also scandinavian"},
+        )
+        # cozy + modern (style cap) + more_space (orthogonal) = 3
+        assert len(_intake_sessions[pid].loaded_skill_ids) == 3
+        assert "cozy" in _intake_sessions[pid].loaded_skill_ids
+        assert "modern" in _intake_sessions[pid].loaded_skill_ids
+        assert "more_space" in _intake_sessions[pid].loaded_skill_ids
 
     @pytest.mark.asyncio
     async def test_start_over_clears_loaded_skills(self, client, intake_project, mock_agent):

@@ -18,14 +18,14 @@
 - Rug: flat-weave, solid color or subtle geometric pattern
 
 ### Bedroom
-- Platform bed with integrated nightstands or floating shelves
+- Low-profile bed (platform or upholstered with clean lines) — 30-32" headboard max
 - Minimal bedding layers — crisp duvet, 2-4 structured pillows
 - Built-in or wall-mounted storage (no freestanding dressers if possible)
 - Linear LED strip behind headboard or under bed for ambient glow
 - Blackout roller shades (clean profile) rather than heavy curtains
 
 ### Kitchen
-- Handle-less cabinetry (push-to-open or integrated pulls)
+- Minimal hardware — handle-less, slim bar pulls, or integrated channel
 - Waterfall edge countertop in quartz or engineered stone
 - Pendant lighting over island — geometric, matte metal
 - Open shelving for curated display; closed for bulk storage
@@ -34,7 +34,7 @@
 - Minimalist desk — thin profile, metal frame, clean surface
 - Ergonomic chair in black mesh or leather
 - Cable management: all cords hidden
-- Wall-mounted monitor arm for floating screen look
+- Clean desk setup — hidden cables, minimal visible peripherals
 - Task lamp: adjustable arm, matte black or brushed metal
 
 ## Furniture Recommendations
@@ -60,7 +60,17 @@
 - **Modern + Scandinavian**: "Scandi-modern" — blonde wood instead of dark, warmer whites, plant life added. Clean lines shared; the Scandi influence softens the palette.
 - **Modern + Luxurious**: "Glam modern" — marble, velvet accent pieces, gold/brass hardware, statement chandelier. Clean lines but richer materials and bolder accents.
 
+## Probing Steps
+After loading this skill, ask these style-specific questions (pick 2-3 most relevant to the room):
+1. "Do you lean warmer (wood, brass accents) or cooler (chrome, glass, concrete)?"
+2. "Would you like one bold accent color, or keep it strictly neutral?"
+3. "How important is statement lighting — something sculptural or more architectural and blended?"
+4. "Are you OK with some curated display items, or do you prefer clean empty surfaces?"
+
 ## Example Partial Brief
+
+**User said:** "I want a polished, contemporary look — clean lines, maybe one bold accent color, and lighting that makes a statement."
+
 ```json
 {
   "style_profile": {

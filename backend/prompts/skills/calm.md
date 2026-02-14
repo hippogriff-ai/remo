@@ -58,7 +58,17 @@
 - **Calm + Modern**: Clean lines of modern with the soft palette and sound-absorbing materials of calm. Architectural lighting becomes diffused architectural lighting.
 - **Calm + Cozy**: "Serene cozy" — warm muted tones (sage, dusty rose) with layered soft textiles. Warmer than pure calm but less intense than full cozy.
 
+## Probing Steps
+After loading this skill, ask these style-specific questions (pick 2-3 most relevant to the room):
+1. "Is noise a concern? Sound-absorbing materials can make a big difference."
+2. "Do you want a cool-toned calm (blues, grays) or a warm-toned calm (sage, dusty rose)?"
+3. "How important are plants — do you want greenery as a main element or just subtle touches?"
+4. "Would you like to minimize screen visibility in relaxation areas (TV cabinet, hidden monitor)?"
+
 ## Example Partial Brief
+
+**User said:** "I need this room to be my sanctuary — somewhere truly peaceful after stressful days, almost spa-like."
+
 ```json
 {
   "style_profile": {

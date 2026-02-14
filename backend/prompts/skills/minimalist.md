@@ -63,7 +63,17 @@
 - **Minimalist + Luxurious**: "Quiet luxury" — fewer pieces, each exquisite. One marble surface, one cashmere throw, one statement light. Restraint amplifies material quality.
 - **Minimalist + Calm**: Shared philosophy of reduction — calm adds muted color (sage, lavender) and soft textures where minimalist tends toward hard surfaces and monochrome.
 
+## Probing Steps
+After loading this skill, ask these style-specific questions (pick 2-3 most relevant to the room):
+1. "How strict should the minimalism be — comfortable minimal or gallery-level sparse?"
+2. "Would you like one accent color or stay purely monochromatic?"
+3. "Is hidden storage essential — built-ins, concealed systems — or just fewer visible items?"
+4. "Are you comfortable with empty surfaces and walls, or does that feel too cold?"
+
 ## Example Partial Brief
+
+**User said:** "Less is more — I want to see nothing but the essentials, everything else hidden away. The space itself should be the feature."
+
 ```json
 {
   "style_profile": {

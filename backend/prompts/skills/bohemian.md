@@ -69,7 +69,17 @@
 - **Bohemian + Modern**: "Boho-modern" — clean-line furniture as a neutral canvas for bold textiles and pattern. Edited boho — fewer pieces, more impact.
 - **Bohemian + Luxurious**: "Boho glam" — velvet and brass mixed with kilim and macrame. Jewel tones bridge both styles. Moroccan poufs + gold-framed mirrors.
 
+## Probing Steps
+After loading this skill, ask these style-specific questions (pick 2-3 most relevant to the room):
+1. "How layered should it feel — edited boho or full maximalist?"
+2. "Do you have specific travel or cultural influences you'd like represented?"
+3. "How much plant life — a few accents or a full indoor jungle?"
+4. "Are you OK with floor seating (cushions, poufs) or do you need all traditional seating?"
+
 ## Example Partial Brief
+
+**User said:** "I want it to feel like I've collected everything from my travels — colorful, eclectic, lots of plants and personality."
+
 ```json
 {
   "style_profile": {

@@ -12,7 +12,7 @@
 
 ### Living Room
 - Light-colored sofa (ivory, oatmeal, pale gray) with slim profile and visible legs
-- Glass or acrylic coffee table to maintain sightlines
+- Transparent coffee table (glass, acrylic) or light wood to maintain sightlines
 - Sheer white linen curtains floor-to-ceiling (hang rod 4-6" above frame for height illusion)
 - Mirrors strategically placed opposite or adjacent to windows
 - Keep floor visible — smaller or transparent furniture pieces
@@ -21,8 +21,8 @@
 - White or light linen bedding, minimal layering
 - Light wood bed frame with visible legs (no heavy upholstered frames)
 - Sheer curtains paired with light roller shades for privacy
-- Wall-mounted shelves instead of bulky nightstands
-- Light wood or white dresser, avoid dark heavy furniture
+- Light wood or white nightstand, avoid dark heavy pieces
+- Light wood or white dresser — maintain the airy palette
 
 ### Kitchen
 - White or light-colored cabinetry
@@ -49,7 +49,6 @@
 - DO maximize natural light — remove or replace heavy curtains with sheers
 - DO use mirrors to amplify light and create depth
 - DO keep furniture legs visible to show more floor (raises perceived space)
-- DO use consistent flooring throughout connected spaces for visual flow
 - DO hang curtain rods high and wide (above frame, beyond edges) for taller/wider window illusion
 - DON'T use dark, heavy furniture that visually weighs down the space
 - DON'T block natural light paths with tall furniture near windows
@@ -62,7 +61,17 @@
 - **Bright & Airy + Coastal**: Blue-white palette, natural fibers (rattan, jute), driftwood accents, ocean-inspired art. Light and relaxed.
 - **Bright & Airy + Minimalist**: Near-overlap — the key difference is bright-airy emphasizes light and openness while minimalist emphasizes intentional reduction.
 
+## Probing Steps
+After loading this skill, ask these style-specific questions (pick 2-3 most relevant to the room):
+1. "How much natural light does the room currently get — is this about enhancing what's there or creating the illusion?"
+2. "Are you open to replacing any existing heavy/dark furniture to achieve the bright look?"
+3. "Do you prefer crisp white or softer warm whites (cream, ivory)?"
+4. "Would you like some subtle color accents (sage, pale blue) or keep it strictly neutral?"
+
 ## Example Partial Brief
+
+**User said:** "I want everything light and open — maximize the natural light, no heavy curtains, the room should glow."
+
 ```json
 {
   "style_profile": {

@@ -1483,6 +1483,26 @@ class TestRunIntakeCoreMocked:
 
     @patch.dict("os.environ", {"ANTHROPIC_API_KEY": "test-key"})
     @patch("app.activities.intake.anthropic.AsyncAnthropic")
+    def test_more_space_orthogonal_to_style_cap(self, mock_client_cls):
+        """more_space doesn't count toward 2-style cap — all 3 survive."""
+        mock_resp = self._mock_skill_response(
+            "interview_client",
+            {
+                "message": "Cozy modern and needs space!",
+                "requested_skills": ["cozy", "modern", "more_space"],
+            },
+        )
+        mock_instance = MagicMock()
+        mock_instance.messages = MagicMock()
+        mock_instance.messages.create = AsyncMock(return_value=mock_resp)
+        mock_client_cls.return_value = mock_instance
+
+        result = asyncio.run(_run_intake_core(self._make_input()))
+
+        assert result.requested_skills == ["cozy", "modern", "more_space"]
+
+    @patch.dict("os.environ", {"ANTHROPIC_API_KEY": "test-key"})
+    @patch("app.activities.intake.anthropic.AsyncAnthropic")
     def test_requested_skills_validated_against_manifest(self, mock_client_cls):
         """Invalid skill ID filtered out."""
         mock_resp = self._mock_skill_response(
@@ -1500,6 +1520,34 @@ class TestRunIntakeCoreMocked:
         result = asyncio.run(_run_intake_core(self._make_input()))
 
         assert result.requested_skills == ["cozy"]
+
+    @patch.dict("os.environ", {"ANTHROPIC_API_KEY": "test-key"})
+    @patch("app.activities.intake.anthropic.AsyncAnthropic")
+    def test_requested_skills_invalid_logs_warning(self, mock_client_cls):
+        """Invalid skill IDs trigger a warning log."""
+        mock_resp = self._mock_skill_response(
+            "interview_client",
+            {
+                "message": "Style detected!",
+                "requested_skills": ["cozy", "nonexistent_style"],
+            },
+        )
+        mock_instance = MagicMock()
+        mock_instance.messages = MagicMock()
+        mock_instance.messages.create = AsyncMock(return_value=mock_resp)
+        mock_client_cls.return_value = mock_instance
+
+        with patch("app.activities.intake.log") as mock_log:
+            asyncio.run(_run_intake_core(self._make_input()))
+            # Find the warning call for invalid skills
+            invalid_calls = [
+                c
+                for c in mock_log.warning.call_args_list
+                if c[0][0] == "intake_requested_skills_invalid"
+            ]
+            assert len(invalid_calls) == 1
+            assert invalid_calls[0][1]["invalid"] == ["nonexistent_style"]
+            assert invalid_calls[0][1]["valid"] == ["cozy"]
 
     @patch.dict("os.environ", {"ANTHROPIC_API_KEY": "test-key"})
     @patch("app.activities.intake.anthropic.AsyncAnthropic")
@@ -1897,3 +1945,65 @@ class TestSkillLoader:
             assert content is not None, f"Could not load {skill.skill_id}.md"
             for section in required_sections:
                 assert section in content, f"Skill {skill.skill_id}.md missing section: {section}"
+
+    def test_cap_skills_style_only(self):
+        """3 style skills -> capped to 2."""
+        from app.activities.skill_loader import cap_skills
+
+        result = cap_skills(["cozy", "modern", "minimalist"])
+        assert result == ["cozy", "modern"]
+
+    def test_cap_skills_with_more_space(self):
+        """2 styles + more_space -> all 3 kept (more_space is orthogonal)."""
+        from app.activities.skill_loader import cap_skills
+
+        result = cap_skills(["cozy", "modern", "more_space"])
+        assert result == ["cozy", "modern", "more_space"]
+
+    def test_cap_skills_three_styles_plus_more_space(self):
+        """3 styles + more_space -> 2 styles + more_space."""
+        from app.activities.skill_loader import cap_skills
+
+        result = cap_skills(["cozy", "modern", "minimalist", "more_space"])
+        assert result == ["cozy", "modern", "more_space"]
+
+    def test_cap_skills_only_more_space(self):
+        """more_space alone passes through."""
+        from app.activities.skill_loader import cap_skills
+
+        result = cap_skills(["more_space"])
+        assert result == ["more_space"]
+
+    def test_cap_skills_empty(self):
+        """Empty list returns empty."""
+        from app.activities.skill_loader import cap_skills
+
+        result = cap_skills([])
+        assert result == []
+
+    def test_cap_skills_within_limit(self):
+        """2 styles without more_space -> unchanged."""
+        from app.activities.skill_loader import cap_skills
+
+        result = cap_skills(["cozy", "modern"])
+        assert result == ["cozy", "modern"]
+
+    def test_cap_skills_deduplicates(self):
+        """Duplicate skill IDs are removed, preserving order."""
+        from app.activities.skill_loader import cap_skills
+
+        result = cap_skills(["cozy", "modern", "cozy", "more_space", "more_space"])
+        assert result == ["cozy", "modern", "more_space"]
+
+    def test_cap_skills_logs_on_overflow(self):
+        """Capping logs a warning with kept/dropped details."""
+        from unittest.mock import patch
+
+        from app.activities.skill_loader import cap_skills
+
+        with patch("app.activities.skill_loader.log") as mock_log:
+            cap_skills(["cozy", "modern", "scandinavian"])
+            mock_log.warning.assert_called_once()
+            call_args = mock_log.warning.call_args
+            assert call_args[0][0] == "skills_capped"
+            assert call_args[1]["dropped"] == ["scandinavian"]

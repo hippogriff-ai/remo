@@ -781,15 +781,11 @@ async def _real_intake_message(
     if result.partial_brief is not None:
         session.last_partial_brief = result.partial_brief
     if result.requested_skills:
-        combined = list(dict.fromkeys(session.loaded_skill_ids + result.requested_skills))
-        if len(combined) > 2:
-            logger.warning(
-                "intake_skills_capped",
-                project_id=project_id,
-                kept=combined[:2],
-                dropped=combined[2:],
-            )
-        session.loaded_skill_ids = combined[:2]
+        from app.activities.skill_loader import cap_skills
+
+        # cap_skills handles dedup + logging internally
+        combined = session.loaded_skill_ids + result.requested_skills
+        session.loaded_skill_ids = cap_skills(combined)
 
     return result
 
