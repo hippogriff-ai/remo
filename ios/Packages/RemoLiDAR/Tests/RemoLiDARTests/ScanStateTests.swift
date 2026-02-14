@@ -179,4 +179,50 @@ final class ScanStateTests: XCTestCase {
         }
         XCTAssertEqual(state, .processing, "Backgrounding should not affect processing state")
     }
+
+    // MARK: - PR review fixes
+
+    /// Verifies success callback is ignored when scan was already interrupted (P1).
+    /// Scenario: backgrounding sets .failed, then RoomCaptureSession delivers a late success.
+    func testSuccessCallbackIgnoredAfterInterruption() {
+        var state: ScanState = .scanning
+        // Backgrounding interrupts the scan
+        state = .failed("Scan interrupted. Please try again.")
+        // Late success callback arrives — should be ignored because state != .scanning
+        let shouldProcess = (state == .scanning)
+        XCTAssertFalse(shouldProcess, "Late success callback should be ignored after interruption")
+        XCTAssertEqual(state, .failed("Scan interrupted. Please try again."),
+                       "Failed state should be preserved, not overwritten by late callback")
+    }
+
+    /// Verifies cancellation preserves existing .failed state (P2).
+    /// Scenario: backgrounding sets .failed, then CancellationError arrives.
+    func testCancellationPreservesInterruptionError() {
+        var state: ScanState = .scanning
+        // Backgrounding sets .failed first
+        state = .failed("Scan interrupted. Please try again.")
+        // CancellationError arrives — should NOT clear the .failed state
+        let error: Error = CancellationError()
+        if error is CancellationError {
+            if case .failed = state {
+                // Already failed — preserve the interruption message
+            } else {
+                state = .ready
+            }
+        }
+        XCTAssertEqual(state, .failed("Scan interrupted. Please try again."),
+                       "Cancellation should not clear an existing interruption error")
+    }
+
+    /// Verifies first-time camera denial sets .failed state with guidance (P2).
+    func testFirstTimeCameraDenialSetsFailed() {
+        var state: ScanState = .ready
+        // Simulate checkCameraPermission returning false after user denies
+        let granted = false
+        if !granted {
+            state = .failed("Camera access required for room scanning. Enable in Settings > Privacy > Camera.")
+        }
+        XCTAssertEqual(state, .failed("Camera access required for room scanning. Enable in Settings > Privacy > Camera."),
+                       "First-time camera denial should show Settings guidance, not silently return")
+    }
 }

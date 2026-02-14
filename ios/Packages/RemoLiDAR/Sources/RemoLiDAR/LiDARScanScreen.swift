@@ -198,6 +198,11 @@ public struct LiDARScanScreen: View {
     private func onScanComplete(_ result: Result<CapturedRoom, Error>) {
         switch result {
         case .success(let capturedRoom):
+            // Guard: ignore late success callbacks after backgrounding interrupted the scan
+            guard scanState == .scanning else {
+                scanLogger.warning("ignoring success callback — scan already in state \(String(describing: scanState), privacy: .public)")
+                return
+            }
             scanState = .processing
             scanLogger.info("scan captured: \(capturedRoom.walls.count) walls, \(capturedRoom.doors.count + capturedRoom.windows.count + capturedRoom.openings.count) openings, \(capturedRoom.objects.count) objects, \(capturedRoom.floors.count) floors")
             Task {
@@ -253,7 +258,9 @@ public struct LiDARScanScreen: View {
         case .failure(let error):
             if error is CancellationError {
                 scanLogger.info("scan processing was cancelled")
-                scanState = .ready
+                // Only reset to .ready if not already .failed (backgrounding guard may
+                // have set .failed("Scan interrupted...") before cancellation arrives)
+                if case .failed = scanState { break } else { scanState = .ready }
             } else {
                 scanLogger.error("scan failed: \(error.localizedDescription, privacy: .public)")
                 scanState = .failed("Room scan failed. Please try again or skip this step.")
@@ -270,7 +277,12 @@ public struct LiDARScanScreen: View {
         case .authorized:
             return true
         case .notDetermined:
-            return await AVCaptureDevice.requestAccess(for: .video)
+            let granted = await AVCaptureDevice.requestAccess(for: .video)
+            if !granted {
+                scanLogger.warning("camera permission denied by user on first prompt")
+                scanState = .failed("Camera access required for room scanning. Enable in Settings > Privacy > Camera.")
+            }
+            return granted
         case .denied, .restricted:
             scanLogger.warning("camera permission denied or restricted")
             scanState = .failed("Camera access required for room scanning. Enable in Settings > Privacy > Camera.")
