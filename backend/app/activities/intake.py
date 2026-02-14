@@ -852,7 +852,13 @@ async def _run_intake_core(input: IntakeChatInput) -> IntakeChatOutput:
         if loaded_skill_ids:
             partial_brief.style_skills_used = loaded_skill_ids
         elif brief_data and isinstance(brief_data.get("style_skills_used"), list):
-            partial_brief.style_skills_used = brief_data["style_skills_used"]
+            # Validate model-emitted skill IDs against manifest to prevent
+            # hallucinated IDs from corrupting provenance.
+            manifest = skill_loader.load_manifest()
+            valid_ids = {s.skill_id for s in manifest.skills}
+            partial_brief.style_skills_used = [
+                s for s in brief_data["style_skills_used"] if isinstance(s, str) and s in valid_ids
+            ]
 
     return IntakeChatOutput(
         agent_message=skill_data.get("message", ""),
