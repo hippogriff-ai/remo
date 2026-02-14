@@ -20,5 +20,9 @@ let package = Package(
                 .linkedFramework("RoomPlan", .when(platforms: [.iOS])),
             ]
         ),
+        .testTarget(
+            name: "RemoLiDARTests",
+            dependencies: ["RemoLiDAR"]
+        ),
     ]
 )
