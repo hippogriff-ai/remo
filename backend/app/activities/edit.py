@@ -12,6 +12,8 @@ from __future__ import annotations
 
 import asyncio
 import io
+import os
+import random
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -299,6 +301,57 @@ async def _continue_chat(
     return result_image, updated_history
 
 
+async def _maybe_run_edit_eval(
+    result_image: Image.Image,
+    original_url: str,
+    revised_url: str,
+    instruction: str,
+) -> None:
+    """Run eval pipeline on edit result if EVAL_MODE is set. Never raises."""
+    eval_mode = os.environ.get("EVAL_MODE", "off").lower()
+    if eval_mode == "off":
+        return
+
+    try:
+        from app.utils.image_eval import run_fast_eval
+
+        fast = run_fast_eval(result_image, result_image, brief=None, is_edit=True)
+        logger.info(
+            "eval_edit_fast_result",
+            composite=fast.composite_score,
+            has_artifacts=fast.has_artifacts,
+            needs_deep=fast.needs_deep_eval,
+        )
+
+        deep_result = None
+        if eval_mode == "full" and (fast.needs_deep_eval or random.random() < 0.2):
+            from app.activities.design_eval import evaluate_edit
+
+            deep_result = await evaluate_edit(
+                original_image_url=original_url,
+                edited_image_url=revised_url,
+                edit_instruction=instruction,
+                fast_eval=fast,
+            )
+            logger.info(
+                "eval_edit_deep_result",
+                total=deep_result.total,
+                tag=deep_result.tag,
+            )
+
+        from app.utils.score_tracking import append_score
+
+        append_score(
+            history_path=Path("eval_history.jsonl"),
+            scenario="edit",
+            prompt_version="v1",
+            fast_eval=fast.__dict__,
+            deep_eval=({"total": deep_result.total, "tag": deep_result.tag} if deep_result else {}),
+        )
+    except Exception:
+        logger.warning("eval_edit_failed", exc_info=True)
+
+
 @activity.defn
 async def edit_design(input: EditDesignInput) -> EditDesignOutput:
     """Edit a design image using annotations or text feedback."""
@@ -372,6 +425,14 @@ async def edit_design(input: EditDesignInput) -> EditDesignOutput:
             history_key = await asyncio.to_thread(
                 serialize_contents_to_r2, updated_history, resolved_input.project_id
             )
+
+        # Run eval if enabled — never blocks, never fails the activity
+        await _maybe_run_edit_eval(
+            result_image=result_image,
+            original_url=input.base_image_url,
+            revised_url=revised_url,
+            instruction=input.feedback or "annotation edit",
+        )
 
         return EditDesignOutput(
             revised_image_url=revised_url,

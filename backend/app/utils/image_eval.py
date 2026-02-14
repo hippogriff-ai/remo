@@ -154,11 +154,13 @@ def _brief_to_text(brief: DesignBrief) -> str:
     return " ".join(parts)
 
 
-def clip_text_image_score(image: Image.Image, brief: DesignBrief) -> float:
+def clip_text_image_score(image: Image.Image, brief: DesignBrief | None) -> float:
     """CLIP cosine similarity between the image and a text description of the brief.
 
-    Returns 0.5 (neutral) if CLIP is unavailable.
+    Returns 0.5 (neutral) if CLIP is unavailable or brief is None.
     """
+    if brief is None:
+        return 0.5
     if not _clip_available:
         logger.debug("clip_unavailable, returning neutral score")
         return 0.5
@@ -318,7 +320,7 @@ def detect_annotation_artifacts(
 def run_fast_eval(
     generated: Image.Image,
     original: Image.Image,
-    brief: DesignBrief,
+    brief: DesignBrief | None = None,
     *,
     is_edit: bool = False,
 ) -> FastEvalResult:

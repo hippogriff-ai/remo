@@ -9,6 +9,8 @@ from __future__ import annotations
 
 import asyncio
 import io
+import os
+import random
 import re
 from pathlib import Path
 
@@ -35,6 +37,7 @@ from app.utils.gemini_chat import (
     get_client,
 )
 from app.utils.http import download_images
+from app.utils.prompt_versioning import get_active_version, load_versioned_prompt
 
 logger = structlog.get_logger()
 
@@ -160,8 +163,8 @@ def _build_generation_prompt(
     option_variant: str = "",
 ) -> str:
     """Build the generation prompt from templates and brief data."""
-    template = _load_prompt("generation.txt")
-    preservation = _load_prompt("room_preservation.txt")
+    template = load_versioned_prompt("generation")
+    preservation = load_versioned_prompt("room_preservation")
 
     brief_text = "Create a beautiful, modern interior design."
     keep_items_text = ""
@@ -328,6 +331,74 @@ async def _generate_single_option(
     return result_image
 
 
+async def _maybe_run_eval(
+    options: list[Image.Image],
+    original: Image.Image,
+    brief: DesignBrief | None,
+    generated_urls: list[str],
+    original_url: str,
+) -> None:
+    """Run eval pipeline if EVAL_MODE is set. Never raises — logs and returns."""
+    eval_mode = os.environ.get("EVAL_MODE", "off").lower()
+    if eval_mode == "off":
+        return
+
+    prompt_version = get_active_version("generation")
+
+    for idx, (option_img, gen_url) in enumerate(zip(options, generated_urls, strict=True)):
+        try:
+            from app.utils.image_eval import run_fast_eval
+
+            fast = run_fast_eval(option_img, original, brief)
+            logger.info(
+                "eval_fast_result",
+                option=idx,
+                composite=fast.composite_score,
+                clip_text=fast.clip_text_score,
+                clip_image=fast.clip_image_score,
+                edge_ssim=fast.edge_ssim_score,
+                needs_deep=fast.needs_deep_eval,
+                prompt_version=prompt_version,
+            )
+
+            deep_result = None
+            if (
+                eval_mode == "full"
+                and brief is not None
+                and (fast.needs_deep_eval or random.random() < 0.2)
+            ):
+                from app.activities.design_eval import evaluate_generation
+
+                deep_result = await evaluate_generation(
+                    original_photo_url=original_url,
+                    generated_image_url=gen_url,
+                    brief=brief,
+                    fast_eval=fast,
+                )
+                logger.info(
+                    "eval_deep_result",
+                    option=idx,
+                    total=deep_result.total,
+                    tag=deep_result.tag,
+                    prompt_version=prompt_version,
+                )
+
+            # Track scores
+            from app.utils.score_tracking import append_score
+
+            append_score(
+                history_path=Path("eval_history.jsonl"),
+                scenario=f"generation_option_{idx}",
+                prompt_version=prompt_version,
+                fast_eval=fast.__dict__,
+                deep_eval=(
+                    {"total": deep_result.total, "tag": deep_result.tag} if deep_result else {}
+                ),
+            )
+        except Exception:
+            logger.warning("eval_failed", option=idx, exc_info=True)
+
+
 @activity.defn
 async def generate_designs(input: GenerateDesignsInput) -> GenerateDesignsOutput:
     """Generate 2 design options from room photos and design brief."""
@@ -408,6 +479,15 @@ async def generate_designs(input: GenerateDesignsInput) -> GenerateDesignsOutput
         # Upload to R2 (sync boto3 calls run in thread pool)
         url_0 = await asyncio.to_thread(_upload_image, option_0, project_id, "option_0.png")
         url_1 = await asyncio.to_thread(_upload_image, option_1, project_id, "option_1.png")
+
+        # Run eval if enabled — never blocks, never fails the activity
+        await _maybe_run_eval(
+            options=[option_0, option_1],
+            original=room_images[0],
+            brief=input.design_brief,
+            generated_urls=[url_0, url_1],
+            original_url=input.room_photo_urls[0],
+        )
 
         return GenerateDesignsOutput(
             options=[
