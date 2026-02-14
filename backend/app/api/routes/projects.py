@@ -668,7 +668,10 @@ async def start_intake(project_id: str, body: IntakeStartRequest, request: Reque
         options=[
             QuickReplyOption(number=1, label="Living Room", value="living room"),
             QuickReplyOption(number=2, label="Bedroom", value="bedroom"),
-            QuickReplyOption(number=3, label="Home Office", value="home office"),
+            QuickReplyOption(number=3, label="Kitchen", value="kitchen"),
+            QuickReplyOption(number=4, label="Bathroom", value="bathroom"),
+            QuickReplyOption(number=5, label="Dining Room", value="dining room"),
+            QuickReplyOption(number=6, label="Home Office", value="home office"),
         ],
         progress="Question 1 of 3",
     )

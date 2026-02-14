@@ -801,6 +801,7 @@ struct RegionListRow: View {
                 TextField("Instruction (min 10 chars)", text: $region.instruction)
                     .textFieldStyle(.roundedBorder)
                     .font(.subheadline)
+                    .accessibilityIdentifier("region_instruction_\(displayNumber)")
 
                 TextField("Avoid (comma-separated)", text: avoidBinding)
                     .textFieldStyle(.roundedBorder)

@@ -910,7 +910,7 @@ class TestIntakeEndpoints:
         assert resp.status_code == 200
         body = resp.json()
         assert "agent_message" in body
-        assert len(body["options"]) == 3
+        assert len(body["options"]) == 6
         assert body["progress"] == "Question 1 of 3"
 
     @pytest.mark.asyncio
@@ -982,7 +982,7 @@ class TestIntakeEndpoints:
         )
         body = resp.json()
         assert body["progress"] == "Question 1 of 3"
-        assert len(body["options"]) == 3
+        assert len(body["options"]) == 6
 
         # Message 1: room type → style question with options
         resp = await client.post(
