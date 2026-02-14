@@ -223,14 +223,21 @@ def _format_room_constraints_for_prompt(
     lines = [
         f"Room: {dims.width_m:.1f}m x {dims.length_m:.1f}m, "
         f"ceiling {dims.height_m:.1f}m ({source})",
-        "",
-        "Per-category size limits:",
-        f'- Sofa: max ~{constraints["sofa"]["inches"]}" wide',
-        f'- Coffee table: max ~{constraints["coffee_table"]["inches"]}" wide',
-        f'- Rug: ~{constraints["rug"]["inches"]}" area',
-        f'- Dining table: max ~{constraints["dining_table"]["inches"]}" long',
-        f'- Floor lamp: max ~{constraints["floor_lamp"]["inches"]}" tall',
     ]
+
+    if constraints:
+        lines.append("")
+        lines.append("Per-category size limits:")
+        if "sofa" in constraints:
+            lines.append(f'- Sofa: max ~{constraints["sofa"]["inches"]}" wide')
+        if "coffee_table" in constraints:
+            lines.append(f'- Coffee table: max ~{constraints["coffee_table"]["inches"]}" wide')
+        if "rug" in constraints:
+            lines.append(f'- Rug: ~{constraints["rug"]["inches"]}" area')
+        if "dining_table" in constraints:
+            lines.append(f'- Dining table: max ~{constraints["dining_table"]["inches"]}" long')
+        if "floor_lamp" in constraints:
+            lines.append(f'- Floor lamp: max ~{constraints["floor_lamp"]["inches"]}" tall')
 
     # Include furniture observations from photo analysis
     if room_context and room_context.photo_analysis:
@@ -788,6 +795,7 @@ async def score_product(
         cached["product_url"] = product.get("url", "")
         cached["product_name"] = product.get("title", "Unknown")
         cached["image_url"] = product.get("image")
+        cached["dimensions"] = product.get("text", "")
         if "price_cents" not in cached:
             cached["price_cents"] = _price_to_cents(_extract_price_text(product))
         return cached  # type: ignore[no-any-return]
@@ -813,6 +821,8 @@ async def score_product(
     scores["product_url"] = product.get("url", "")
     scores["product_name"] = product.get("title", "Unknown")
     scores["image_url"] = product.get("image")
+    # Carry product text through for downstream dimension parsing
+    scores["dimensions"] = product.get("text", "")
     scores["_input_tokens"] = response.usage.input_tokens
     scores["_output_tokens"] = response.usage.output_tokens
     # Extract price from Exa content for cost estimation
@@ -1168,6 +1178,7 @@ def apply_confidence_filtering(
             fit_status = "tight"
             fit_detail = best.get("room_fit_detail", fit_detail)
         elif room_fit == "tight" and fit_status == "fits":
+            fit_status = "tight"
             fit_detail = best.get("room_fit_detail")
 
         matched.append(

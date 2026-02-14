@@ -890,6 +890,25 @@ class TestDimensionFiltering:
         assert len(matched) == 1
         assert matched[0].fit_status == "tight"  # downgraded from "fits"
 
+    def test_confidence_downgrades_on_tight(self):
+        """tight room_fit downgrades fit_status from 'fits' to 'tight'."""
+        items = [{"category": "Sofa"}]
+        scored = [
+            [
+                {
+                    "weighted_total": 0.85,
+                    "product_url": "https://example.com/sofa",
+                    "product_name": "Near-limit Sofa",
+                    "room_fit": "tight",
+                    "room_fit_detail": '70" near 68" limit',
+                }
+            ]
+        ]
+        matched, _, _ = apply_confidence_filtering(items, scored)
+        assert len(matched) == 1
+        assert matched[0].fit_status == "tight"  # downgraded from "fits"
+        assert matched[0].fit_detail == '70" near 68" limit'
+
 
 # === Code Fence Stripping Tests ===
 
@@ -2001,6 +2020,18 @@ class TestComputeRoomConstraintsEdgeCases:
     def test_all_zero_returns_empty(self):
         dims = RoomDimensions(width_m=0, length_m=0, height_m=0)
         assert _compute_room_constraints(dims) == {}
+
+
+class TestFormatRoomConstraintsInvalidDims:
+    """Tests for _format_room_constraints_for_prompt with invalid dimensions."""
+
+    def test_invalid_dims_no_keyerror(self):
+        """Zero dims → empty constraints → prompt should not crash."""
+        dims = RoomDimensions(width_m=0, length_m=0, height_m=0)
+        result = _format_room_constraints_for_prompt(None, dims)
+        # Should still produce room line but no category limits
+        assert "0.0m x 0.0m" in result
+        assert "Sofa" not in result
 
 
 class TestDimensionFilterListMismatch:
