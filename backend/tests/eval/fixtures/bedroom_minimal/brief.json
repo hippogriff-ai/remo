@@ -1,0 +1,13 @@
+{
+  "room_type": "bedroom",
+  "style_profile": {
+    "mood": "serene minimalist",
+    "colors": ["warm white", "light gray", "natural linen"],
+    "textures": ["linen bedding", "light oak wood", "soft wool rug"],
+    "lighting": "soft ambient with bedside reading lamps",
+    "clutter_level": "very minimal"
+  },
+  "keep_items": [],
+  "constraints": ["queen bed required"],
+  "pain_points": ["too cluttered", "needs calming atmosphere"]
+}

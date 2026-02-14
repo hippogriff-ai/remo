@@ -13,6 +13,7 @@ import re
 from pathlib import Path
 
 import structlog
+from google.genai import types
 from PIL import Image
 from temporalio import activity
 from temporalio.exceptions import ApplicationError
@@ -38,6 +39,56 @@ from app.utils.http import download_images
 logger = structlog.get_logger()
 
 PROMPTS_DIR = Path(__file__).parent.parent.parent / "prompts"
+
+# Gemini-supported aspect ratios and their numeric values (width/height)
+_SUPPORTED_RATIOS: list[tuple[str, float]] = [
+    ("1:1", 1.0),
+    ("3:4", 3 / 4),
+    ("4:3", 4 / 3),
+    ("9:16", 9 / 16),
+    ("16:9", 16 / 9),
+]
+
+
+_VALID_RATIOS = {label for label, _ in _SUPPORTED_RATIOS}
+
+
+def _detect_aspect_ratio(image: Image.Image) -> str:
+    """Snap an image's aspect ratio to the nearest Gemini-supported value.
+
+    Gemini supports: 1:1, 3:4, 4:3, 9:16, 16:9. We compute the input's
+    width/height ratio and pick the closest match to avoid distortion.
+    """
+    w, h = image.size
+    if h == 0 or w == 0:
+        logger.warning("aspect_ratio_degenerate_image", width=w, height=h)
+        return "1:1"
+    ratio = w / h
+    best_label = "1:1"
+    best_diff = float("inf")
+    for label, target in _SUPPORTED_RATIOS:
+        diff = abs(ratio - target)
+        if diff < best_diff:
+            best_diff = diff
+            best_label = label
+    return best_label
+
+
+def _make_image_config(aspect_ratio: str | None = None) -> types.GenerateContentConfig:
+    """Build a per-call GenerateContentConfig, optionally overriding aspect ratio.
+
+    Starts from the global IMAGE_CONFIG (2K resolution) and adds
+    aspect_ratio when provided.
+    """
+    if aspect_ratio is None:
+        return IMAGE_CONFIG
+    if aspect_ratio not in _VALID_RATIOS:
+        logger.warning("unsupported_aspect_ratio", aspect_ratio=aspect_ratio)
+        return IMAGE_CONFIG
+    return types.GenerateContentConfig(
+        response_modalities=["TEXT", "IMAGE"],
+        image_config=types.ImageConfig(image_size="2K", aspect_ratio=aspect_ratio),
+    )
 
 
 def _load_prompt(name: str) -> str:
@@ -91,10 +142,22 @@ def _format_room_context(dims: RoomDimensions | None) -> str:
     return "\n".join(parts)
 
 
+_OPTION_VARIANTS: tuple[str, str] = (
+    "Design Direction: Lean into the primary style elements from the brief. "
+    "Emphasize the dominant mood and color palette. If pain points were mentioned, "
+    "prioritize addressing the first one with a clean, polished solution.",
+    "Design Direction: Explore a complementary variation. If the brief mentions "
+    "multiple styles or pain points, lean toward the secondary elements. Try a "
+    "bolder accent color, a different furniture arrangement, or an unexpected "
+    "texture contrast — while staying true to the overall aesthetic.",
+)
+
+
 def _build_generation_prompt(
     brief: DesignBrief | None,
     inspiration_notes: list[InspirationNote],
     room_dimensions: RoomDimensions | None = None,
+    option_variant: str = "",
 ) -> str:
     """Build the generation prompt from templates and brief data."""
     template = _load_prompt("generation.txt")
@@ -104,8 +167,7 @@ def _build_generation_prompt(
     keep_items_text = ""
 
     if brief:
-        parts = []
-        parts.append(f"Room type: {brief.room_type}")
+        parts = [f"Room type: {brief.room_type}"]
         if brief.occupants:
             parts.append(f"Occupants: {brief.occupants}")
         if brief.lifestyle:
@@ -151,6 +213,7 @@ def _build_generation_prompt(
         keep_items=keep_items_text.replace("{", "{{").replace("}", "}}"),
         room_context=room_context.replace("{", "{{").replace("}", "}}"),
         room_preservation=preservation,
+        option_variant=option_variant,
     )
 
 
@@ -187,6 +250,7 @@ async def _generate_single_option(
     inspiration_images: list[Image.Image],
     option_index: int,
     source_urls: list[str] | None = None,
+    image_config: types.GenerateContentConfig | None = None,
 ) -> Image.Image:
     """Generate a single design option via standalone Gemini call."""
     from app.utils.llm_cache import get_cached_bytes, set_cached_bytes
@@ -211,14 +275,10 @@ async def _generate_single_option(
             # Fall through to real Gemini call
 
     client = get_client()
+    config = image_config or IMAGE_CONFIG
 
     # Build content: room photos + inspiration photos + text prompt
-    contents: list = []
-    for img in room_images:
-        contents.append(img)
-    for img in inspiration_images:
-        contents.append(img)
-    contents.append(prompt)
+    contents: list = [*room_images, *inspiration_images, prompt]
 
     logger.info(
         "gemini_generate_start",
@@ -232,7 +292,7 @@ async def _generate_single_option(
         client.models.generate_content,
         model=GEMINI_MODEL,
         contents=contents,
-        config=IMAGE_CONFIG,
+        config=config,
     )
 
     result_image = extract_image(response)
@@ -249,7 +309,7 @@ async def _generate_single_option(
             client.models.generate_content,
             model=GEMINI_MODEL,
             contents=contents + ["Please generate the room image now."],
-            config=IMAGE_CONFIG,
+            config=config,
         )
         result_image = extract_image(response)
 
@@ -317,17 +377,32 @@ async def generate_designs(input: GenerateDesignsInput) -> GenerateDesignsOutput
                 inspiration_kept=len(inspiration_images),
             )
 
-        # Build prompt
-        prompt = _build_generation_prompt(
-            input.design_brief, input.inspiration_notes, input.room_dimensions
-        )
+        # Build per-option prompts with differentiated variant instructions
+        prompts = [
+            _build_generation_prompt(
+                input.design_brief,
+                input.inspiration_notes,
+                input.room_dimensions,
+                option_variant=variant,
+            )
+            for variant in _OPTION_VARIANTS
+        ]
 
-        # Generate 2 options in parallel
+        # Detect aspect ratio from first room photo to match output to input
+        aspect_ratio = _detect_aspect_ratio(room_images[0])
+        config = _make_image_config(aspect_ratio)
+        logger.info("aspect_ratio_detected", aspect_ratio=aspect_ratio)
+
+        # Generate 2 options in parallel with differentiated prompts
         # Pass original R2 keys (stable, not presigned) for cache key identity
         source_urls = input.room_photo_urls + input.inspiration_photo_urls
         option_0, option_1 = await asyncio.gather(
-            _generate_single_option(prompt, room_images, inspiration_images, 0, source_urls),
-            _generate_single_option(prompt, room_images, inspiration_images, 1, source_urls),
+            *(
+                _generate_single_option(
+                    prompt, room_images, inspiration_images, idx, source_urls, config
+                )
+                for idx, prompt in enumerate(prompts)
+            )
         )
 
         # Upload to R2 (sync boto3 calls run in thread pool)
