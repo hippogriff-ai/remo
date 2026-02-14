@@ -15,6 +15,7 @@ from temporalio.testing import WorkflowEnvironment
 from temporalio.worker import Worker
 
 from app.activities.mock_stubs import (
+    analyze_room_photos,
     edit_design,
     generate_designs,
     generate_shopping_list,
@@ -39,6 +40,7 @@ from app.models.contracts import (
 from app.workflows.design_project import DesignProjectWorkflow
 
 ALL_ACTIVITIES = [
+    analyze_room_photos,
     generate_designs,
     edit_design,
     generate_shopping_list,
@@ -199,6 +201,7 @@ async def _failing_shopping(_input) -> None:
 
 
 _FAILING_GENERATION_ACTIVITIES = [
+    analyze_room_photos,
     _failing_generate,
     edit_design,
     generate_shopping_list,
@@ -206,6 +209,7 @@ _FAILING_GENERATION_ACTIVITIES = [
 ]
 
 _FAILING_EDIT_ACTIVITIES = [
+    analyze_room_photos,
     generate_designs,
     _failing_edit,
     generate_shopping_list,
@@ -213,6 +217,7 @@ _FAILING_EDIT_ACTIVITIES = [
 ]
 
 _FAILING_SHOPPING_ACTIVITIES = [
+    analyze_room_photos,
     generate_designs,
     edit_design,
     _failing_shopping,
@@ -245,6 +250,7 @@ async def _flaky_generate(_input) -> GenerateDesignsOutput:
 
 
 _FLAKY_GENERATION_ACTIVITIES = [
+    analyze_room_photos,
     _flaky_generate,
     edit_design,
     generate_shopping_list,
@@ -279,6 +285,7 @@ async def _flaky_shopping(_input) -> GenerateShoppingListOutput:
 
 
 _FLAKY_SHOPPING_ACTIVITIES = [
+    analyze_room_photos,
     generate_designs,
     edit_design,
     _flaky_shopping,
@@ -307,6 +314,7 @@ async def _flaky_edit(_input) -> EditDesignOutput:
 
 
 _FLAKY_EDIT_ACTIVITIES = [
+    analyze_room_photos,
     generate_designs,
     _flaky_edit,
     generate_shopping_list,
@@ -333,6 +341,7 @@ async def _capturing_generate(input: GenerateDesignsInput) -> GenerateDesignsOut
 
 
 _CAPTURING_GEN_ACTIVITIES = [
+    analyze_room_photos,
     _capturing_generate,
     edit_design,
     generate_shopping_list,
@@ -366,6 +375,7 @@ async def _capturing_shopping(input: GenerateShoppingListInput) -> GenerateShopp
 
 
 _CAPTURING_SHOPPING_ACTIVITIES = [
+    analyze_room_photos,
     generate_designs,
     edit_design,
     _capturing_shopping,
@@ -391,6 +401,7 @@ async def _capturing_edit(
 
 
 _CAPTURING_EDIT_ACTIVITIES = [
+    analyze_room_photos,
     generate_designs,
     _capturing_edit,
     generate_shopping_list,
@@ -412,6 +423,7 @@ async def _slow_edit(_input: EditDesignInput) -> EditDesignOutput:
 
 
 _SLOW_EDIT_ACTIVITIES = [
+    analyze_room_photos,
     generate_designs,
     _slow_edit,
     generate_shopping_list,
@@ -432,6 +444,7 @@ async def _slow_generate(_input: GenerateDesignsInput) -> GenerateDesignsOutput:
 
 
 _SLOW_GENERATE_ACTIVITIES = [
+    analyze_room_photos,
     _slow_generate,
     edit_design,
     generate_shopping_list,
@@ -449,6 +462,7 @@ async def _failing_purge(_project_id: str) -> None:
 
 
 _FAILING_PURGE_ACTIVITIES = [
+    analyze_room_photos,
     generate_designs,
     edit_design,
     generate_shopping_list,
@@ -1206,6 +1220,9 @@ class TestShoppingInput:
             # Room dimensions forwarded
             assert _captured_shopping_input.room_dimensions is not None
             assert _captured_shopping_input.room_dimensions.width_m == 3.5
+            # Room context forwarded (analysis ran during scan)
+            assert _captured_shopping_input.room_context is not None
+            assert _captured_shopping_input.room_context.enrichment_sources == ["photos", "lidar"]
 
     async def test_shopping_input_with_minimal_state(self, workflow_env, tq):
         """Verifies shopping input handles skipped scan + skipped intake.
@@ -1248,6 +1265,9 @@ class TestShoppingInput:
             assert _captured_shopping_input.revision_history == []
             assert _captured_shopping_input.design_image_url != ""
             assert len(_captured_shopping_input.original_room_photo_urls) == 2
+            # Room context still available (analysis runs even without LiDAR)
+            assert _captured_shopping_input.room_context is not None
+            assert _captured_shopping_input.room_context.enrichment_sources == ["photos"]
 
 
 class TestEditInput:
@@ -3173,3 +3193,196 @@ class TestErrorRecovery:
             assert state.error is None
             assert state.shopping_list is not None
             assert len(state.shopping_list.items) > 0
+
+
+# ---------------------------------------------------------------------------
+# Eager analysis (Designer Brain) tests
+# ---------------------------------------------------------------------------
+
+
+def _scan_with_dims() -> ScanData:
+    """Helper to create a scan with LiDAR dimensions."""
+    return ScanData(
+        storage_key="projects/test/lidar/dimensions.json",
+        room_dimensions=RoomDimensions(width_m=4.0, length_m=5.0, height_m=2.7),
+    )
+
+
+class TestEagerAnalysis:
+    """Verify the eager photo analysis fires during scan and enriches intake."""
+
+    async def test_analysis_populates_after_scan(self, workflow_env, tq):
+        """Analysis should complete by the time intake starts (ran during scan)."""
+        async with Worker(
+            workflow_env.client,
+            task_queue=tq,
+            workflows=[DesignProjectWorkflow],
+            activities=ALL_ACTIVITIES,
+        ):
+            handle = await _start_workflow(workflow_env, tq)
+            await handle.signal(DesignProjectWorkflow.add_photo, _photo(0))
+            await handle.signal(DesignProjectWorkflow.add_photo, _photo(1))
+            # Analysis fires after 2+ photos; scan proceeds in parallel
+            await handle.signal(DesignProjectWorkflow.complete_scan, _scan_with_dims())
+            await asyncio.sleep(1.0)
+
+            state = await handle.query(DesignProjectWorkflow.get_state)
+            assert state.step == "intake"
+            assert state.room_analysis is not None
+            assert state.room_analysis.room_type == "living room"
+            assert state.room_analysis.photo_count == 2
+
+    async def test_analysis_enriched_with_lidar(self, workflow_env, tq):
+        """LiDAR dimensions should override photo-estimated dimensions."""
+        async with Worker(
+            workflow_env.client,
+            task_queue=tq,
+            workflows=[DesignProjectWorkflow],
+            activities=ALL_ACTIVITIES,
+        ):
+            handle = await _start_workflow(workflow_env, tq)
+            await handle.signal(DesignProjectWorkflow.add_photo, _photo(0))
+            await handle.signal(DesignProjectWorkflow.add_photo, _photo(1))
+            await handle.signal(DesignProjectWorkflow.complete_scan, _scan_with_dims())
+            await asyncio.sleep(1.0)
+
+            state = await handle.query(DesignProjectWorkflow.get_state)
+            assert state.room_context is not None
+            assert state.room_context.enrichment_sources == ["photos", "lidar"]
+            assert state.room_context.room_dimensions is not None
+            assert state.room_context.room_dimensions.width_m == 4.0
+            # Dimensions should be LiDAR-precise, not photo-estimated
+            assert "4.0m x 5.0m" in state.room_analysis.estimated_dimensions
+
+    async def test_analysis_without_lidar(self, workflow_env, tq):
+        """Skip-scan path: analysis still available, but photo-only context."""
+        async with Worker(
+            workflow_env.client,
+            task_queue=tq,
+            workflows=[DesignProjectWorkflow],
+            activities=ALL_ACTIVITIES,
+        ):
+            handle = await _start_workflow(workflow_env, tq)
+            await handle.signal(DesignProjectWorkflow.add_photo, _photo(0))
+            await handle.signal(DesignProjectWorkflow.add_photo, _photo(1))
+            await handle.signal(DesignProjectWorkflow.skip_scan)
+            await asyncio.sleep(1.0)
+
+            state = await handle.query(DesignProjectWorkflow.get_state)
+            assert state.step == "intake"
+            assert state.room_analysis is not None
+            # Without LiDAR, context has only photo source
+            assert state.room_context is not None
+            assert state.room_context.enrichment_sources == ["photos"]
+            assert state.room_context.room_dimensions is None
+
+    async def test_start_over_re_fires_analysis(self, workflow_env, tq):
+        """start_over clears analysis then re-fires for the next intake round."""
+        async with Worker(
+            workflow_env.client,
+            task_queue=tq,
+            workflows=[DesignProjectWorkflow],
+            activities=ALL_ACTIVITIES,
+        ):
+            handle = await _start_workflow(workflow_env, tq)
+            await handle.signal(DesignProjectWorkflow.add_photo, _photo(0))
+            await handle.signal(DesignProjectWorkflow.add_photo, _photo(1))
+            await handle.signal(DesignProjectWorkflow.skip_scan)
+            await asyncio.sleep(1.0)
+
+            # Verify analysis populated
+            state = await handle.query(DesignProjectWorkflow.get_state)
+            assert state.room_analysis is not None
+
+            # Start over: clears analysis, but while-loop re-fires it
+            await handle.signal(DesignProjectWorkflow.start_over)
+            await asyncio.sleep(1.0)
+
+            # After settling, analysis should be re-populated (same photos)
+            state = await handle.query(DesignProjectWorkflow.get_state)
+            assert state.step == "intake"
+            assert state.room_analysis is not None
+            assert state.room_analysis.room_type == "living room"
+
+    async def test_start_over_during_intake_restarts_cleanly(self, workflow_env, tq):
+        """start_over during intake wait should restart without wasting generation."""
+        async with Worker(
+            workflow_env.client,
+            task_queue=tq,
+            workflows=[DesignProjectWorkflow],
+            activities=ALL_ACTIVITIES,
+        ):
+            handle = await _start_workflow(workflow_env, tq)
+            await handle.signal(DesignProjectWorkflow.add_photo, _photo(0))
+            await handle.signal(DesignProjectWorkflow.add_photo, _photo(1))
+            await handle.signal(DesignProjectWorkflow.skip_scan)
+            await asyncio.sleep(1.0)
+
+            state = await handle.query(DesignProjectWorkflow.get_state)
+            assert state.step == "intake"
+
+            # Start over while waiting for intake (no brief submitted yet)
+            await handle.signal(DesignProjectWorkflow.start_over)
+            await asyncio.sleep(1.0)
+
+            # Should be back at intake, not stuck or at generation
+            state = await handle.query(DesignProjectWorkflow.get_state)
+            assert state.step == "intake"
+            assert state.design_brief is None
+
+            # Now complete the second intake round normally
+            await handle.signal(DesignProjectWorkflow.complete_intake, _brief())
+            await asyncio.sleep(1.0)
+
+            state = await handle.query(DesignProjectWorkflow.get_state)
+            assert state.step == "selection"
+
+    async def test_analysis_does_not_block_intake(self, workflow_env, tq):
+        """Even with analysis, workflow should reach intake step."""
+        async with Worker(
+            workflow_env.client,
+            task_queue=tq,
+            workflows=[DesignProjectWorkflow],
+            activities=ALL_ACTIVITIES,
+        ):
+            handle = await _start_workflow(workflow_env, tq)
+            await handle.signal(DesignProjectWorkflow.add_photo, _photo(0))
+            await handle.signal(DesignProjectWorkflow.add_photo, _photo(1))
+            await handle.signal(DesignProjectWorkflow.skip_scan)
+            await asyncio.sleep(1.0)
+
+            state = await handle.query(DesignProjectWorkflow.get_state)
+            assert state.step == "intake"
+            # Can still complete intake normally
+            await handle.signal(DesignProjectWorkflow.complete_intake, _brief())
+            await asyncio.sleep(1.0)
+
+            state = await handle.query(DesignProjectWorkflow.get_state)
+            assert state.step == "selection"
+
+    async def test_full_flow_with_analysis(self, workflow_env, tq):
+        """Full happy path with analysis — photos → scan → intake → generation → completed."""
+        async with Worker(
+            workflow_env.client,
+            task_queue=tq,
+            workflows=[DesignProjectWorkflow],
+            activities=ALL_ACTIVITIES,
+        ):
+            handle = await _start_workflow(workflow_env, tq)
+            await handle.signal(DesignProjectWorkflow.add_photo, _photo(0))
+            await handle.signal(DesignProjectWorkflow.add_photo, _photo(1))
+            await handle.signal(DesignProjectWorkflow.complete_scan, _scan_with_dims())
+            await asyncio.sleep(1.0)
+            await handle.signal(DesignProjectWorkflow.complete_intake, _brief())
+            await asyncio.sleep(1.0)
+            await handle.signal(DesignProjectWorkflow.select_option, 0)
+            await asyncio.sleep(0.5)
+            await handle.signal(DesignProjectWorkflow.approve_design)
+            await asyncio.sleep(2.0)
+
+            state = await handle.query(DesignProjectWorkflow.get_state)
+            assert state.step == "completed"
+            # Analysis should persist through the full flow
+            assert state.room_analysis is not None
+            assert state.room_context is not None
+            assert state.room_context.enrichment_sources == ["photos", "lidar"]

@@ -178,6 +178,47 @@ class TestPromptBuilding:
         assert "camera angle" in prompt
         assert "room geometry" in prompt or "architecture" in prompt
 
+    def test_build_prompt_with_designer_brain_fields(self):
+        """PR-6 follow-up: New DesignBrief fields appear in generation prompt."""
+        from app.activities.generate import _build_generation_prompt
+
+        brief = DesignBrief(
+            room_type="living room",
+            emotional_drivers=["started WFH", "room feels oppressive"],
+            usage_patterns="couple WFH Mon-Fri, host dinners monthly",
+            renovation_willingness="repaint yes, fixtures maybe, tile no",
+            room_analysis_hypothesis="Bright room needing warmth and better storage",
+        )
+        prompt = _build_generation_prompt(brief, [])
+        assert "started WFH" in prompt
+        assert "couple WFH Mon-Fri" in prompt
+        assert "repaint yes" in prompt
+        assert "Bright room needing warmth" in prompt
+
+    def test_build_prompt_without_designer_brain_fields(self):
+        """New fields absent when not populated (backward compat)."""
+        from app.activities.generate import _build_generation_prompt
+
+        brief = DesignBrief(room_type="bedroom")
+        prompt = _build_generation_prompt(brief, [])
+        assert "Emotional drivers" not in prompt
+        assert "Usage patterns" not in prompt
+        assert "Renovation scope" not in prompt
+        assert "Room analysis" not in prompt
+
+    def test_build_prompt_includes_lifestyle(self):
+        """Lifestyle field appears separately in generation prompt."""
+        from app.activities.generate import _build_generation_prompt
+
+        brief = DesignBrief(
+            room_type="living room",
+            occupants="couple, 30s",
+            lifestyle="Morning yoga, weekend hosting",
+        )
+        prompt = _build_generation_prompt(brief, [])
+        assert "couple, 30s" in prompt
+        assert "Morning yoga, weekend hosting" in prompt
+
 
 class TestRoomContextFormatting:
     """Tests for _format_room_context and room_dimensions in prompt building."""

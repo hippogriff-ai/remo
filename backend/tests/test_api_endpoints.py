@@ -25,6 +25,8 @@ from app.models.contracts import (
     IntakeChatOutput,
     PhotoData,
     QuickReplyOption,
+    RoomAnalysis,
+    RoomContext,
     ValidatePhotoOutput,
 )
 
@@ -3119,6 +3121,72 @@ class TestRealIntakeWiring:
 
         session = _intake_sessions[pid]
         assert len(session.history) == 0  # nothing appended on error
+
+    @pytest.mark.asyncio
+    async def test_real_intake_injects_room_analysis(self, client, intake_project, mock_agent):
+        """room_analysis from WorkflowState is injected into project_context."""
+        pid = intake_project
+        state = _mock_states[pid]
+        state.room_analysis = RoomAnalysis(
+            room_type="living room",
+            room_type_confidence=0.85,
+            hypothesis="Bright living room with mid-century furniture",
+        )
+        await client.post(f"/api/v1/projects/{pid}/intake/start", json={"mode": "full"})
+
+        await client.post(
+            f"/api/v1/projects/{pid}/intake/message",
+            json={"message": "hello"},
+        )
+
+        call_args = mock_agent.call_args[0][0]
+        ctx = call_args.project_context
+        assert "room_analysis" in ctx
+        assert ctx["room_analysis"]["room_type"] == "living room"
+        assert ctx["room_analysis"]["room_type_confidence"] == 0.85
+        assert ctx["room_analysis"]["hypothesis"] == "Bright living room with mid-century furniture"
+
+    @pytest.mark.asyncio
+    async def test_real_intake_injects_room_context(self, client, intake_project, mock_agent):
+        """room_context from WorkflowState is injected into project_context."""
+        pid = intake_project
+        state = _mock_states[pid]
+        analysis = RoomAnalysis(room_type="bedroom", photo_count=2)
+        state.room_analysis = analysis
+        state.room_context = RoomContext(
+            photo_analysis=analysis,
+            enrichment_sources=["photos", "lidar"],
+        )
+        await client.post(f"/api/v1/projects/{pid}/intake/start", json={"mode": "quick"})
+
+        await client.post(
+            f"/api/v1/projects/{pid}/intake/message",
+            json={"message": "hello"},
+        )
+
+        call_args = mock_agent.call_args[0][0]
+        ctx = call_args.project_context
+        assert "room_context" in ctx
+        assert ctx["room_context"]["enrichment_sources"] == ["photos", "lidar"]
+        assert ctx["room_context"]["photo_analysis"]["room_type"] == "bedroom"
+
+    @pytest.mark.asyncio
+    async def test_real_intake_omits_room_analysis_when_absent(
+        self, client, intake_project, mock_agent
+    ):
+        """room_analysis/room_context absent from project_context when None in state."""
+        pid = intake_project
+        await client.post(f"/api/v1/projects/{pid}/intake/start", json={"mode": "quick"})
+
+        await client.post(
+            f"/api/v1/projects/{pid}/intake/message",
+            json={"message": "hello"},
+        )
+
+        call_args = mock_agent.call_args[0][0]
+        ctx = call_args.project_context
+        assert "room_analysis" not in ctx
+        assert "room_context" not in ctx
 
 
 class TestForceFailureEndpoint:

@@ -20,11 +20,13 @@ from temporalio.exceptions import ActivityError
 # The actual implementation is determined by which activities the Worker registers
 # (mock_stubs for local dev, real modules for production — see worker.py).
 with workflow.unsafe.imports_passed_through():
+    from app.activities.analyze_room import analyze_room_photos
     from app.activities.edit import edit_design
     from app.activities.generate import generate_designs
     from app.activities.purge import purge_project_data
     from app.activities.shopping import generate_shopping_list
     from app.models.contracts import (
+        AnalyzeRoomPhotosInput,
         AnnotationRegion,
         DesignBrief,
         DesignOption,
@@ -34,6 +36,8 @@ with workflow.unsafe.imports_passed_through():
         InspirationNote,
         PhotoData,
         RevisionRecord,
+        RoomAnalysis,
+        RoomContext,
         ScanData,
         WorkflowError,
         WorkflowState,
@@ -41,6 +45,7 @@ with workflow.unsafe.imports_passed_through():
 
 
 # Retry policies per activity type — tune counts when real activities are wired.
+_ANALYSIS_RETRY = RetryPolicy(maximum_attempts=2)
 _GENERATION_RETRY = RetryPolicy(maximum_attempts=2)
 _EDIT_RETRY = RetryPolicy(maximum_attempts=2)
 _SHOPPING_RETRY = RetryPolicy(maximum_attempts=2)
@@ -74,6 +79,9 @@ class DesignProjectWorkflow:
         self.approved = False
         self.error: WorkflowError | None = None
         self.chat_history_key: str | None = None
+        self.room_analysis: RoomAnalysis | None = None
+        self.room_context: RoomContext | None = None
+        self._analysis_handle: asyncio.Task | None = None
         self._action_queue: list[tuple[str, Any]] = []
         self._restart_requested = False
         self._cancelled = False
@@ -104,15 +112,34 @@ class DesignProjectWorkflow:
         # --- Phase: Photos (need >= 2 room photos) ---
         await self._wait(lambda: sum(1 for p in self.photos if p.photo_type == "room") >= 2)
 
-        # --- Phase: Scan ---
+        # Fire read_the_room analysis immediately (non-blocking, runs during scan)
+        self._start_eager_analysis()
+
+        # --- Phase: Scan (runs in parallel with analysis) ---
         self.step = "scan"
         await self._wait(lambda: self.scan_data is not None or self.scan_skipped)
+
+        # Merge LiDAR into analysis if both available (deterministic, no I/O)
+        self._enrich_context()
 
         # --- Phase: Intake -> Generation -> Selection -> Iteration (with Start Over loop) ---
         while True:
             self.step = "intake"
             self._restart_requested = False
-            await self._wait(lambda: self.design_brief is not None or self.intake_skipped)
+
+            # Re-fire analysis if needed (no-op if already running/completed)
+            self._start_eager_analysis()
+
+            # Collect pending analysis with short timeout (usually done by now)
+            await self._resolve_analysis()
+
+            await self._wait(
+                lambda: (
+                    self.design_brief is not None or self.intake_skipped or self._restart_requested
+                )
+            )
+            if self._restart_requested:
+                continue
 
             # --- Generation ---
             self.step = "generation"
@@ -379,6 +406,12 @@ class DesignProjectWorkflow:
         self.chat_history_key = None
         self._action_queue.clear()
         self.error = None
+        # Cancel in-flight analysis and allow re-analysis on restart
+        if self._analysis_handle is not None:
+            self._analysis_handle.cancel()
+        self._analysis_handle = None
+        self.room_analysis = None
+        self.room_context = None
 
     @workflow.signal
     async def submit_annotation_edit(self, annotations: list[dict[str, Any]]) -> None:
@@ -431,6 +464,8 @@ class DesignProjectWorkflow:
             approved=self.approved,
             error=self.error,
             chat_history_key=self.chat_history_key,
+            room_analysis=self.room_analysis,
+            room_context=self.room_context,
         )
 
     # --- Input builders ---
@@ -493,4 +528,101 @@ class DesignProjectWorkflow:
             design_brief=self.design_brief,
             revision_history=self.revision_history,
             room_dimensions=self.scan_data.room_dimensions if self.scan_data else None,
+            room_context=self.room_context,
+        )
+
+    # --- Eager analysis (Designer Brain) ---
+
+    def _start_eager_analysis(self) -> None:
+        """Schedule read_the_room activity without awaiting. Replay-safe."""
+        if self._analysis_handle is not None:
+            return
+        self._analysis_handle = workflow.start_activity(
+            analyze_room_photos,
+            self._analysis_input(),
+            start_to_close_timeout=timedelta(seconds=90),
+            retry_policy=_ANALYSIS_RETRY,
+        )
+
+    async def _resolve_analysis(self) -> None:
+        """Collect analysis result if available. Never blocks intake.
+
+        Uses asyncio.shield() so the activity continues running in the background
+        if the 30s timeout expires — a slow model response can still be collected
+        later (e.g., before shopping) instead of being cancelled.
+        """
+        if self._analysis_handle is None:
+            return
+        try:
+            result = await asyncio.wait_for(asyncio.shield(self._analysis_handle), timeout=30)
+            self.room_analysis = result.analysis
+            self._build_room_context()
+        except TimeoutError:
+            workflow.logger.warning(
+                "read_the_room still running, intake starts without it for project %s",
+                self._project_id,
+            )
+        except asyncio.CancelledError:
+            workflow.logger.warning(
+                "read_the_room cancelled (start_over) for project %s",
+                self._project_id,
+            )
+        except Exception as exc:
+            workflow.logger.warning(
+                "read_the_room failed (non-fatal) for project %s: %s",
+                self._project_id,
+                exc,
+            )
+
+    def _enrich_context(self) -> None:
+        """Deterministic merge of photo analysis + LiDAR. No I/O, no AI call."""
+        if self.room_analysis and self.scan_data and self.scan_data.room_dimensions:
+            dims = self.scan_data.room_dimensions
+            self.room_analysis.estimated_dimensions = (
+                f"{dims.width_m:.1f}m x {dims.length_m:.1f}m (ceiling {dims.height_m:.1f}m)"
+            )
+            self.room_context = RoomContext(
+                photo_analysis=self.room_analysis,
+                room_dimensions=dims,
+                enrichment_sources=["photos", "lidar"],
+            )
+        elif self.room_analysis:
+            self.room_context = RoomContext(
+                photo_analysis=self.room_analysis,
+                enrichment_sources=["photos"],
+            )
+
+    def _build_room_context(self) -> None:
+        """Build room context after analysis completes. Called from _resolve_analysis."""
+        if self.room_analysis is None:
+            return
+        if self.scan_data and self.scan_data.room_dimensions:
+            dims = self.scan_data.room_dimensions
+            self.room_analysis.estimated_dimensions = (
+                f"{dims.width_m:.1f}m x {dims.length_m:.1f}m (ceiling {dims.height_m:.1f}m)"
+            )
+            self.room_context = RoomContext(
+                photo_analysis=self.room_analysis,
+                room_dimensions=dims,
+                enrichment_sources=["photos", "lidar"],
+            )
+        else:
+            self.room_context = RoomContext(
+                photo_analysis=self.room_analysis,
+                enrichment_sources=["photos"],
+            )
+
+    def _analysis_input(self) -> AnalyzeRoomPhotosInput:
+        """Build input for the read_the_room activity."""
+        room_photos = [p for p in self.photos if p.photo_type == "room"]
+        inspiration_photos = [p for p in self.photos if p.photo_type == "inspiration"]
+        notes = [
+            InspirationNote(photo_index=i, note=p.note)
+            for i, p in enumerate(inspiration_photos)
+            if p.note
+        ]
+        return AnalyzeRoomPhotosInput(
+            room_photo_urls=[p.storage_key for p in room_photos],
+            inspiration_photo_urls=[p.storage_key for p in inspiration_photos],
+            inspiration_notes=notes,
         )

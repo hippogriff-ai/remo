@@ -29,14 +29,19 @@ from app.activities.shopping import (
     _build_fit_detail,
     _build_scoring_prompt,
     _build_search_queries,
+    _compute_room_constraints,
     _extract_json,
     _extract_price_text,
     _extract_retailer,
+    _format_room_constraints_for_prompt,
     _google_shopping_url,
     _load_extraction_prompt,
     _load_scoring_prompt,
+    _match_category,
     _num_results_for_item,
+    _parse_product_dims_cm,
     _price_to_cents,
+    _room_size_label,
     _search_exa,
     _strip_code_fence,
     _validate_extracted_items,
@@ -50,12 +55,100 @@ from app.activities.shopping import (
 )
 from app.models.contracts import (
     DesignBrief,
+    FurnitureObservation,
     GenerateShoppingListInput,
     ProductMatch,
+    RoomAnalysis,
+    RoomContext,
     RoomDimensions,
     StyleProfile,
     UnmatchedItem,
 )
+
+# === Room Constraints Tests ===
+
+
+class TestComputeRoomConstraints:
+    def test_standard_room(self):
+        """4.5m x 6m room should produce reasonable furniture limits."""
+        dims = RoomDimensions(width_m=4.5, length_m=6.0, height_m=2.7)
+        c = _compute_room_constraints(dims)
+        # Sofa: (600-120)*0.75 = 360cm ≈ 142"
+        assert float(c["sofa"]["max_width_cm"]) > 300
+        assert float(c["sofa"]["max_width_cm"]) < 400
+        # Coffee table: ~2/3 of sofa
+        assert float(c["coffee_table"]["max_width_cm"]) < float(c["sofa"]["max_width_cm"])
+        # Rug dimensions present
+        assert "width_cm" in c["rug"]
+        assert "length_cm" in c["rug"]
+        # Floor lamp: (270-30) = 240cm
+        assert float(c["floor_lamp"]["max_height_cm"]) == 240
+
+    def test_small_room(self):
+        """3m x 3.5m room should produce smaller constraints."""
+        dims = RoomDimensions(width_m=3.0, length_m=3.5, height_m=2.4)
+        c = _compute_room_constraints(dims)
+        # Sofa: (350-120)*0.75 = 172.5cm ≈ 68"
+        assert float(c["sofa"]["max_width_cm"]) < 200
+        # Dining table: 350-180 = 170cm
+        assert float(c["dining_table"]["max_length_cm"]) == 170
+
+
+class TestFormatRoomConstraints:
+    def test_with_lidar(self):
+        dims = RoomDimensions(width_m=4.0, length_m=5.0, height_m=2.5)
+        text = _format_room_constraints_for_prompt(None, dims)
+        assert "4.0m x 5.0m" in text
+        assert "LiDAR scan" in text
+        assert "Sofa" in text
+
+    def test_photo_only(self):
+        analysis = RoomAnalysis(estimated_dimensions="approximately 12x15 feet")
+        ctx = RoomContext(photo_analysis=analysis, enrichment_sources=["photos"])
+        text = _format_room_constraints_for_prompt(ctx, None)
+        assert "approximately 12x15 feet" in text
+        assert "photo analysis" in text.lower()
+
+    def test_with_lidar_and_context(self):
+        """LiDAR should take precedence over photo analysis."""
+        dims = RoomDimensions(width_m=4.0, length_m=5.0, height_m=2.5)
+        analysis = RoomAnalysis(estimated_dimensions="approximately 12x15 feet")
+        ctx = RoomContext(
+            photo_analysis=analysis,
+            room_dimensions=dims,
+            enrichment_sources=["photos", "lidar"],
+        )
+        text = _format_room_constraints_for_prompt(ctx, dims)
+        assert "LiDAR scan" in text
+        assert "Per-category size limits" in text
+
+    def test_includes_furniture_observations(self):
+        dims = RoomDimensions(width_m=4.0, length_m=5.0, height_m=2.5)
+        analysis = RoomAnalysis(
+            furniture=[
+                FurnitureObservation(item="gray sofa", condition="worn", keep_candidate=True),
+                FurnitureObservation(item="bookshelf", condition="good"),
+            ]
+        )
+        ctx = RoomContext(photo_analysis=analysis, enrichment_sources=["photos"])
+        text = _format_room_constraints_for_prompt(ctx, dims)
+        assert "gray sofa (worn) [keep]" in text
+        assert "bookshelf (good)" in text
+
+    def test_no_dimensions_no_context(self):
+        text = _format_room_constraints_for_prompt(None, None)
+        assert "No room dimensions available" in text
+
+    def test_extraction_prompt_includes_room_constraints(self):
+        dims = RoomDimensions(width_m=4.0, length_m=5.0, height_m=2.5)
+        prompt = _load_extraction_prompt(None, [], room_dimensions=dims)
+        assert "Per-category size limits" in prompt
+        assert "Sofa" in prompt
+
+    def test_extraction_prompt_without_context(self):
+        prompt = _load_extraction_prompt(None, [])
+        assert "No room dimensions available" in prompt
+
 
 # === Search Query Building Tests ===
 
@@ -176,6 +269,58 @@ class TestBuildSearchQueries:
         queries = _build_search_queries(item)
         assert any("cozy reading chair" in q for q in queries)  # source_ref
         assert any("tufted linen wingback" in q for q in queries)  # description
+
+    def test_search_queries_with_room_dims(self):
+        """Primary furniture gets a size-constrained query when room dims available."""
+        dims = RoomDimensions(width_m=4.0, length_m=5.0, height_m=2.7)
+        item = {
+            "source_tag": "IMAGE_ONLY",
+            "category": "Sofa",
+            "material": "velvet",
+            "color": "navy",
+            "style": "modern",
+        }
+        queries = _build_search_queries(item, room_dimensions=dims)
+        constrained = [q for q in queries if "under" in q and "inches" in q]
+        assert len(constrained) == 1, f"Expected one constrained query, got: {queries}"
+        assert "medium room" in constrained[0]
+
+    def test_search_queries_without_room_dims(self):
+        """No constrained query when room_dimensions is None."""
+        item = {
+            "source_tag": "IMAGE_ONLY",
+            "category": "Sofa",
+            "material": "velvet",
+            "color": "navy",
+            "style": "modern",
+        }
+        queries = _build_search_queries(item, room_dimensions=None)
+        constrained = [q for q in queries if "under" in q and "inches" in q]
+        assert len(constrained) == 0
+
+
+class TestRoomSizeLabel:
+    def test_small_room(self):
+        dims = RoomDimensions(width_m=3.0, length_m=4.0, height_m=2.5)  # 12 sqm
+        assert _room_size_label(dims) == "small"
+
+    def test_medium_room(self):
+        dims = RoomDimensions(width_m=4.0, length_m=5.0, height_m=2.7)  # 20 sqm
+        assert _room_size_label(dims) == "medium"
+
+    def test_large_room(self):
+        dims = RoomDimensions(width_m=6.0, length_m=7.0, height_m=3.0)  # 42 sqm
+        assert _room_size_label(dims) == "large"
+
+    def test_boundary_15_sqm(self):
+        """Exactly 15 sqm is medium (lower bound inclusive)."""
+        dims = RoomDimensions(width_m=3.0, length_m=5.0, height_m=2.5)  # 15 sqm
+        assert _room_size_label(dims) == "medium"
+
+    def test_boundary_25_sqm(self):
+        """Exactly 25 sqm is medium (upper bound inclusive)."""
+        dims = RoomDimensions(width_m=5.0, length_m=5.0, height_m=2.7)  # 25 sqm
+        assert _room_size_label(dims) == "medium"
 
 
 # === Search Priority Tests ===
@@ -567,6 +712,32 @@ class TestBuildScoringPrompt:
         assert "Lamp" in prompt
         assert "IKEA Lamp" in prompt
 
+    def test_default_weights_without_lidar(self):
+        """Without room_dimensions, uses default weights (dim=0.1)."""
+        item = {"category": "Sofa", "description": "velvet sofa"}
+        product = {"title": "Sofa", "url": "https://example.com"}
+        prompt = _build_scoring_prompt(item, product, None, room_dimensions=None)
+        assert "weight: 0.3" in prompt  # category default
+        assert "weight: 0.1" in prompt  # dimensions default
+
+    def test_lidar_weights_with_room_dims(self):
+        """With room_dimensions, dimensions weight increases to 0.2."""
+        dims = RoomDimensions(width_m=4.0, length_m=5.0, height_m=2.7)
+        item = {"category": "Sofa", "description": "velvet sofa"}
+        product = {"title": "Sofa", "url": "https://example.com"}
+        prompt = _build_scoring_prompt(item, product, None, room_dimensions=dims)
+        assert "weight: 0.25" in prompt  # category lidar
+        assert "weight: 0.2)" in prompt  # dimensions lidar
+        assert "LiDAR-measured" in prompt
+        assert "4.0m" in prompt
+
+    def test_no_room_dimensions_section_without_lidar(self):
+        """Without room_dimensions, no room dims section in prompt."""
+        item = {"category": "Sofa", "description": "velvet sofa"}
+        product = {"title": "Sofa", "url": "https://example.com"}
+        prompt = _build_scoring_prompt(item, product, None, room_dimensions=None)
+        assert "LiDAR-measured" not in prompt
+
 
 # === Extraction Message Building Tests ===
 
@@ -603,6 +774,33 @@ class TestBuildExtractionMessages:
 # === Dimension Filtering Tests ===
 
 
+class TestParseDims:
+    def test_inches(self):
+        result = _parse_product_dims_cm("84x36x32 inches")
+        assert result is not None
+        w, d, h = result
+        assert abs(w - 84 * 2.54) < 0.1
+        assert abs(d - 36 * 2.54) < 0.1
+        assert abs(h - 32 * 2.54) < 0.1
+
+    def test_cm(self):
+        result = _parse_product_dims_cm("213x91cm")
+        assert result is not None
+        w, d, _ = result
+        assert abs(w - 213) < 0.1
+        assert abs(d - 91) < 0.1
+
+    def test_two_dims(self):
+        result = _parse_product_dims_cm("8x10")
+        assert result is not None
+        assert result[2] == 0.0  # no third dimension
+
+    def test_none(self):
+        assert _parse_product_dims_cm(None) is None
+        assert _parse_product_dims_cm("") is None
+        assert _parse_product_dims_cm("no dims here") is None
+
+
 class TestDimensionFiltering:
     def test_passthrough_without_lidar(self):
         items = [{"category": "Sofa"}]
@@ -610,13 +808,106 @@ class TestDimensionFiltering:
         result = filter_by_dimensions(items, scored, None)
         assert result == scored
 
-    def test_passthrough_with_lidar(self):
-        """Dimension filtering is a pass-through for now (P2+ enhancement)."""
+    def test_annotates_fits(self):
+        """Product within constraint gets room_fit='fits'."""
+        dims = RoomDimensions(width_m=4.5, length_m=6.0, height_m=2.7)
+        items = [{"category": "Sofa"}]
+        # Sofa max: (600-120)*0.75 = 360cm ≈ 142". Product is 80" ≈ 203cm.
+        scored = [[{"weighted_total": 0.8, "dimensions": "80x36x32 inches"}]]
+        result = filter_by_dimensions(items, scored, dims)
+        assert result[0][0]["room_fit"] == "fits"
+
+    def test_annotates_tight(self):
+        """Product near limit gets room_fit='tight'."""
+        dims = RoomDimensions(width_m=3.0, length_m=3.5, height_m=2.4)
+        items = [{"category": "Sofa"}]
+        # Sofa max: (350-120)*0.75 = 172.5cm ≈ 68". Product is 72" ≈ 183cm → ~106% → tight
+        scored = [[{"weighted_total": 0.8, "dimensions": "72x36x32 inches"}]]
+        result = filter_by_dimensions(items, scored, dims)
+        assert result[0][0]["room_fit"] == "tight"
+
+    def test_annotates_too_large(self):
+        """Product exceeding limit gets room_fit='too_large'."""
+        dims = RoomDimensions(width_m=3.0, length_m=3.5, height_m=2.4)
+        items = [{"category": "Sofa"}]
+        # Sofa max: 172.5cm ≈ 68". Product is 96" ≈ 244cm → ~141% → too_large
+        scored = [[{"weighted_total": 0.8, "dimensions": "96x40x34 inches"}]]
+        result = filter_by_dimensions(items, scored, dims)
+        assert result[0][0]["room_fit"] == "too_large"
+        assert "exceeds" in result[0][0]["room_fit_detail"]
+
+    def test_passthrough_no_dims_on_product(self):
+        """Products without parseable dimensions pass through unchanged."""
+        dims = RoomDimensions(width_m=4.0, length_m=5.0, height_m=2.7)
         items = [{"category": "Sofa"}]
         scored = [[{"weighted_total": 0.8}]]
-        dims = RoomDimensions(width_m=4.0, length_m=5.0, height_m=2.7)
         result = filter_by_dimensions(items, scored, dims)
-        assert result == scored
+        assert "room_fit" not in result[0][0]
+
+    def test_unknown_category_passes_through(self):
+        """Items with unmapped categories are not annotated."""
+        dims = RoomDimensions(width_m=4.0, length_m=5.0, height_m=2.7)
+        items = [{"category": "Wall art"}]
+        scored = [[{"weighted_total": 0.8, "dimensions": "24x36 inches"}]]
+        result = filter_by_dimensions(items, scored, dims)
+        assert "room_fit" not in result[0][0]
+
+    def test_rug_dimension_fit_checked(self):
+        """Rug products should be checked against width_cm/length_cm constraints."""
+        dims = RoomDimensions(width_m=4.0, length_m=5.0, height_m=2.7)
+        items = [{"category": "Area Rug"}]
+        # Room: 4m x 5m. Rug limits: 320cm x 350cm (80%/70%).
+        # Product: "8x10" → 8ft x 10ft = 244cm x 305cm → fits.
+        scored = [[{"weighted_total": 0.8, "dimensions": "8x10"}]]
+        result = filter_by_dimensions(items, scored, dims)
+        assert result[0][0]["room_fit"] == "fits"
+
+    def test_rug_too_large_annotated(self):
+        """Oversized rug exceeding room limits gets room_fit='too_large'."""
+        dims = RoomDimensions(width_m=3.0, length_m=3.5, height_m=2.7)
+        items = [{"category": "Rug"}]
+        # Room: 3m x 3.5m. Rug limits: 240cm x 245cm.
+        # Product: "10x12" → 10ft x 12ft = 305cm x 366cm → too large.
+        scored = [[{"weighted_total": 0.8, "dimensions": "10x12"}]]
+        result = filter_by_dimensions(items, scored, dims)
+        assert result[0][0]["room_fit"] == "too_large"
+
+    def test_confidence_downgrades_on_too_large(self):
+        """too_large products get fit_status downgraded in confidence filtering."""
+        items = [{"category": "Sofa"}]
+        scored = [
+            [
+                {
+                    "weighted_total": 0.9,
+                    "product_url": "https://example.com/sofa",
+                    "product_name": "Big Sofa",
+                    "room_fit": "too_large",
+                    "room_fit_detail": '96" exceeds 68" limit',
+                }
+            ]
+        ]
+        matched, _, _ = apply_confidence_filtering(items, scored)
+        assert len(matched) == 1
+        assert matched[0].fit_status == "tight"  # downgraded from "fits"
+
+    def test_confidence_downgrades_on_tight(self):
+        """tight room_fit downgrades fit_status from 'fits' to 'tight'."""
+        items = [{"category": "Sofa"}]
+        scored = [
+            [
+                {
+                    "weighted_total": 0.85,
+                    "product_url": "https://example.com/sofa",
+                    "product_name": "Near-limit Sofa",
+                    "room_fit": "tight",
+                    "room_fit_detail": '70" near 68" limit',
+                }
+            ]
+        ]
+        matched, _, _ = apply_confidence_filtering(items, scored)
+        assert len(matched) == 1
+        assert matched[0].fit_status == "tight"  # downgraded from "fits"
+        assert matched[0].fit_detail == '70" near 68" limit'
 
 
 # === Code Fence Stripping Tests ===
@@ -1682,3 +1973,367 @@ class TestValidateExtractedItems:
         assert len(result) == 2
         assert result[0]["category"] == "Sofa"
         assert result[1]["category"] == "Table"
+
+
+class TestMatchCategory:
+    """Tests for _match_category edge cases."""
+
+    def test_matches_sofa(self):
+        assert _match_category({"category": "Sofa"}) == "sofa"
+
+    def test_matches_sectional_sofa(self):
+        assert _match_category({"category": "sectional sofa"}) == "sofa"
+
+    def test_matches_coffee_table(self):
+        assert _match_category({"category": "Coffee Table"}) == "coffee_table"
+
+    def test_matches_rug(self):
+        assert _match_category({"category": "Area Rug"}) == "rug"
+
+    def test_matches_floor_lamp(self):
+        assert _match_category({"category": "Floor Lamp"}) == "floor_lamp"
+
+    def test_no_match_returns_none(self):
+        assert _match_category({"category": "Wall Art"}) is None
+
+    def test_none_category_returns_none(self):
+        assert _match_category({"category": None}) is None
+
+    def test_missing_category_returns_none(self):
+        assert _match_category({}) is None
+
+    def test_empty_category_returns_none(self):
+        assert _match_category({"category": ""}) is None
+
+
+class TestComputeRoomConstraintsEdgeCases:
+    """Tests for zero/negative dimension handling."""
+
+    def test_zero_width_returns_empty(self):
+        dims = RoomDimensions(width_m=0, length_m=4.0, height_m=2.7)
+        assert _compute_room_constraints(dims) == {}
+
+    def test_negative_height_returns_empty(self):
+        dims = RoomDimensions(width_m=3.0, length_m=4.0, height_m=-1.0)
+        assert _compute_room_constraints(dims) == {}
+
+    def test_all_zero_returns_empty(self):
+        dims = RoomDimensions(width_m=0, length_m=0, height_m=0)
+        assert _compute_room_constraints(dims) == {}
+
+
+class TestFormatRoomConstraintsInvalidDims:
+    """Tests for _format_room_constraints_for_prompt with invalid dimensions."""
+
+    def test_invalid_dims_no_keyerror(self):
+        """Zero dims → empty constraints → prompt should not crash."""
+        dims = RoomDimensions(width_m=0, length_m=0, height_m=0)
+        result = _format_room_constraints_for_prompt(None, dims)
+        # Should still produce room line but no category limits
+        assert "0.0m x 0.0m" in result
+        assert "Sofa" not in result
+
+
+class TestDimensionFilterListMismatch:
+    """Tests for filter_by_dimensions list alignment guard."""
+
+    def test_mismatched_lists_returns_unmodified(self):
+        """When items and scored_products have different lengths, return unchanged."""
+        items = [{"category": "Sofa"}]
+        scored = [
+            [{"product_url": "a.com", "dimensions": "84x36 inches"}],
+            [{"product_url": "b.com", "dimensions": "48x24 inches"}],
+        ]
+        dims = RoomDimensions(width_m=4.0, length_m=5.0, height_m=2.7)
+        result = filter_by_dimensions(items, scored, dims)
+        # Should return unmodified — no room_fit annotations added
+        assert result == scored
+        assert "room_fit" not in result[0][0]
+
+
+class TestParseProductDimsCmRugCategory:
+    """Tests for category-aware unit inference in dimension parsing."""
+
+    def test_rug_without_unit_assumes_feet(self):
+        """'8x10' rug should be parsed as 8ft x 10ft, not 8in x 10in."""
+        result = _parse_product_dims_cm("8x10", category="Area Rug")
+        assert result is not None
+        w, d, h = result
+        # 8ft = 243.84cm, 10ft = 304.8cm
+        assert abs(w - 243.84) < 1.0
+        assert abs(d - 304.8) < 1.0
+
+    def test_rug_with_inches_unit_uses_inches(self):
+        """'96x120 inches' rug should use inches even for rug category."""
+        result = _parse_product_dims_cm("96x120 inches", category="Rug")
+        assert result is not None
+        w, d, h = result
+        assert abs(w - 96 * 2.54) < 1.0
+        assert abs(d - 120 * 2.54) < 1.0
+
+    def test_rug_with_cm_unit_uses_cm(self):
+        result = _parse_product_dims_cm("200x300 cm", category="Rug")
+        assert result is not None
+        assert result[0] == 200.0
+        assert result[1] == 300.0
+
+    def test_non_rug_without_unit_assumes_inches(self):
+        """Furniture without unit should still default to inches."""
+        result = _parse_product_dims_cm("84x36", category="Sofa")
+        assert result is not None
+        w, d, h = result
+        assert abs(w - 84 * 2.54) < 1.0
+
+    def test_none_category_defaults_to_inches(self):
+        result = _parse_product_dims_cm("84x36", category=None)
+        assert result is not None
+        w, d, h = result
+        assert abs(w - 84 * 2.54) < 1.0
+
+
+# === Gap Tests: search_all_items, auth errors, R2 resolution, caching ===
+
+
+class TestSearchAllItems:
+    """Direct tests for the search_all_items orchestrator."""
+
+    def test_gathers_results_for_multiple_items(self):
+        """search_all_items should return one result list per input item."""
+        items = [
+            {"category": "Sofa", "description": "velvet sofa"},
+            {"category": "Lamp", "description": "floor lamp"},
+            {"category": "Rug", "description": "area rug"},
+        ]
+
+        async def mock_search(http_client, item, api_key, **kwargs):
+            return [{"title": f"Result for {item['category']}", "url": "https://a.com"}]
+
+        with patch("app.activities.shopping.search_products_for_item", side_effect=mock_search):
+            from app.activities.shopping import search_all_items
+
+            results = asyncio.run(search_all_items(items, "fake-key"))
+
+        assert len(results) == 3
+        assert results[0][0]["title"] == "Result for Sofa"
+        assert results[1][0]["title"] == "Result for Lamp"
+        assert results[2][0]["title"] == "Result for Rug"
+
+    def test_passes_room_dimensions(self):
+        """search_all_items should forward room_dimensions to each search call."""
+        dims = RoomDimensions(width_m=4.0, length_m=5.0, height_m=2.7)
+        items = [{"category": "Sofa", "description": "sofa"}]
+        captured_kwargs: list[dict] = []
+
+        async def mock_search(http_client, item, api_key, **kwargs):
+            captured_kwargs.append(kwargs)
+            return []
+
+        with patch("app.activities.shopping.search_products_for_item", side_effect=mock_search):
+            from app.activities.shopping import search_all_items
+
+            asyncio.run(search_all_items(items, "fake-key", room_dimensions=dims))
+
+        assert captured_kwargs[0]["room_dimensions"] is dims
+
+    def test_empty_items_returns_empty(self):
+        """search_all_items with no items should return empty list."""
+        from app.activities.shopping import search_all_items
+
+        results = asyncio.run(search_all_items([], "fake-key"))
+        assert results == []
+
+
+class TestScoringWeightValidation:
+    """LiDAR weights should only apply when dimensions are valid."""
+
+    def test_invalid_dims_use_default_weights(self):
+        """Non-positive dimensions should fall back to default scoring weights."""
+        bad_dims = RoomDimensions(width_m=0.0, length_m=5.0, height_m=2.7)
+        prompt = _build_scoring_prompt(
+            {"category": "Sofa", "description": "sofa"},
+            {"title": "Test Sofa", "url": "https://a.com", "text": ""},
+            None,
+            room_dimensions=bad_dims,
+        )
+        # Default weights: dimensions = 0.10 (10%)
+        assert "10%" in prompt or "0.10" in prompt
+
+    def test_valid_dims_use_lidar_weights(self):
+        """Positive dimensions should use LiDAR scoring weights."""
+        good_dims = RoomDimensions(width_m=4.0, length_m=5.0, height_m=2.7)
+        prompt = _build_scoring_prompt(
+            {"category": "Sofa", "description": "sofa"},
+            {"title": "Test Sofa", "url": "https://a.com", "text": ""},
+            None,
+            room_dimensions=good_dims,
+        )
+        # LiDAR weights: dimensions = 0.20 (20%)
+        assert "20%" in prompt or "0.20" in prompt
+
+
+class TestAuthErrorNonRetryable:
+    """401/403 auth errors should be non-retryable across all activities."""
+
+    def _make_input(self) -> GenerateShoppingListInput:
+        return GenerateShoppingListInput(
+            design_image_url="https://example.com/design.jpg",
+            original_room_photo_urls=["https://example.com/room.jpg"],
+        )
+
+    @patch.dict(
+        "os.environ",
+        {"ANTHROPIC_API_KEY": "test-key", "EXA_API_KEY": "test-exa"},
+    )
+    @patch("app.activities.shopping.extract_items")
+    def test_extraction_401_is_non_retryable(self, mock_extract):
+        """401 Unauthorized during extraction should be non-retryable."""
+        import pytest
+        from temporalio.exceptions import ApplicationError
+
+        mock_extract.side_effect = anthropic.AuthenticationError(
+            message="Invalid API key",
+            response=_make_httpx_response(401),
+            body=None,
+        )
+
+        with pytest.raises(ApplicationError) as exc_info:
+            asyncio.run(generate_shopping_list(self._make_input()))
+        assert exc_info.value.non_retryable is True
+
+    @patch.dict(
+        "os.environ",
+        {"ANTHROPIC_API_KEY": "test-key", "EXA_API_KEY": "test-exa"},
+    )
+    @patch("app.activities.shopping.extract_items")
+    def test_extraction_403_is_non_retryable(self, mock_extract):
+        """403 Forbidden during extraction should be non-retryable."""
+        import pytest
+        from temporalio.exceptions import ApplicationError
+
+        mock_extract.side_effect = anthropic.PermissionDeniedError(
+            message="Forbidden",
+            response=_make_httpx_response(403),
+            body=None,
+        )
+
+        with pytest.raises(ApplicationError) as exc_info:
+            asyncio.run(generate_shopping_list(self._make_input()))
+        assert exc_info.value.non_retryable is True
+
+    @patch.dict(
+        "os.environ",
+        {"ANTHROPIC_API_KEY": "test-key", "EXA_API_KEY": "test-exa"},
+    )
+    @patch("app.activities.shopping.score_all_products")
+    @patch("app.activities.shopping.search_all_items")
+    @patch("app.activities.shopping.extract_items")
+    def test_scoring_401_is_non_retryable(self, mock_extract, mock_search, mock_score):
+        """401 Unauthorized during scoring should be non-retryable."""
+        import pytest
+        from temporalio.exceptions import ApplicationError
+
+        mock_extract.return_value = [{"item_name": "Sofa", "search_priority": "HIGH"}]
+        mock_search.return_value = [[{"url": "https://example.com", "title": "Sofa"}]]
+        mock_score.side_effect = anthropic.AuthenticationError(
+            message="Invalid API key",
+            response=_make_httpx_response(401),
+            body=None,
+        )
+
+        with pytest.raises(ApplicationError) as exc_info:
+            asyncio.run(generate_shopping_list(self._make_input()))
+        assert exc_info.value.non_retryable is True
+
+
+class TestR2ResolutionInShopping:
+    """Verify R2 storage keys are resolved before use in the shopping pipeline."""
+
+    @patch.dict(
+        "os.environ",
+        {"ANTHROPIC_API_KEY": "test-key", "EXA_API_KEY": "test-exa"},
+    )
+    @patch("app.activities.shopping.extract_items")
+    @patch("app.utils.r2.resolve_url")
+    @patch("app.utils.r2.resolve_urls")
+    def test_r2_keys_resolved_to_presigned_urls(
+        self, mock_resolve_urls, mock_resolve_url, mock_extract
+    ):
+        """R2 storage keys should be resolved to presigned URLs before pipeline starts."""
+        mock_resolve_url.return_value = "https://presigned.r2/design.jpg"
+        mock_resolve_urls.return_value = ["https://presigned.r2/room.jpg"]
+        mock_extract.return_value = []  # short-circuit: no items → pipeline ends
+
+        input_data = GenerateShoppingListInput(
+            design_image_url="projects/p1/design.jpg",
+            original_room_photo_urls=["projects/p1/room.jpg"],
+        )
+
+        result = asyncio.run(generate_shopping_list(input_data))
+
+        mock_resolve_url.assert_called_once_with("projects/p1/design.jpg")
+        mock_resolve_urls.assert_called_once_with(["projects/p1/room.jpg"])
+        assert result.items == []
+
+
+class TestScoringCachePaths:
+    """Verify LLM response cache hit/miss paths in score_product."""
+
+    def _make_item(self) -> dict:
+        return {"category": "Sofa", "description": "velvet sofa", "style": "modern"}
+
+    def _make_product(self) -> dict:
+        return {"title": "Nice Sofa", "url": "https://store.com/sofa", "text": "$599"}
+
+    @patch("app.utils.llm_cache.get_cached")
+    @patch("app.utils.llm_cache.set_cached")
+    def test_cache_hit_returns_cached_scores(self, mock_set, mock_get):
+        """When cache has a hit, score_product should return cached data without API call."""
+        cached_data = {
+            "weighted_total": 0.85,
+            "why_matched": "cached match",
+            "category_score": 1.0,
+        }
+        mock_get.return_value = cached_data
+
+        mock_client = MagicMock()
+
+        result = asyncio.run(
+            score_product(mock_client, self._make_item(), self._make_product(), None)
+        )
+
+        # API should NOT be called
+        mock_client.messages.create.assert_not_called()
+        assert result["weighted_total"] == 0.85
+        # Product metadata should be restored
+        assert result["product_url"] == "https://store.com/sofa"
+        assert result["product_name"] == "Nice Sofa"
+        mock_set.assert_not_called()
+
+    @patch("app.utils.llm_cache.get_cached")
+    @patch("app.utils.llm_cache.set_cached")
+    def test_cache_miss_calls_api_and_caches(self, mock_set, mock_get):
+        """When cache misses, score_product should call API and cache the result."""
+        mock_get.return_value = None
+
+        mock_response = MagicMock()
+        mock_response.content = [
+            MagicMock(
+                text='{"weighted_total": 0.9, "why_matched": "great match", '
+                '"category_score": 1.0, "material_score": 0.8, '
+                '"color_score": 0.7, "style_score": 0.6, "dimensions_score": 0.5}'
+            )
+        ]
+        mock_response.usage.input_tokens = 100
+        mock_response.usage.output_tokens = 50
+
+        mock_client = MagicMock()
+        mock_client.messages = MagicMock()
+        mock_client.messages.create = AsyncMock(return_value=mock_response)
+
+        result = asyncio.run(
+            score_product(mock_client, self._make_item(), self._make_product(), None)
+        )
+
+        mock_client.messages.create.assert_called_once()
+        mock_set.assert_called_once()
+        assert result["weighted_total"] == 0.9

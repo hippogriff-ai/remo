@@ -8,6 +8,7 @@ import pytest
 from temporalio.contrib.pydantic import pydantic_data_converter
 
 from app.activities.mock_stubs import (
+    analyze_room_photos,
     edit_design,
     generate_designs,
     generate_shopping_list,
@@ -21,8 +22,8 @@ class TestActivityRegistration:
     """Verify that the correct activities are registered with the worker."""
 
     def test_all_activities_registered(self) -> None:
-        """All 5 activities (4 mock + 1 real purge) should be in the ACTIVITIES list."""
-        assert len(ACTIVITIES) == 5
+        """All 6 activities (5 mock + 1 real purge) should be in the ACTIVITIES list."""
+        assert len(ACTIVITIES) == 6
 
     def test_generate_designs_registered(self) -> None:
         """generate_designs activity should be registered."""
@@ -35,6 +36,10 @@ class TestActivityRegistration:
     def test_generate_shopping_list_registered(self) -> None:
         """generate_shopping_list activity should be registered."""
         assert generate_shopping_list in ACTIVITIES
+
+    def test_analyze_room_photos_registered(self) -> None:
+        """analyze_room_photos activity should be registered."""
+        assert analyze_room_photos in ACTIVITIES
 
     def test_purge_project_data_registered(self) -> None:
         """purge_project_data activity should be registered."""
@@ -153,12 +158,13 @@ class TestLoadActivities:
         with patch("app.worker.settings") as mock_settings:
             mock_settings.use_mock_activities = True
             activities = _load_activities()
-        assert len(activities) == 5
+        assert len(activities) == 6
         # Check all loaded activities have @activity.defn names
         names = [getattr(a, "__temporal_activity_definition").name for a in activities]
         assert "generate_designs" in names
         assert "edit_design" in names
         assert "generate_shopping_list" in names
+        assert "analyze_room_photos" in names
         assert "load_style_skill" in names
         assert "purge_project_data" in names
 
@@ -167,20 +173,22 @@ class TestLoadActivities:
         with patch("app.worker.settings") as mock_settings:
             mock_settings.use_mock_activities = False
             activities = _load_activities()
-        assert len(activities) == 5
+        assert len(activities) == 6
         names = [getattr(a, "__temporal_activity_definition").name for a in activities]
         assert "generate_designs" in names
         assert "edit_design" in names
         assert "generate_shopping_list" in names
+        assert "analyze_room_photos" in names
         assert "load_style_skill" in names
         assert "purge_project_data" in names
         # Verify these come from the real modules, not mock_stubs
-        from app.activities import edit, generate, shopping
+        from app.activities import analyze_room, edit, generate, shopping
 
         fn_modules = {a.__module__ for a in activities}
         assert edit.__name__ in fn_modules
         assert generate.__name__ in fn_modules
         assert shopping.__name__ in fn_modules
+        assert analyze_room.__name__ in fn_modules
 
     def test_real_branch_import_error_gives_helpful_message(self) -> None:
         """Missing real modules gives actionable error mentioning USE_MOCK_ACTIVITIES."""

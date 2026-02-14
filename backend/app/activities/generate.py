@@ -108,6 +108,8 @@ def _build_generation_prompt(
         parts.append(f"Room type: {brief.room_type}")
         if brief.occupants:
             parts.append(f"Occupants: {brief.occupants}")
+        if brief.lifestyle:
+            parts.append(f"Lifestyle: {brief.lifestyle}")
         if brief.style_profile:
             sp = brief.style_profile
             if sp.mood:
@@ -124,6 +126,14 @@ def _build_generation_prompt(
             parts.append(f"Pain points to address: {', '.join(brief.pain_points)}")
         if brief.constraints:
             parts.append(f"Constraints: {', '.join(brief.constraints)}")
+        if brief.emotional_drivers:
+            parts.append(f"Emotional drivers: {', '.join(brief.emotional_drivers)}")
+        if brief.usage_patterns:
+            parts.append(f"Usage patterns: {brief.usage_patterns}")
+        if brief.renovation_willingness:
+            parts.append(f"Renovation scope: {brief.renovation_willingness}")
+        if brief.room_analysis_hypothesis:
+            parts.append(f"Room analysis: {brief.room_analysis_hypothesis}")
         brief_text = "\n".join(parts)
 
         if brief.keep_items:
