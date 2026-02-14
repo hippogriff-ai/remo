@@ -81,6 +81,9 @@ public struct PhotoUploadScreen: View {
                                         )
                                         .textFieldStyle(.roundedBorder)
                                         .font(.caption)
+                                        .onSubmit {
+                                            Task { await persistNote(photoId: photo.photoId, note: projectState.photos[index].note) }
+                                        }
                                     }
                                 }
                             }
@@ -170,6 +173,9 @@ public struct PhotoUploadScreen: View {
         .onChange(of: selectedInspirationItems) { _, items in
             Task { await uploadSelectedPhotos(items, type: "inspiration") }
         }
+        .onDisappear {
+            Task { await persistAllNotes() }
+        }
         #if os(iOS)
         .sheet(isPresented: $showCamera) {
             CameraView(
@@ -258,6 +264,22 @@ public struct PhotoUploadScreen: View {
                 }
                 validationMessages = ["Failed to delete photo: \(error.localizedDescription)"]
             }
+        }
+    }
+
+    private func persistNote(photoId: String, note: String?) async {
+        guard let projectId = projectState.projectId else { return }
+        do {
+            try await client.updatePhotoNote(projectId: projectId, photoId: photoId, note: note)
+        } catch {
+            // Non-critical: note will be retried on next submit or onDisappear
+        }
+    }
+
+    private func persistAllNotes() async {
+        guard let projectId = projectState.projectId else { return }
+        for photo in projectState.photos where photo.photoType == "inspiration" && photo.note != nil {
+            try? await client.updatePhotoNote(projectId: projectId, photoId: photo.photoId, note: photo.note)
         }
     }
 }

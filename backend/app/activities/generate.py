@@ -68,16 +68,25 @@ def _format_room_context(dims: RoomDimensions | None) -> str:
     if dims.floor_area_sqm is not None:
         parts.append(f"Floor area: {dims.floor_area_sqm:.1f} m²")
     if dims.openings:
-        opening_types = [o.get("type", "opening") for o in dims.openings]
-        parts.append(f"Openings: {', '.join(opening_types)}")
+        opening_types = [
+            str(o.get("type", "opening")) for o in dims.openings if isinstance(o, dict)
+        ]
+        if opening_types:
+            parts.append(f"Openings: {', '.join(opening_types)}")
     if dims.furniture:
-        furniture_types = [f.get("type", "item") for f in dims.furniture]
-        parts.append(f"Existing furniture detected: {', '.join(furniture_types)}")
+        furniture_types = [
+            str(f.get("type", "item")) for f in dims.furniture if isinstance(f, dict)
+        ]
+        if furniture_types:
+            parts.append(f"Existing furniture detected: {', '.join(furniture_types)}")
     if dims.surfaces:
         surface_descs = [
-            f"{s.get('type', 'surface')}: {s.get('material', 'unknown')}" for s in dims.surfaces
+            f"{s.get('type', 'surface')}: {s.get('material', 'unknown')}"
+            for s in dims.surfaces
+            if isinstance(s, dict)
         ]
-        parts.append(f"Surfaces: {', '.join(surface_descs)}")
+        if surface_descs:
+            parts.append(f"Surfaces: {', '.join(surface_descs)}")
 
     return "\n".join(parts)
 

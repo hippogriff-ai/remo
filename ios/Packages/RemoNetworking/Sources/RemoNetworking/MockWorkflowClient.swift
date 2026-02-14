@@ -88,6 +88,15 @@ public actor MockWorkflowClient: WorkflowClientProtocol {
         states[projectId] = state
     }
 
+    public func updatePhotoNote(projectId: String, photoId: String, note: String?) async throws {
+        try await simulateDelay()
+        guard var state = states[projectId] else { throw notFound() }
+        if let index = state.photos.firstIndex(where: { $0.photoId == photoId }) {
+            state.photos[index].note = note
+        }
+        states[projectId] = state
+    }
+
     // MARK: - Scan
 
     public func uploadScan(projectId: String, scanData: [String: Any]) async throws {

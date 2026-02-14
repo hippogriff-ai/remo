@@ -201,6 +201,7 @@ private actor FlakyClient: WorkflowClientProtocol {
     func createProject(deviceFingerprint: String, hasLidar: Bool) async throws -> String { "" }
     func deleteProject(projectId: String) async throws {}
     func deletePhoto(projectId: String, photoId: String) async throws {}
+    func updatePhotoNote(projectId: String, photoId: String, note: String?) async throws {}
     func uploadPhoto(projectId: String, imageData: Data, photoType: String) async throws -> PhotoUploadResponse {
         PhotoUploadResponse(photoId: "", validation: ValidatePhotoOutput(passed: true, failures: [], messages: []))
     }
@@ -247,6 +248,7 @@ private actor IncrementingClient: WorkflowClientProtocol {
     func createProject(deviceFingerprint: String, hasLidar: Bool) async throws -> String { "" }
     func deleteProject(projectId: String) async throws {}
     func deletePhoto(projectId: String, photoId: String) async throws {}
+    func updatePhotoNote(projectId: String, photoId: String, note: String?) async throws {}
     func uploadPhoto(projectId: String, imageData: Data, photoType: String) async throws -> PhotoUploadResponse {
         PhotoUploadResponse(photoId: "", validation: ValidatePhotoOutput(passed: true, failures: [], messages: []))
     }
@@ -286,6 +288,7 @@ private actor FlakyConditionClient: WorkflowClientProtocol {
     func createProject(deviceFingerprint: String, hasLidar: Bool) async throws -> String { "" }
     func deleteProject(projectId: String) async throws {}
     func deletePhoto(projectId: String, photoId: String) async throws {}
+    func updatePhotoNote(projectId: String, photoId: String, note: String?) async throws {}
     func uploadPhoto(projectId: String, imageData: Data, photoType: String) async throws -> PhotoUploadResponse {
         PhotoUploadResponse(photoId: "", validation: ValidatePhotoOutput(passed: true, failures: [], messages: []))
     }

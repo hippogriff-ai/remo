@@ -62,9 +62,15 @@ public final class RealWorkflowClient: WorkflowClientProtocol, @unchecked Sendab
     }
 
     public func deletePhoto(projectId: String, photoId: String) async throws {
-        // Note: Backend does not yet expose DELETE /photos/{photoId}.
-        // P2: T0 to add endpoint. Until then, this will 404 and the UI rollback handles it.
         try await delete("/api/v1/projects/\(projectId)/photos/\(photoId)")
+    }
+
+    public func updatePhotoNote(projectId: String, photoId: String, note: String?) async throws {
+        struct Body: Encodable { let note: String? }
+        let _: ActionResponse = try await patch(
+            "/api/v1/projects/\(projectId)/photos/\(photoId)/note",
+            body: Body(note: note)
+        )
     }
 
     // MARK: - Scan
@@ -181,6 +187,19 @@ public final class RealWorkflowClient: WorkflowClientProtocol, @unchecked Sendab
             let url = self.baseURL.appendingPathComponent(path)
             var request = URLRequest(url: url)
             request.httpMethod = "POST"
+            request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            request.httpBody = try self.encoder.encode(body)
+            let (data, response) = try await self.session.data(for: request)
+            try self.checkHTTPResponse(response, data: data)
+            return try self.decoder.decode(T.self, from: data)
+        }
+    }
+
+    private func patch<B: Encodable, T: Decodable>(_ path: String, body: B) async throws -> T {
+        try await wrapErrors {
+            let url = self.baseURL.appendingPathComponent(path)
+            var request = URLRequest(url: url)
+            request.httpMethod = "PATCH"
             request.setValue("application/json", forHTTPHeaderField: "Content-Type")
             request.httpBody = try self.encoder.encode(body)
             let (data, response) = try await self.session.data(for: request)

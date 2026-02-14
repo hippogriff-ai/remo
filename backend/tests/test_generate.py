@@ -305,6 +305,31 @@ class TestRoomContextFormatting:
         assert "sofa" in result
         assert "hardwood" in result
 
+    def test_non_dict_entries_filtered(self):
+        """Non-dict entries in openings/furniture/surfaces are silently skipped.
+
+        Uses model_construct to bypass Pydantic validation (simulates corrupt
+        data from parse_room_dimensions or other non-validated paths).
+        """
+        from app.activities.generate import _format_room_context
+        from app.models.contracts import RoomDimensions
+
+        dims = RoomDimensions.model_construct(
+            width_m=3.0,
+            length_m=4.0,
+            height_m=2.5,
+            openings=[{"type": "door"}, "bad-string", 42],
+            furniture=[None, {"type": "chair"}, True],
+            surfaces=[{"type": "wall", "material": "paint"}, 3.14],
+        )
+        result = _format_room_context(dims)
+        assert "door" in result
+        assert "chair" in result
+        assert "paint" in result
+        assert "bad-string" not in result
+        assert "42" not in result
+        assert "3.14" not in result
+
     def test_build_prompt_with_dimensions(self):
         from app.activities.generate import _build_generation_prompt
         from app.models.contracts import RoomDimensions
