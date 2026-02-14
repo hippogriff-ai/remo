@@ -111,6 +111,10 @@ def _format_room_context(dims: RoomDimensions | None) -> str:
 
     Returns empty string when no dimensions are available so the prompt
     template's {room_context} placeholder collapses cleanly.
+
+    Includes furniture bounding-box dimensions and opening sizes (G5/G13).
+    Uses fallback labels for None types/materials (G23).
+    Gracefully handles non-dict entries and non-numeric dimensions.
     """
     if dims is None:
         return ""
@@ -122,20 +126,50 @@ def _format_room_context(dims: RoomDimensions | None) -> str:
     if dims.floor_area_sqm is not None:
         parts.append(f"Floor area: {dims.floor_area_sqm:.1f} m²")
     if dims.openings:
-        opening_types = [
-            str(o.get("type", "opening")) for o in dims.openings if isinstance(o, dict)
-        ]
-        if opening_types:
-            parts.append(f"Openings: {', '.join(opening_types)}")
+        opening_descs = []
+        for o in dims.openings:
+            if not isinstance(o, dict):
+                continue
+            otype = str(o.get("type") or "opening")
+            w = o.get("width")
+            h = o.get("height")
+            if w is not None and h is not None:
+                try:
+                    opening_descs.append(f"{otype} ({float(w):.1f}m × {float(h):.1f}m)")
+                except (TypeError, ValueError):
+                    opening_descs.append(otype)
+            else:
+                opening_descs.append(otype)
+        if opening_descs:
+            parts.append(f"Openings: {', '.join(opening_descs)}")
     if dims.furniture:
-        furniture_types = [
-            str(f.get("type", "item")) for f in dims.furniture if isinstance(f, dict)
-        ]
-        if furniture_types:
-            parts.append(f"Existing furniture detected: {', '.join(furniture_types)}")
+        furniture_descs = []
+        for f in dims.furniture:
+            if not isinstance(f, dict):
+                continue
+            ftype = str(f.get("type") or "item")
+            w = f.get("width")
+            d = f.get("depth")
+            h = f.get("height")
+            dim_parts = []
+            try:
+                if w is not None:
+                    dim_parts.append(f"{float(w):.1f}m")
+                if d is not None:
+                    dim_parts.append(f"{float(d):.1f}m")
+                if h is not None:
+                    dim_parts.append(f"h{float(h):.1f}m")
+            except (TypeError, ValueError):
+                dim_parts = []
+            if dim_parts:
+                furniture_descs.append(f"{ftype} ({' × '.join(dim_parts)})")
+            else:
+                furniture_descs.append(ftype)
+        if furniture_descs:
+            parts.append(f"Existing furniture: {', '.join(furniture_descs)}")
     if dims.surfaces:
         surface_descs = [
-            f"{s.get('type', 'surface')}: {s.get('material', 'unknown')}"
+            f"{s.get('type') or 'surface'}: {s.get('material') or 'unknown'}"
             for s in dims.surfaces
             if isinstance(s, dict)
         ]

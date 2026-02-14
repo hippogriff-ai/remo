@@ -218,7 +218,10 @@ def _format_room_constraints_for_prompt(
         return "No room dimensions available."
 
     constraints = _compute_room_constraints(dims)
-    source = "LiDAR scan" if room_dimensions else "photo analysis"
+    if room_dimensions or (room_context and "lidar" in (room_context.enrichment_sources or [])):
+        source = "LiDAR scan"
+    else:
+        source = "photo analysis"
 
     lines = [
         f"Room: {dims.width_m:.1f}m x {dims.length_m:.1f}m, "
@@ -1524,7 +1527,9 @@ async def generate_shopping_list(
     if not exa_key:
         raise ApplicationError("EXA_API_KEY not set", non_retryable=True)
 
-    client = anthropic.AsyncAnthropic(api_key=anthropic_key)
+    from app.utils.tracing import wrap_anthropic
+
+    client = wrap_anthropic(anthropic.AsyncAnthropic(api_key=anthropic_key))
 
     # Resolve R2 storage keys to presigned URLs (pass through existing URLs)
     from app.utils.r2 import resolve_url, resolve_urls

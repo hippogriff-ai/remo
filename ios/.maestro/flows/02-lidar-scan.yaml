@@ -1,0 +1,13 @@
+appId: com.hippogriff.remo
+---
+# LiDARScanScreen: upload fixture scan data (no real LiDAR needed)
+# Requires -lidar-fixture "reference_room" launch arg (set in happy-path-lidar.yaml)
+- assertVisible: "Scan Your Room"
+- tapOn:
+    id: "scan_start"
+# Fixture data auto-submitted via -lidar-fixture launch arg
+# Wait for the scan to upload and state to transition
+- extendedWaitUntil:
+    visible: "Design Chat"
+    timeout: 10000
+- takeScreenshot: 02-lidar-scan

@@ -291,6 +291,7 @@ class GenerateDesignsInput(BaseModel):
     inspiration_notes: list[InspirationNote] = []
     design_brief: DesignBrief | None = None
     room_dimensions: RoomDimensions | None = None
+    room_context: RoomContext | None = None
 
 
 class GenerateDesignsOutput(BaseModel):
@@ -306,6 +307,8 @@ class EditDesignInput(BaseModel):
     annotations: list[AnnotationRegion] = []
     feedback: str | None = None
     chat_history_key: str | None = None
+    room_dimensions: RoomDimensions | None = None
+    room_context: RoomContext | None = None
 
 
 class EditDesignOutput(BaseModel):

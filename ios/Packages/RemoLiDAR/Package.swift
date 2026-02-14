@@ -12,6 +12,13 @@ let package = Package(
         .package(path: "../RemoNetworking"),
     ],
     targets: [
-        .target(name: "RemoLiDAR", dependencies: ["RemoModels", "RemoNetworking"]),
+        .target(
+            name: "RemoLiDAR",
+            dependencies: ["RemoModels", "RemoNetworking"],
+            linkerSettings: [
+                .linkedFramework("ARKit", .when(platforms: [.iOS])),
+                .linkedFramework("RoomPlan", .when(platforms: [.iOS])),
+            ]
+        ),
     ]
 )
