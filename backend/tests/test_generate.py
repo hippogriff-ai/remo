@@ -176,7 +176,7 @@ class TestPromptBuilding:
 
         prompt = _build_generation_prompt(None, [])
         assert "camera angle" in prompt
-        assert "room geometry" in prompt or "architecture" in prompt
+        assert "architectural elements" in prompt or "architecture" in prompt
 
     def test_build_prompt_with_designer_brain_fields(self):
         """PR-6 follow-up: New DesignBrief fields appear in generation prompt."""
@@ -218,6 +218,40 @@ class TestPromptBuilding:
         prompt = _build_generation_prompt(brief, [])
         assert "couple, 30s" in prompt
         assert "Morning yoga, weekend hosting" in prompt
+
+    def test_build_prompt_with_variant(self):
+        """Option variant text appears in the generated prompt (A5)."""
+        from app.activities.generate import _build_generation_prompt
+
+        prompt = _build_generation_prompt(None, [], option_variant="Test variant direction")
+        assert "Test variant direction" in prompt
+
+    def test_build_prompt_without_variant(self):
+        """Default option_variant is empty string, producing no extra text."""
+        from app.activities.generate import _build_generation_prompt
+
+        prompt = _build_generation_prompt(None, [])
+        assert "Design Direction:" not in prompt
+
+    def test_variant_a_and_b_differ(self):
+        """Variant A and B produce meaningfully different prompts (A5)."""
+        from app.activities.generate import _OPTION_VARIANTS, _build_generation_prompt
+
+        brief = DesignBrief(room_type="living room")
+        prompt_a = _build_generation_prompt(brief, [], option_variant=_OPTION_VARIANTS[0])
+        prompt_b = _build_generation_prompt(brief, [], option_variant=_OPTION_VARIANTS[1])
+        assert prompt_a != prompt_b
+        assert "primary style" in prompt_a
+        assert "complementary variation" in prompt_b
+
+    def test_prompt_uses_narrative_format(self):
+        """A3: Prompt uses narrative paragraphs, not bullet lists."""
+        from app.activities.generate import _build_generation_prompt
+
+        prompt = _build_generation_prompt(None, [])
+        assert "editorial interior design photograph" in prompt
+        assert "full-frame camera" in prompt
+        assert "physically accurate materials" in prompt
 
 
 class TestRoomContextFormatting:
@@ -340,7 +374,7 @@ class TestRoomContextFormatting:
         )
         result = _format_room_context(dims)
         assert "4.2m" in result
-        assert "24.4" in result or "24.3" in result
+        assert "24.4 m²" in result or "24.3 m²" in result
         assert "door" in result
         assert result.count("window") == 2
         assert "sofa" in result
@@ -371,6 +405,277 @@ class TestRoomContextFormatting:
         assert "42" not in result
         assert "3.14" not in result
 
+    def test_format_furniture_with_dimensions(self):
+        """G5: Furniture includes bounding-box dimensions when available."""
+        from app.activities.generate import _format_room_context
+        from app.models.contracts import RoomDimensions
+
+        dims = RoomDimensions(
+            width_m=4.0,
+            length_m=5.0,
+            height_m=2.5,
+            furniture=[
+                {"type": "sofa", "width": 2.1, "depth": 0.9, "height": 0.8},
+                {"type": "table", "width": 1.2},
+                {"type": "chair"},  # no dimensions
+            ],
+        )
+        result = _format_room_context(dims)
+        assert "sofa (2.1m × 0.9m × h0.8m)" in result
+        assert "table (1.2m)" in result
+        assert "chair" in result
+
+    def test_format_openings_with_dimensions(self):
+        """G5/G13: Openings include width × height when available."""
+        from app.activities.generate import _format_room_context
+        from app.models.contracts import RoomDimensions
+
+        dims = RoomDimensions(
+            width_m=4.0,
+            length_m=5.0,
+            height_m=2.5,
+            openings=[
+                {"type": "door", "width": 0.9, "height": 2.1},
+                {"type": "window"},  # no dimensions
+            ],
+        )
+        result = _format_room_context(dims)
+        assert "door (0.9m × 2.1m)" in result
+        assert "window" in result
+        # window without dimensions should not have parens
+        assert "window (" not in result
+
+    def test_format_furniture_partial_dimensions(self):
+        """G5: Furniture with only some dimension fields formats correctly."""
+        from app.activities.generate import _format_room_context
+        from app.models.contracts import RoomDimensions
+
+        dims = RoomDimensions(
+            width_m=4.0,
+            length_m=5.0,
+            height_m=2.5,
+            furniture=[
+                {"type": "lamp", "height": 1.5},  # only height
+                {"type": "rug", "width": 2.0, "depth": 3.0},  # no height
+            ],
+        )
+        result = _format_room_context(dims)
+        assert "lamp (h1.5m)" in result
+        assert "rug (2.0m × 3.0m)" in result
+
+    def test_format_non_numeric_dimensions_degrade_gracefully(self):
+        """Review fix: Non-numeric dimension values don't crash _format_room_context."""
+        from app.activities.generate import _format_room_context
+        from app.models.contracts import RoomDimensions
+
+        dims = RoomDimensions(
+            width_m=4.0,
+            length_m=5.0,
+            height_m=2.5,
+            openings=[
+                {"type": "door", "width": "wide", "height": 2.1},
+                {"type": "window", "width": 1.0, "height": "tall"},
+            ],
+            furniture=[
+                {"type": "sofa", "width": "big", "depth": 0.9, "height": 0.8},
+            ],
+        )
+        result = _format_room_context(dims)
+        # Non-numeric values should fall back to type-only (no crash)
+        assert "door" in result
+        assert "window" in result
+        assert "sofa" in result
+        # The :.1f formatting should NOT appear for malformed entries
+        assert "wide" not in result
+        assert "tall" not in result
+        assert "big" not in result
+
+    def test_format_surfaces_missing_type_uses_fallback(self):
+        """Surface dict missing 'type' key should use 'surface' as fallback."""
+        from app.activities.generate import _format_room_context
+        from app.models.contracts import RoomDimensions
+
+        dims = RoomDimensions(
+            width_m=4.0,
+            length_m=5.0,
+            height_m=2.5,
+            surfaces=[{"material": "tile"}],
+        )
+        result = _format_room_context(dims)
+        assert "surface: tile" in result
+
+    def test_format_opening_none_type_uses_fallback(self):
+        """G23: Opening with type=None uses 'opening' fallback, not literal 'None'."""
+        from app.activities.generate import _format_room_context
+        from app.models.contracts import RoomDimensions
+
+        dims = RoomDimensions(
+            width_m=4.0,
+            length_m=5.0,
+            height_m=2.5,
+            openings=[{"type": None, "width": 0.9, "height": 2.1}],
+        )
+        result = _format_room_context(dims)
+        assert "Openings:" in result
+        assert "opening (0.9m" in result
+        assert "None" not in result
+
+    def test_format_furniture_none_type_uses_fallback(self):
+        """G23: Furniture with type=None uses 'item' fallback, not literal 'None'."""
+        from app.activities.generate import _format_room_context
+        from app.models.contracts import RoomDimensions
+
+        dims = RoomDimensions(
+            width_m=4.0,
+            length_m=5.0,
+            height_m=2.5,
+            furniture=[{"type": None, "width": 2.0, "depth": 0.9, "height": 0.8}],
+        )
+        result = _format_room_context(dims)
+        assert "Existing furniture:" in result
+        assert "item (2.0m" in result
+        assert "None" not in result
+
+    def test_format_surface_none_type_uses_fallback(self):
+        """G23: Surface with type=None uses 'surface' fallback, not literal 'None'."""
+        from app.activities.generate import _format_room_context
+        from app.models.contracts import RoomDimensions
+
+        dims = RoomDimensions(
+            width_m=4.0,
+            length_m=5.0,
+            height_m=2.5,
+            surfaces=[{"type": None, "material": "hardwood"}],
+        )
+        result = _format_room_context(dims)
+        assert "surface: hardwood" in result
+        assert "None" not in result
+
+    def test_format_surface_none_material_uses_fallback(self):
+        """G23: Surface with material=None uses 'unknown' fallback."""
+        from app.activities.generate import _format_room_context
+        from app.models.contracts import RoomDimensions
+
+        dims = RoomDimensions(
+            width_m=4.0,
+            length_m=5.0,
+            height_m=2.5,
+            surfaces=[{"type": "floor", "material": None}],
+        )
+        result = _format_room_context(dims)
+        assert "floor: unknown" in result
+        assert "None" not in result
+
+    def test_format_empty_string_type_uses_fallback(self):
+        """Empty string type uses fallback (empty string is falsy in Python)."""
+        from app.activities.generate import _format_room_context
+        from app.models.contracts import RoomDimensions
+
+        dims = RoomDimensions(
+            width_m=4.0,
+            length_m=5.0,
+            height_m=2.5,
+            openings=[{"type": "", "width": 0.9, "height": 2.1}],
+            furniture=[{"type": ""}],
+            surfaces=[{"type": "", "material": "tile"}],
+        )
+        result = _format_room_context(dims)
+        # Empty string is falsy, so `"" or "opening"` → "opening"
+        assert "opening (0.9m" in result
+        assert "item" in result
+        assert "surface: tile" in result
+
+    def test_format_floor_area_sqm_none_omits_line(self):
+        """When floor_area_sqm is None, floor area line should be omitted."""
+        from app.activities.generate import _format_room_context
+        from app.models.contracts import RoomDimensions
+
+        dims = RoomDimensions.model_construct(
+            width_m=4.0,
+            length_m=5.0,
+            height_m=2.5,
+            floor_area_sqm=None,
+            openings=[],
+            furniture=[],
+            surfaces=[],
+            walls=[],
+        )
+        result = _format_room_context(dims)
+        assert "4.0m" in result
+        assert "Floor area:" not in result
+
+    def test_format_partially_invalid_furniture_dims_drops_all(self):
+        """When one furniture dimension is invalid, all dims are dropped (type only).
+
+        The try/except wraps all float() calls, so a valid width followed by
+        an invalid depth causes the except to clear dim_parts entirely. This is
+        intentional — partial dims could mislead the generation model.
+        """
+        from app.activities.generate import _format_room_context
+        from app.models.contracts import RoomDimensions
+
+        dims = RoomDimensions(
+            width_m=4.0,
+            length_m=5.0,
+            height_m=2.5,
+            furniture=[{"type": "table", "width": 2.0, "depth": "bad", "height": 0.8}],
+        )
+        result = _format_room_context(dims)
+        # Type preserved but all dimensions dropped
+        assert "table" in result
+        assert "2.0m" not in result  # valid width also dropped
+        assert "bad" not in result
+
+    def test_format_large_furniture_dims_no_crash(self):
+        """Furniture with implausibly large dimensions formats without crash.
+
+        Parser validates room dims (max 50m) but not furniture dims — RoomPlan
+        could theoretically report large bounding boxes for misdetected objects.
+        """
+        from app.activities.generate import _format_room_context
+        from app.models.contracts import RoomDimensions
+
+        dims = RoomDimensions(
+            width_m=4.0,
+            length_m=5.0,
+            height_m=2.5,
+            furniture=[{"type": "sofa", "width": 100.0, "depth": 0.9, "height": 0.8}],
+        )
+        result = _format_room_context(dims)
+        assert "sofa (100.0m × 0.9m × h0.8m)" in result
+
+    def test_format_mixed_valid_invalid_entries_in_list(self):
+        """A list with both valid and invalid entries should format valid ones.
+
+        The per-entry `isinstance(o, dict)` check skips non-dict entries,
+        and per-entry try/except isolates malformed individual items.
+        Uses model_construct to bypass Pydantic validation (defense-in-depth test).
+        """
+        from app.activities.generate import _format_room_context
+        from app.models.contracts import RoomDimensions
+
+        dims = RoomDimensions.model_construct(
+            width_m=4.0,
+            length_m=5.0,
+            height_m=2.5,
+            floor_area_sqm=20.0,
+            walls=[],
+            openings=[
+                {"type": "door", "width": 0.9, "height": 2.1},  # valid
+                "not_a_dict",  # skipped by isinstance check
+                {"type": "window", "width": "bad", "height": 1.2},  # invalid dims
+            ],
+            furniture=[
+                42,  # not a dict, skipped
+                {"type": "sofa", "width": 2.1, "depth": 0.9, "height": 0.8},  # valid
+            ],
+            surfaces=[],
+        )
+        result = _format_room_context(dims)
+        assert "door (0.9m × 2.1m)" in result
+        assert "window" in result  # type preserved, dims dropped
+        assert "sofa (2.1m × 0.9m × h0.8m)" in result
+
     def test_build_prompt_with_dimensions(self):
         from app.activities.generate import _build_generation_prompt
         from app.models.contracts import RoomDimensions
@@ -389,6 +694,120 @@ class TestRoomContextFormatting:
         assert "redesign" in prompt.lower() or "interior design" in prompt.lower()
 
 
+class TestAspectRatioDetection:
+    """Tests for _detect_aspect_ratio — snaps input image ratio to nearest Gemini-supported value.
+
+    Covers A2: aspect ratio matching so output matches input room photo proportions.
+    """
+
+    def test_landscape_4_3(self):
+        """Standard 4:3 landscape photo (e.g., 4032x3024 iPhone)."""
+        from app.activities.generate import _detect_aspect_ratio
+
+        img = Image.new("RGB", (4032, 3024))
+        assert _detect_aspect_ratio(img) == "4:3"
+
+    def test_landscape_16_9(self):
+        """Widescreen 16:9 landscape photo."""
+        from app.activities.generate import _detect_aspect_ratio
+
+        img = Image.new("RGB", (1920, 1080))
+        assert _detect_aspect_ratio(img) == "16:9"
+
+    def test_portrait_3_4(self):
+        """Portrait mode phone photo (3:4)."""
+        from app.activities.generate import _detect_aspect_ratio
+
+        img = Image.new("RGB", (3024, 4032))
+        assert _detect_aspect_ratio(img) == "3:4"
+
+    def test_portrait_9_16(self):
+        """Vertical video / portrait 9:16."""
+        from app.activities.generate import _detect_aspect_ratio
+
+        img = Image.new("RGB", (1080, 1920))
+        assert _detect_aspect_ratio(img) == "9:16"
+
+    def test_square(self):
+        """Square image -> 1:1."""
+        from app.activities.generate import _detect_aspect_ratio
+
+        img = Image.new("RGB", (500, 500))
+        assert _detect_aspect_ratio(img) == "1:1"
+
+    def test_near_4_3(self):
+        """Slightly off from 4:3 still snaps to 4:3."""
+        from app.activities.generate import _detect_aspect_ratio
+
+        img = Image.new("RGB", (1350, 1000))  # 1.35:1, closest to 4:3 (1.333)
+        assert _detect_aspect_ratio(img) == "4:3"
+
+    def test_zero_height(self):
+        """Degenerate zero-height image falls back to 1:1."""
+        from app.activities.generate import _detect_aspect_ratio
+
+        img = Image.new("RGB", (100, 0))
+        assert _detect_aspect_ratio(img) == "1:1"
+
+    def test_zero_width(self):
+        """Degenerate zero-width image falls back to 1:1."""
+        from app.activities.generate import _detect_aspect_ratio
+
+        img = Image.new("RGB", (0, 100))
+        assert _detect_aspect_ratio(img) == "1:1"
+
+
+class TestMakeImageConfig:
+    """Tests for _make_image_config — per-call config with aspect ratio override.
+
+    Covers A1 (2K resolution) and A2 (aspect ratio matching).
+    """
+
+    def test_returns_global_config_when_no_ratio(self):
+        """Without aspect_ratio, returns the global IMAGE_CONFIG (2K)."""
+        from app.activities.generate import _make_image_config
+        from app.utils.gemini_chat import IMAGE_CONFIG
+
+        config = _make_image_config(None)
+        assert config is IMAGE_CONFIG
+
+    def test_includes_2k_and_aspect_ratio(self):
+        """With aspect_ratio, builds new config with both 2K and ratio."""
+        from app.activities.generate import _make_image_config
+
+        config = _make_image_config("16:9")
+        assert config.image_config is not None
+        assert config.image_config.image_size == "2K"
+        assert config.image_config.aspect_ratio == "16:9"
+
+    def test_different_ratios(self):
+        """All supported ratios produce valid configs."""
+        from app.activities.generate import _make_image_config
+
+        for ratio in ["1:1", "3:4", "4:3", "9:16", "16:9"]:
+            config = _make_image_config(ratio)
+            assert config.image_config.aspect_ratio == ratio
+
+    def test_invalid_ratio_falls_back_to_global(self):
+        """Unsupported ratio falls back to global IMAGE_CONFIG (no crash)."""
+        from app.activities.generate import _make_image_config
+        from app.utils.gemini_chat import IMAGE_CONFIG
+
+        config = _make_image_config("21:9")
+        assert config is IMAGE_CONFIG
+
+
+class TestGlobalImageConfig:
+    """Verify the global IMAGE_CONFIG uses 2K resolution (A1)."""
+
+    def test_image_config_has_2k(self):
+        """IMAGE_CONFIG should include 2K image_size for free quality boost."""
+        from app.utils.gemini_chat import IMAGE_CONFIG
+
+        assert IMAGE_CONFIG.image_config is not None
+        assert IMAGE_CONFIG.image_config.image_size == "2K"
+
+
 class TestPromptFiles:
     """Verify prompt template files exist and are valid."""
 
@@ -398,6 +817,7 @@ class TestPromptFiles:
         content = path.read_text()
         assert "{brief}" in content
         assert "{room_context}" in content
+        assert "{option_variant}" in content
         assert len(content) > 50
 
     def test_edit_prompt_exists(self):
@@ -547,6 +967,57 @@ class TestDownloadImage:
             with pytest.raises(ApplicationError) as exc_info:
                 await download_image("https://example.com/slow.png")
             assert not exc_info.value.non_retryable
+
+    @pytest.mark.asyncio
+    async def test_download_network_error_retryable(self):
+        """RequestError (connection refused, DNS, etc.) is retryable."""
+        import httpx
+        from temporalio.exceptions import ApplicationError
+
+        from app.utils.http import download_image
+
+        with patch("httpx.AsyncClient") as mock_async_client:
+            mock_client = AsyncMock()
+            mock_client.get.side_effect = httpx.ConnectError("Connection refused")
+            mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+            mock_client.__aexit__ = AsyncMock(return_value=False)
+            mock_async_client.return_value = mock_client
+
+            with pytest.raises(ApplicationError, match="Network error") as exc_info:
+                await download_image("https://example.com/unreachable.png")
+            assert not exc_info.value.non_retryable
+            # Exception chaining preserved for diagnostics
+            assert isinstance(exc_info.value.__cause__, httpx.ConnectError)
+            # Error message includes URL and exception type name
+            assert "unreachable.png" in str(exc_info.value)
+            assert "ConnectError" in str(exc_info.value)
+
+    @pytest.mark.asyncio
+    async def test_download_corrupt_image_non_retryable(self):
+        """Corrupt image bytes (valid HTTP 200 + image content-type) is non-retryable."""
+        from temporalio.exceptions import ApplicationError
+
+        from app.utils.http import download_image
+
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.content = b"\x89PNG\r\n\x1a\nCORRUPT"
+        mock_response.headers = {"content-type": "image/png"}
+
+        with patch("httpx.AsyncClient") as mock_async_client:
+            mock_client = AsyncMock()
+            mock_client.get.return_value = mock_response
+            mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+            mock_client.__aexit__ = AsyncMock(return_value=False)
+            mock_async_client.return_value = mock_client
+
+            with pytest.raises(ApplicationError, match="corrupt") as exc_info:
+                await download_image("https://example.com/broken.png")
+            assert exc_info.value.non_retryable
+            # Exception chaining preserved — original PIL/decode error accessible
+            assert exc_info.value.__cause__ is not None
+            # Error message includes URL for traceability
+            assert "broken.png" in str(exc_info.value)
 
 
 class TestGenerateSingleOption:

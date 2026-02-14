@@ -783,6 +783,15 @@ class TestActivityInputRoundTrip:
                 walls=[{"id": "wall_0", "width": 4.5, "height": 2.7}],
                 openings=[{"type": "door", "width": 0.9}],
             ),
+            room_context=RoomContext(
+                photo_analysis=RoomAnalysis(
+                    room_type="living room",
+                    hypothesis="Open-plan living area with natural light",
+                ),
+                # Deliberately different from top-level dims to catch swap bugs
+                room_dimensions=RoomDimensions(width_m=4.6, length_m=6.1, height_m=2.8),
+                enrichment_sources=["photos", "lidar"],
+            ),
         )
         restored = GenerateDesignsInput.model_validate_json(inp.model_dump_json())
         assert restored.room_photo_urls == inp.room_photo_urls
@@ -793,9 +802,20 @@ class TestActivityInputRoundTrip:
         assert restored.design_brief.style_profile.mood == "cozy"
         assert restored.room_dimensions.width_m == 4.5
         assert len(restored.room_dimensions.walls) == 1
+        assert restored.room_context is not None
+        assert restored.room_context.enrichment_sources == ["photos", "lidar"]
+        assert restored.room_context.photo_analysis is not None
+        assert restored.room_context.photo_analysis.room_type == "living room"
+        assert restored.room_context.photo_analysis.hypothesis == (
+            "Open-plan living area with natural light"
+        )
+        assert restored.room_context.room_dimensions is not None
+        assert restored.room_context.room_dimensions.width_m == 4.6
+        assert restored.room_context.room_dimensions.length_m == 6.1
+        assert restored.room_context.room_dimensions.height_m == 2.8
 
     def test_edit_design_input_annotation_round_trip(self):
-        """EditDesignInput with annotations survives JSON round-trip."""
+        """EditDesignInput with annotations + room_context survives JSON round-trip."""
         inp = EditDesignInput(
             project_id="proj-abc",
             base_image_url="https://r2.example.com/base.png",
@@ -819,6 +839,16 @@ class TestActivityInputRoundTrip:
                 ),
             ],
             chat_history_key="chat/proj-abc/history.json",
+            room_dimensions=RoomDimensions(width_m=3.8, length_m=4.2, height_m=2.6),
+            room_context=RoomContext(
+                photo_analysis=RoomAnalysis(
+                    room_type="office",
+                    hypothesis="Compact home office with desk and shelving",
+                ),
+                # Deliberately different from top-level dims to catch swap bugs
+                room_dimensions=RoomDimensions(width_m=3.9, length_m=4.3, height_m=2.7),
+                enrichment_sources=["photos", "lidar"],
+            ),
         )
         restored = EditDesignInput.model_validate_json(inp.model_dump_json())
         assert restored.project_id == "proj-abc"
@@ -827,19 +857,50 @@ class TestActivityInputRoundTrip:
         assert restored.annotations[1].region_id == 2
         assert restored.inspiration_photo_urls == ["photos/inspo_0.jpg"]
         assert restored.chat_history_key == "chat/proj-abc/history.json"
+        assert restored.design_brief is not None
+        assert restored.design_brief.room_type == "office"
+        assert restored.room_dimensions is not None
+        assert restored.room_dimensions.width_m == 3.8
+        assert restored.room_dimensions.length_m == 4.2
+        assert restored.room_context is not None
+        assert restored.room_context.enrichment_sources == ["photos", "lidar"]
+        assert restored.room_context.photo_analysis is not None
+        assert restored.room_context.photo_analysis.room_type == "office"
+        assert restored.room_context.photo_analysis.hypothesis == (
+            "Compact home office with desk and shelving"
+        )
+        assert restored.room_context.room_dimensions is not None
+        assert restored.room_context.room_dimensions.width_m == 3.9
+        assert restored.room_context.room_dimensions.length_m == 4.3
 
     def test_edit_design_input_feedback_round_trip(self):
-        """EditDesignInput with text feedback survives JSON round-trip."""
+        """EditDesignInput with text feedback (no LiDAR) survives JSON round-trip."""
         inp = EditDesignInput(
             project_id="proj-def",
             base_image_url="https://r2.example.com/rev1.png",
             room_photo_urls=["photos/room_0.jpg", "photos/room_1.jpg"],
             feedback="Make the room brighter with warmer lighting throughout",
+            room_context=RoomContext(
+                photo_analysis=RoomAnalysis(
+                    room_type="bedroom",
+                    hypothesis="Dim bedroom needing better lighting",
+                ),
+                enrichment_sources=["photos"],
+            ),
         )
         restored = EditDesignInput.model_validate_json(inp.model_dump_json())
-        assert restored.feedback == inp.feedback
+        assert restored.feedback == "Make the room brighter with warmer lighting throughout"
         assert restored.annotations == []
         assert restored.design_brief is None
+        assert restored.room_dimensions is None  # No LiDAR scan
+        assert restored.room_context is not None
+        assert restored.room_context.enrichment_sources == ["photos"]
+        assert restored.room_context.photo_analysis is not None
+        assert restored.room_context.photo_analysis.room_type == "bedroom"
+        assert restored.room_context.photo_analysis.hypothesis == (
+            "Dim bedroom needing better lighting"
+        )
+        assert restored.room_context.room_dimensions is None  # Photos-only path
 
     def test_generate_shopping_list_input_round_trip(self):
         """GenerateShoppingListInput with revision history survives JSON round-trip."""

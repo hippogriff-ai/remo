@@ -28,6 +28,13 @@ dev = [
     "pytest-cov>=6,<7",
     "ruff>=0.9,<1",
     "mypy>=1.14,<2",
+    "langsmith>=0.2,<1",
+]
+eval = [
+    "open-clip-torch>=2.26,<3",
+    "torch>=2.2,<3",
+    "scikit-image>=0.24,<1",
+    "opencv-python-headless>=4.10,<5",
 ]
 
 [build-system]
@@ -53,6 +60,7 @@ testpaths = ["tests"]
 markers = [
     "integration: marks tests that require real API keys and external services",
     "e2e: marks tests that require a running backend (docker compose up + API server + worker)",
+    "eval: marks tests for the eval layer (may require eval optional deps)",
 ]
 filterwarnings = [
     "ignore:Module pydantic_core.*was imported after initial workflow load:UserWarning",

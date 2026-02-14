@@ -1,0 +1,26 @@
+{
+  "_comment": "Maps eval scenarios to R2 image URLs and expected score ranges. Images are too large for git; they are stored in R2 and cached locally on first test run.",
+  "scenarios": {
+    "living_room_mcm": {
+      "description": "Mid-century modern living room with warm woods and earthy tones",
+      "original_photo_url": null,
+      "generated_image_url": null,
+      "expected_generation_score": {"min": 60, "max": 100},
+      "expected_tag": ["GOOD", "EXCELLENT"]
+    },
+    "bedroom_minimal": {
+      "description": "Minimalist bedroom with neutral palette and clean lines",
+      "original_photo_url": null,
+      "generated_image_url": null,
+      "expected_generation_score": {"min": 60, "max": 100},
+      "expected_tag": ["GOOD", "EXCELLENT"]
+    },
+    "kitchen_modern": {
+      "description": "Modern kitchen with white cabinetry and marble counters",
+      "original_photo_url": null,
+      "generated_image_url": null,
+      "expected_generation_score": {"min": 60, "max": 100},
+      "expected_tag": ["GOOD", "EXCELLENT"]
+    }
+  }
+}

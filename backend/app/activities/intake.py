@@ -747,7 +747,9 @@ async def _run_intake_core(input: IntakeChatInput) -> IntakeChatOutput:
         history_len=len(input.conversation_history),
     )
 
-    client = anthropic.AsyncAnthropic(api_key=api_key)
+    from app.utils.tracing import wrap_anthropic
+
+    client = wrap_anthropic(anthropic.AsyncAnthropic(api_key=api_key))
 
     try:
         response = await client.messages.create(  # type: ignore[call-overload]

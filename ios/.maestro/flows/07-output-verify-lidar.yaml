@@ -1,0 +1,21 @@
+appId: com.hippogriff.remo
+---
+# OutputScreen with LiDAR: verify final screen and shopping list (LiDAR-present path)
+- assertVisible: "Your Design is Ready!"
+- assertVisible:
+    id: "output_save"
+- assertVisible:
+    id: "output_share"
+- assertVisible:
+    id: "output_shopping"
+# Open shopping list
+- tapOn: "View Shopping List"
+- extendedWaitUntil:
+    visible: "Shopping List"
+    timeout: 5000
+# LiDAR-present: the non-LiDAR banner should NOT appear
+- assertNotVisible: "Scan your room with LiDAR"
+- takeScreenshot: 07-output-lidar
+# Dismiss shopping list
+- back
+- takeScreenshot: 08-output-lidar-final

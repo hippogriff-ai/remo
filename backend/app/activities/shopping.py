@@ -218,7 +218,10 @@ def _format_room_constraints_for_prompt(
         return "No room dimensions available."
 
     constraints = _compute_room_constraints(dims)
-    source = "LiDAR scan" if room_dimensions else "photo analysis"
+    if room_dimensions or (room_context and "lidar" in (room_context.enrichment_sources or [])):
+        source = "LiDAR scan"
+    else:
+        source = "photo analysis"
 
     lines = [
         f"Room: {dims.width_m:.1f}m x {dims.length_m:.1f}m, "
@@ -449,13 +452,65 @@ def _room_size_label(room_dimensions: RoomDimensions) -> str:
     return "large"
 
 
+_COLOR_SYNONYMS: dict[str, list[str]] = {
+    "ivory": ["cream", "off-white", "vanilla"],
+    "cream": ["ivory", "off-white", "vanilla"],
+    "navy": ["dark blue", "indigo", "midnight blue"],
+    "sage": ["muted green", "olive", "eucalyptus"],
+    "charcoal": ["dark gray", "anthracite", "slate"],
+    "walnut": ["dark brown", "espresso", "chocolate"],
+    "blush": ["pale pink", "rose", "dusty pink"],
+    "emerald": ["deep green", "forest green", "jewel green"],
+    "burgundy": ["wine", "maroon", "oxblood"],
+    "taupe": ["greige", "mushroom", "warm gray"],
+    "cognac": ["caramel", "amber", "toffee"],
+    "slate": ["blue gray", "charcoal blue", "steel"],
+    "rust": ["burnt orange", "terracotta", "sienna"],
+    "terracotta": ["rust", "clay", "burnt sienna"],
+    "olive": ["army green", "moss", "khaki"],
+    "mustard": ["golden yellow", "saffron", "ochre"],
+    "mauve": ["dusty purple", "muted plum", "lavender"],
+    "teal": ["dark cyan", "peacock blue", "deep aqua"],
+    "coral": ["salmon", "peach", "melon"],
+    "pewter": ["gunmetal", "silver gray", "tin"],
+    "espresso": ["dark brown", "chocolate", "mocha"],
+    "oatmeal": ["beige", "natural", "sand"],
+    "indigo": ["deep blue", "navy", "cobalt"],
+    "ash": ["light gray", "silver", "pale gray"],
+    "camel": ["tan", "sand", "khaki"],
+    "plum": ["deep purple", "eggplant", "aubergine"],
+    "copper": ["bronze", "rose gold", "burnished"],
+    "midnight": ["black blue", "dark navy", "deep indigo"],
+}
+
+
+def _expand_color_synonym(color: str) -> str | None:
+    """Return one synonym for the given color, or None if no mapping exists.
+
+    Uses word-boundary matching so that "ash" matches "ash gray" but not
+    "washed oak" or "clashing red".
+    """
+    color_lower = color.lower().strip()
+    # Exact match first (fastest path)
+    if color_lower in _COLOR_SYNONYMS:
+        return _COLOR_SYNONYMS[color_lower][0]
+    # Word-boundary match for compound colors like "ash gray"
+    words = set(color_lower.split())
+    for key, synonyms in _COLOR_SYNONYMS.items():
+        if key in words:
+            return synonyms[0]
+    return None
+
+
 def _build_search_queries(
     item: dict[str, Any],
     room_dimensions: RoomDimensions | None = None,
 ) -> list[str]:
     """Build source-aware search queries for an extracted item.
 
-    Queries include "buy" to steer Exa toward product pages (not blogs/reviews).
+    Uses natural product descriptions (no "buy"/"shop" prefixes) since Exa's
+    neural/semantic search + useAutoprompt handles purchase intent internally.
+
     Source tag determines query strategy:
     - BRIEF_ANCHORED: user's own language (highest recall)
     - ITERATION_ANCHORED: iteration instruction keywords
@@ -466,6 +521,9 @@ def _build_search_queries(
 
     When room_dimensions are available, adds a size-constrained query for
     primary furniture categories (sofa, table, rug, cabinet).
+
+    Color synonym expansion adds one additional query with the closest
+    synonym for the item's color, improving recall across retailers.
     """
     tag = item.get("source_tag", "IMAGE_ONLY")
     category = item.get("category", "")
@@ -477,24 +535,30 @@ def _build_search_queries(
 
     queries = []
     if tag == "BRIEF_ANCHORED":
-        ref = item.get("source_reference", description)
-        queries.append(f"buy {ref}")
-        queries.append(f"{category} {style} {material} shop")
+        ref = str(item.get("source_reference") or description)
+        queries.append(ref)
+        queries.append(f"{category} {style} {material} furniture")
     elif tag == "ITERATION_ANCHORED":
-        ref = item.get("source_reference", description)
-        queries.append(f"buy {ref}")
-        queries.append(f"{category} {material} {color} shop")
+        ref = str(item.get("source_reference") or description)
+        queries.append(ref)
+        queries.append(f"{category} {material} {color} furniture")
     else:
-        queries.append(f"buy {category} {material} {color}")
-        queries.append(f"{category} {style} shop")
+        queries.append(f"{category} {material} {color}")
+        queries.append(f"{category} {style} furniture")
 
     # Description-based query for all tags — the extraction prompt produces
     # rich descriptions like "ivory boucle sofa with down-blend cushions"
     if description and description != item.get("source_reference", ""):
-        queries.append(f"buy {description}")
+        queries.append(description)
 
     if dims:
         queries.append(f"{category} {dims}")
+
+    # Color synonym expansion: add one query swapping the primary color
+    if color:
+        synonym = _expand_color_synonym(color)
+        if synonym:
+            queries.append(f"{category} {material} {synonym}")
 
     # Room-aware constrained query for primary furniture
     if room_dimensions is not None:
@@ -522,13 +586,30 @@ EXA_RETRY_DELAY = 1.0
 _EXA_CACHE_DIR: str | None = os.environ.get("EXA_CACHE_DIR")
 
 
-def _exa_cache_path(query: str, num_results: int) -> Path | None:
-    """Return cache file path for a query, or None if caching is disabled."""
+def _exa_cache_path(
+    query: str,
+    num_results: int,
+    *,
+    search_type: str = "auto",
+    include_domains: list[str] | None = None,
+    include_text: list[str] | None = None,
+) -> Path | None:
+    """Return cache file path for a query, or None if caching is disabled.
+
+    The cache key includes all parameters that affect the Exa API response
+    (query, num_results, search_type, include_domains, include_text) to
+    prevent collisions between dual-pass searches.
+    """
     if not _EXA_CACHE_DIR:
         return None
     import hashlib
 
-    key = hashlib.sha256(f"{query}:{num_results}".encode()).hexdigest()[:16]
+    parts = [query, str(num_results), search_type]
+    if include_domains:
+        parts.append(",".join(sorted(include_domains)))
+    if include_text:
+        parts.append(",".join(sorted(include_text)))
+    key = hashlib.sha256(":".join(parts).encode()).hexdigest()[:16]
     cache_dir = Path(_EXA_CACHE_DIR)
     cache_dir.mkdir(parents=True, exist_ok=True)
     return cache_dir / f"exa_{key}.json"
@@ -539,18 +620,35 @@ async def _search_exa(
     query: str,
     api_key: str,
     num_results: int = 3,
+    *,
+    search_type: str = "auto",
+    include_domains: list[str] | None = None,
+    include_text: list[str] | None = None,
 ) -> list[dict[str, Any]]:
-    """Execute a single Exa neural search query with content retrieval.
+    """Execute a single Exa search query with content retrieval.
 
     Requests page text (truncated to 1000 chars) so the scoring model
     can compare actual product descriptions rather than guessing from titles.
     Retries once on transient failures (429, 500+) with a short backoff.
 
+    Args:
+        search_type: Exa search type — "auto" (default, adds reranker),
+            "deep" (query expansion + parallel sub-searches), or "neural".
+        include_domains: Optional domain whitelist (e.g., ["wayfair.com"]).
+        include_text: Optional text filter — only return pages containing
+            all specified strings (e.g., ["add to cart"]).
+
     When EXA_CACHE_DIR is set, results are cached to disk per query and
     reused on subsequent calls to avoid redundant API costs.
     """
     # Check cache first
-    cache_file = _exa_cache_path(query, num_results)
+    cache_file = _exa_cache_path(
+        query,
+        num_results,
+        search_type=search_type,
+        include_domains=include_domains,
+        include_text=include_text,
+    )
     if cache_file and cache_file.exists():
         try:
             cached = json.loads(cache_file.read_text())
@@ -559,15 +657,33 @@ async def _search_exa(
         except (json.JSONDecodeError, OSError):
             pass  # Cache corrupt — fall through to real call
 
-    payload = {
+    payload: dict[str, Any] = {
         "query": query,
-        "type": "neural",
+        "type": search_type,
         "numResults": num_results,
         "useAutoprompt": True,
         "contents": {
             "text": {"maxCharacters": 1000},
+            "summary": {
+                "query": "Extract product details",
+                "schema": {
+                    "type": "object",
+                    "properties": {
+                        "product_name": {"type": "string"},
+                        "price_usd": {"type": "number"},
+                        "material": {"type": "string"},
+                        "color": {"type": "string"},
+                        "dimensions": {"type": "string"},
+                        "in_stock": {"type": "boolean"},
+                    },
+                },
+            },
         },
     }
+    if include_domains:
+        payload["includeDomains"] = include_domains
+    if include_text:
+        payload["includeText"] = include_text
     headers = {"x-api-key": api_key}
 
     for attempt in range(1 + EXA_MAX_RETRIES):
@@ -616,22 +732,86 @@ async def _search_exa(
     return []
 
 
+_RETAILER_DOMAINS: list[str] = [
+    "amazon.com",
+    "wayfair.com",
+    "ikea.com",
+    "cb2.com",
+    "crateandbarrel.com",
+    "potterybarn.com",
+    "westelm.com",
+    "restorationhardware.com",
+    "rh.com",
+    "etsy.com",
+    "overstock.com",
+    "target.com",
+    "walmart.com",
+    "homedepot.com",
+    "lowes.com",
+    "anthropologie.com",
+    "arhaus.com",
+    "allmodern.com",
+    "joybird.com",
+    "article.com",
+    "castlery.com",
+    "worldmarket.com",
+    "pier1.com",
+    "zgallerie.com",
+]
+
+
 async def search_products_for_item(
     http_client: httpx.AsyncClient,
     item: dict[str, Any],
     exa_api_key: str,
     room_dimensions: RoomDimensions | None = None,
 ) -> list[dict[str, Any]]:
-    """Search Exa for products matching a single extracted item."""
+    """Search Exa for products matching a single extracted item.
+
+    Runs a dual-pass search:
+    - Pass 1: Curated retailer domains with "add to cart" text filter.
+      Guarantees purchasable results with accurate pricing.
+    - Pass 2: Open web (current behavior). Catches niche/boutique retailers.
+
+    HIGH-priority items use "deep" search type (query expansion);
+    others use "auto" (neural + reranker).
+    """
     queries = _build_search_queries(item, room_dimensions=room_dimensions)
     num_results = _num_results_for_item(item)
-    tasks = [_search_exa(http_client, q, exa_api_key, num_results) for q in queries]
-    all_results = await asyncio.gather(*tasks, return_exceptions=True)
+    priority = item.get("search_priority", "MEDIUM")
+    search_type = "deep" if priority == "HIGH" else "auto"
+
+    # Pass 1: curated retailers + product page filter
+    pass1_tasks = [
+        _search_exa(
+            http_client,
+            q,
+            exa_api_key,
+            num_results,
+            search_type=search_type,
+            include_domains=_RETAILER_DOMAINS,
+            include_text=["add to cart"],
+        )
+        for q in queries
+    ]
+    # Pass 2: open web (broader recall)
+    pass2_tasks = [
+        _search_exa(
+            http_client,
+            q,
+            exa_api_key,
+            num_results,
+            search_type=search_type,
+        )
+        for q in queries
+    ]
+    all_results = await asyncio.gather(*pass1_tasks, *pass2_tasks, return_exceptions=True)
 
     seen_urls: set[str] = set()
     deduped: list[dict[str, Any]] = []
     for result_set in all_results:
         if isinstance(result_set, BaseException):
+            log.warning("exa_search_task_failed", error=str(result_set))
             continue
         for r in result_set:  # type: ignore[union-attr]
             url = r.get("url", "")
@@ -666,9 +846,17 @@ _PRICE_RE = re.compile(r"\$[\d,]+(?:\.\d{2})?")
 def _extract_price_text(product: dict[str, Any]) -> str:
     """Extract a price string from Exa product data.
 
-    Checks the 'text' content field for dollar amounts (e.g., '$1,299.00').
+    Checks Exa summary price_usd first (structured extraction), then falls
+    back to regex on the 'text' content field for dollar amounts.
     Returns the first match or 'Unknown'.
     """
+    # Prefer structured price from Exa summary (more reliable than regex)
+    summary = product.get("summary")
+    if isinstance(summary, dict):
+        price_usd = summary.get("price_usd")
+        if isinstance(price_usd, (int, float)) and price_usd > 0:
+            return f"${price_usd:,.2f}"
+
     text = product.get("text", "")
     match = _PRICE_RE.search(text)
     return match.group(0) if match else "Unknown"
@@ -703,6 +891,39 @@ SCORING_WEIGHTS_LIDAR = {
     "dimensions": 0.20,
 }
 
+# Category-adaptive weight overrides — merged on top of base weights.
+# Each entry overrides only the specified keys; unmentioned keys keep base values.
+_CATEGORY_WEIGHTS: dict[str, dict[str, float]] = {
+    "sofa": {"material": 0.25, "dimensions": 0.20, "color": 0.15},
+    "sectional": {"material": 0.25, "dimensions": 0.20, "color": 0.15},
+    "rug": {"color": 0.30, "dimensions": 0.20, "material": 0.10},
+    "lighting": {"style": 0.25, "dimensions": 0.20, "color": 0.10},
+    "lamp": {"style": 0.25, "dimensions": 0.20, "color": 0.10},
+    "chandelier": {"style": 0.25, "dimensions": 0.20, "color": 0.10},
+    "wall art": {"style": 0.30, "color": 0.25, "material": 0.10},
+    "artwork": {"style": 0.30, "color": 0.25, "material": 0.10},
+    "mirror": {"style": 0.25, "dimensions": 0.20, "color": 0.10},
+}
+
+
+def _get_scoring_weights(
+    item: dict[str, Any],
+    has_lidar: bool,
+) -> dict[str, float]:
+    """Select scoring weights: base (default/LiDAR) + category overrides."""
+    base = dict(SCORING_WEIGHTS_LIDAR if has_lidar else SCORING_WEIGHTS_DEFAULT)
+    category = (item.get("category") or "").lower()
+    for keyword, overrides in _CATEGORY_WEIGHTS.items():
+        if keyword in category:
+            base.update(overrides)
+            break
+    # Renormalize so weights sum to 1.0 after category overrides
+    total = sum(base.values())
+    if total > 0 and total != 1.0:
+        base = {k: round(v / total, 2) for k, v in base.items()}
+    return base
+
+
 _scoring_prompt_cache: str | None = None
 
 
@@ -712,6 +933,25 @@ def _load_scoring_prompt() -> str:
     if _scoring_prompt_cache is None:
         _scoring_prompt_cache = (PROMPTS_DIR / "product_scoring.txt").read_text()
     return _scoring_prompt_cache
+
+
+def _format_summary_section(product: dict[str, Any]) -> str:
+    """Format Exa summary data as additional product context for scoring."""
+    summary = product.get("summary")
+    if not summary or not isinstance(summary, dict):
+        return ""
+    parts = []
+    if summary.get("material"):
+        parts.append(f"Material: {summary['material']}")
+    if summary.get("color"):
+        parts.append(f"Color: {summary['color']}")
+    if summary.get("dimensions"):
+        parts.append(f"Dimensions: {summary['dimensions']}")
+    if summary.get("in_stock") is not None:
+        parts.append(f"In stock: {'Yes' if summary['in_stock'] else 'No'}")
+    if not parts:
+        return ""
+    return "\n- Structured data: " + "; ".join(parts)
 
 
 def _build_scoring_prompt(
@@ -729,7 +969,7 @@ def _build_scoring_prompt(
         and room_dimensions.length_m > 0
         and room_dimensions.height_m > 0
     )
-    weights = SCORING_WEIGHTS_LIDAR if has_valid_dims else SCORING_WEIGHTS_DEFAULT
+    weights = _get_scoring_weights(item, has_lidar=has_valid_dims)
 
     style_mood = ""
     color_palette = ""
@@ -752,6 +992,12 @@ def _build_scoring_prompt(
             f'({room_dimensions.height_m / 0.0254:.0f}")\n'
         )
 
+    # Enrich product description with structured summary data when available
+    product_description = product.get("text") or product.get("title") or ""
+    summary_section = _format_summary_section(product)
+    if summary_section:
+        product_description += summary_section
+
     return template.format(
         item_category=item.get("category", ""),
         item_description=item.get("description", ""),
@@ -763,7 +1009,7 @@ def _build_scoring_prompt(
         style_mood=style_mood,
         color_palette=color_palette,
         product_name=product.get("title", "Unknown"),
-        product_description=product.get("text", product.get("title", "")),
+        product_description=product_description,
         product_price=_extract_price_text(product),
         product_url=product.get("url", ""),
         w_category=weights["category"],
@@ -1285,7 +1531,9 @@ async def generate_shopping_list(
     if not exa_key:
         raise ApplicationError("EXA_API_KEY not set", non_retryable=True)
 
-    client = anthropic.AsyncAnthropic(api_key=anthropic_key)
+    from app.utils.tracing import wrap_anthropic
+
+    client = wrap_anthropic(anthropic.AsyncAnthropic(api_key=anthropic_key))
 
     # Resolve R2 storage keys to presigned URLs (pass through existing URLs)
     from app.utils.r2 import resolve_url, resolve_urls

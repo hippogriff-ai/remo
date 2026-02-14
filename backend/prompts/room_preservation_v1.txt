@@ -1,0 +1,1 @@
+Preserve the room's walls, windows, doors, and ceiling. Do not change the camera angle or perspective. Keep existing architectural features intact.
