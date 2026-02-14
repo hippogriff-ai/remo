@@ -23,6 +23,7 @@ from app.models.contracts import (
     GenerateDesignsInput,
     GenerateDesignsOutput,
     InspirationNote,
+    RoomDimensions,
 )
 from app.utils.gemini_chat import (
     GEMINI_MODEL,
@@ -51,9 +52,49 @@ def _load_prompt(name: str) -> str:
         ) from exc
 
 
+def _format_room_context(dims: RoomDimensions | None) -> str:
+    """Format room dimensions into a human-readable context block for the prompt.
+
+    Returns empty string when no dimensions are available so the prompt
+    template's {room_context} placeholder collapses cleanly.
+    """
+    if dims is None:
+        return ""
+
+    parts = [
+        f"\nRoom dimensions: {dims.width_m:.1f}m × {dims.length_m:.1f}m, "
+        f"ceiling height {dims.height_m:.1f}m"
+    ]
+    if dims.floor_area_sqm is not None:
+        parts.append(f"Floor area: {dims.floor_area_sqm:.1f} m²")
+    if dims.openings:
+        opening_types = [
+            str(o.get("type", "opening")) for o in dims.openings if isinstance(o, dict)
+        ]
+        if opening_types:
+            parts.append(f"Openings: {', '.join(opening_types)}")
+    if dims.furniture:
+        furniture_types = [
+            str(f.get("type", "item")) for f in dims.furniture if isinstance(f, dict)
+        ]
+        if furniture_types:
+            parts.append(f"Existing furniture detected: {', '.join(furniture_types)}")
+    if dims.surfaces:
+        surface_descs = [
+            f"{s.get('type', 'surface')}: {s.get('material', 'unknown')}"
+            for s in dims.surfaces
+            if isinstance(s, dict)
+        ]
+        if surface_descs:
+            parts.append(f"Surfaces: {', '.join(surface_descs)}")
+
+    return "\n".join(parts)
+
+
 def _build_generation_prompt(
     brief: DesignBrief | None,
     inspiration_notes: list[InspirationNote],
+    room_dimensions: RoomDimensions | None = None,
 ) -> str:
     """Build the generation prompt from templates and brief data."""
     template = _load_prompt("generation.txt")
@@ -67,6 +108,8 @@ def _build_generation_prompt(
         parts.append(f"Room type: {brief.room_type}")
         if brief.occupants:
             parts.append(f"Occupants: {brief.occupants}")
+        if brief.lifestyle:
+            parts.append(f"Lifestyle: {brief.lifestyle}")
         if brief.style_profile:
             sp = brief.style_profile
             if sp.mood:
@@ -83,6 +126,14 @@ def _build_generation_prompt(
             parts.append(f"Pain points to address: {', '.join(brief.pain_points)}")
         if brief.constraints:
             parts.append(f"Constraints: {', '.join(brief.constraints)}")
+        if brief.emotional_drivers:
+            parts.append(f"Emotional drivers: {', '.join(brief.emotional_drivers)}")
+        if brief.usage_patterns:
+            parts.append(f"Usage patterns: {brief.usage_patterns}")
+        if brief.renovation_willingness:
+            parts.append(f"Renovation scope: {brief.renovation_willingness}")
+        if brief.room_analysis_hypothesis:
+            parts.append(f"Room analysis: {brief.room_analysis_hypothesis}")
         brief_text = "\n".join(parts)
 
         if brief.keep_items:
@@ -92,10 +143,13 @@ def _build_generation_prompt(
         notes = [f"  - Photo {n.photo_index}: {n.note}" for n in inspiration_notes]
         brief_text += "\n\nInspiration notes:\n" + "\n".join(notes)
 
+    room_context = _format_room_context(room_dimensions)
+
     # Escape curly braces in user-provided text to prevent str.format() KeyError
     return template.format(
         brief=brief_text.replace("{", "{{").replace("}", "}}"),
         keep_items=keep_items_text.replace("{", "{{").replace("}", "}}"),
+        room_context=room_context.replace("{", "{{").replace("}", "}}"),
         room_preservation=preservation,
     )
 
@@ -264,7 +318,9 @@ async def generate_designs(input: GenerateDesignsInput) -> GenerateDesignsOutput
             )
 
         # Build prompt
-        prompt = _build_generation_prompt(input.design_brief, input.inspiration_notes)
+        prompt = _build_generation_prompt(
+            input.design_brief, input.inspiration_notes, input.room_dimensions
+        )
 
         # Generate 2 options in parallel
         # Pass original R2 keys (stable, not presigned) for cache key identity

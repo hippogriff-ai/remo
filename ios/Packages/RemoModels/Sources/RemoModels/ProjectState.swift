@@ -77,6 +77,8 @@ public final class ProjectState {
             ], unmatched: [
                 UnmatchedItem(category: "Rug", searchKeywords: "modern geometric rug 5x7", googleShoppingUrl: "https://www.google.com/search?tbm=shop&q=modern+geometric+rug+5x7"),
             ], totalEstimatedCostCents: 33998)
+        case .abandoned, .cancelled:
+            break
         }
         return state
     }

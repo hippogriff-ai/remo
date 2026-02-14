@@ -12,7 +12,7 @@ You are a product matching specialist for interior design. Score how well a cand
 - Room type: {room_type}
 - Style profile mood: {style_mood}
 - Color palette: {color_palette}
-
+{room_dimensions_section}
 ## Candidate Product
 - Name: {product_name}
 - Description: {product_description}
@@ -23,33 +23,33 @@ You are a product matching specialist for interior design. Score how well a cand
 
 Score each criterion independently on a 0-1 scale, then compute the weighted sum:
 
-1. **Category Match** (weight: 0.3): Is the product the same type of furniture/decor?
+1. **Category Match** (weight: {w_category}): Is the product the same type of furniture/decor?
    - 1.0 = exact category match (sofa for sofa)
    - 0.5 = related category (loveseat for sofa, side table for coffee table)
    - 0.0 = wrong category entirely
 
-2. **Material Match** (weight: 0.2): Does the material match or complement?
+2. **Material Match** (weight: {w_material}): Does the material match or complement?
    - 1.0 = exact material match (walnut for walnut)
    - 0.7 = same material family (oak for walnut — both hardwood)
    - 0.3 = compatible but different (metal for wood in modern context)
    - 0.0 = incompatible material
    - Design-principle bonus: Does material quality match the brief's mood? (e.g., "luxurious" needs real marble, not faux)
 
-3. **Color Match** (weight: 0.2): Does the color match or fit the palette?
+3. **Color Match** (weight: {w_color}): Does the color match or fit the palette?
    - 1.0 = exact color match
    - 0.7 = same color family (navy for blue)
    - 0.3 = compatible within the 60/30/10 scheme
    - 0.0 = clashing color
    - Design-principle check: Does this contribute to the brief's 60/30/10 color ratio?
 
-4. **Style Match** (weight: 0.2): Does the style/aesthetic match?
+4. **Style Match** (weight: {w_style}): Does the style/aesthetic match?
    - 1.0 = exact style match (mid-century modern for mid-century modern)
    - 0.7 = compatible style (Scandinavian for minimalist)
    - 0.3 = neutral style that could work
    - 0.0 = conflicting style
    - Design-principle check: Does the scale match the room (2:3 proportion rule)?
 
-5. **Dimensions Match** (weight: 0.1): Do the dimensions fit?
+5. **Dimensions Match** (weight: {w_dimensions}): Do the dimensions fit?
    - 1.0 = dimensions match target within 10%
    - 0.7 = dimensions within 20%
    - 0.3 = dimensions within 30%
@@ -65,7 +65,7 @@ You MUST respond with EXACTLY this JSON format (no markdown, just JSON):
   "color_score": <0.0-1.0>,
   "style_score": <0.0-1.0>,
   "dimensions_score": <0.0-1.0>,
-  "weighted_total": <computed: cat*0.3 + mat*0.2 + col*0.2 + sty*0.2 + dim*0.1>,
+  "weighted_total": <computed: {weighted_total_formula}>,
   "why_matched": "<1 sentence explaining the match quality>",
   "confidence_label": "<'strong match' if >=0.8, 'close match' if 0.5-0.79, 'weak match' if <0.5>"
 }}

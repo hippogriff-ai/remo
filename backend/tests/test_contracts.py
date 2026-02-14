@@ -11,6 +11,9 @@ import pytest
 from pydantic import ValidationError
 
 from app.activities.mock_stubs import (
+    analyze_room_photos as mock_analyze_room_photos,
+)
+from app.activities.mock_stubs import (
     edit_design as mock_edit_design,
 )
 from app.activities.mock_stubs import (
@@ -23,8 +26,11 @@ from app.activities.mock_stubs import (
     load_style_skill as mock_load_style_skill,
 )
 from app.models.contracts import (
+    AnalyzeRoomPhotosInput,
+    AnalyzeRoomPhotosOutput,
     AnnotationEditRequest,
     AnnotationRegion,
+    BehavioralSignal,
     ChatMessage,
     CostBreakdown,
     CreateProjectRequest,
@@ -34,6 +40,7 @@ from app.models.contracts import (
     EditDesignOutput,
     ErrorResponse,
     FeasibilityNote,
+    FurnitureObservation,
     GenerateDesignsInput,
     GenerateDesignsOutput,
     GenerateShoppingListInput,
@@ -41,6 +48,7 @@ from app.models.contracts import (
     InspirationNote,
     IntakeChatInput,
     IntakeChatOutput,
+    LightingAssessment,
     LoadSkillInput,
     LoadSkillOutput,
     PhotoData,
@@ -50,6 +58,8 @@ from app.models.contracts import (
     QuickReplyOption,
     RenovationIntent,
     RevisionRecord,
+    RoomAnalysis,
+    RoomContext,
     RoomDimensions,
     ScanData,
     SelectOptionRequest,
@@ -865,6 +875,27 @@ class TestActivityInputRoundTrip:
         assert restored.revision_history[0].instructions == ["Replace the lamp", "Add plants"]
         assert restored.revision_history[1].type == "feedback"
         assert restored.room_dimensions.height_m == 2.5
+
+    def test_shopping_input_with_room_context_round_trip(self):
+        """GenerateShoppingListInput with room_context survives JSON round-trip."""
+        inp = GenerateShoppingListInput(
+            design_image_url="https://r2.example.com/final.png",
+            original_room_photo_urls=["photos/room_0.jpg"],
+            room_dimensions=RoomDimensions(width_m=4.0, length_m=5.0, height_m=2.4),
+            room_context=RoomContext(
+                photo_analysis=RoomAnalysis(
+                    room_type="living room",
+                    hypothesis="Spacious room with good natural light",
+                ),
+                room_dimensions=RoomDimensions(width_m=4.0, length_m=5.0, height_m=2.4),
+                enrichment_sources=["photos", "lidar"],
+            ),
+        )
+        restored = GenerateShoppingListInput.model_validate_json(inp.model_dump_json())
+        assert restored.room_context is not None
+        assert restored.room_context.enrichment_sources == ["photos", "lidar"]
+        assert restored.room_context.photo_analysis.room_type == "living room"
+        assert restored.room_context.room_dimensions.width_m == 4.0
 
     def test_intake_chat_input_round_trip(self):
         """IntakeChatInput with conversation history survives JSON round-trip."""
@@ -1716,6 +1747,15 @@ class TestAllModelsImportable:
             "RevisionRecord",
             "PhotoData",
             "ScanData",
+            # Room Analysis (Designer Brain)
+            "LightingAssessment",
+            "FurnitureObservation",
+            "BehavioralSignal",
+            "RoomAnalysis",
+            "RoomContext",
+            "AnalyzeRoomPhotosInput",
+            "AnalyzeRoomPhotosOutput",
+            # Activity I/O
             "GenerateDesignsInput",
             "GenerateDesignsOutput",
             "EditDesignInput",
@@ -1743,3 +1783,366 @@ class TestAllModelsImportable:
         ]
         for name in expected:
             assert hasattr(c, name), f"Missing model: {name}"
+
+
+# === Designer Brain Contract Tests ===
+
+
+class TestLightingAssessment:
+    """LightingAssessment is fully optional — all fields default to None/empty."""
+
+    def test_empty_valid(self):
+        """All fields are optional; empty construction succeeds."""
+        la = LightingAssessment()
+        assert la.natural_light_direction is None
+        assert la.lighting_gaps == []
+
+    def test_full_valid(self):
+        """All fields populated."""
+        la = LightingAssessment(
+            natural_light_direction="south-facing windows",
+            natural_light_intensity="abundant",
+            window_coverage="full wall",
+            existing_artificial="layered",
+            lighting_gaps=["dark reading corner"],
+        )
+        assert la.natural_light_intensity == "abundant"
+        assert len(la.lighting_gaps) == 1
+
+    def test_round_trip(self):
+        """JSON serialize → deserialize preserves all fields."""
+        la = LightingAssessment(
+            natural_light_direction="north",
+            lighting_gaps=["no task lighting", "dim hallway"],
+        )
+        restored = LightingAssessment.model_validate_json(la.model_dump_json())
+        assert restored == la
+
+
+class TestFurnitureObservation:
+    """FurnitureObservation requires item, rest optional."""
+
+    def test_minimal_valid(self):
+        """Only item is required."""
+        fo = FurnitureObservation(item="gray sofa")
+        assert fo.condition is None
+        assert fo.keep_candidate is False
+
+    def test_full_valid(self):
+        """All fields populated."""
+        fo = FurnitureObservation(
+            item="L-shaped sectional",
+            condition="worn",
+            placement_note="faces wall instead of window",
+            keep_candidate=True,
+        )
+        assert fo.keep_candidate is True
+
+    def test_missing_item_fails(self):
+        """Item is required."""
+        with pytest.raises(ValidationError):
+            FurnitureObservation()
+
+    def test_round_trip(self):
+        """JSON serialize → deserialize preserves all fields."""
+        fo = FurnitureObservation(item="chair", condition="good", keep_candidate=True)
+        restored = FurnitureObservation.model_validate_json(fo.model_dump_json())
+        assert restored == fo
+
+
+class TestBehavioralSignal:
+    """BehavioralSignal requires observation and inference."""
+
+    def test_minimal_valid(self):
+        """Observation + inference are required, design_implication optional."""
+        bs = BehavioralSignal(observation="toys on floor", inference="young children")
+        assert bs.design_implication is None
+
+    def test_full_valid(self):
+        """All fields populated."""
+        bs = BehavioralSignal(
+            observation="books stacked near armchair",
+            inference="active reader lacking storage",
+            design_implication="add reading nook with task lighting",
+        )
+        assert bs.design_implication is not None
+
+    def test_missing_inference_fails(self):
+        """Inference is required."""
+        with pytest.raises(ValidationError):
+            BehavioralSignal(observation="toys on floor")
+
+    def test_round_trip(self):
+        """JSON serialize → deserialize preserves all fields."""
+        bs = BehavioralSignal(
+            observation="pet bed", inference="dog owner", design_implication="durable fabrics"
+        )
+        restored = BehavioralSignal.model_validate_json(bs.model_dump_json())
+        assert restored == bs
+
+
+class TestRoomAnalysis:
+    """RoomAnalysis — the core photo analysis model."""
+
+    def test_empty_valid(self):
+        """All fields have defaults; empty construction succeeds."""
+        ra = RoomAnalysis()
+        assert ra.room_type is None
+        assert ra.room_type_confidence == 0.5
+        assert ra.furniture == []
+        assert ra.photo_count == 0
+
+    def test_full_valid(self):
+        """Full construction with all nested models."""
+        ra = RoomAnalysis(
+            room_type="living room",
+            room_type_confidence=0.9,
+            estimated_dimensions="12x15 feet",
+            layout_pattern="open plan",
+            lighting=LightingAssessment(natural_light_intensity="abundant"),
+            furniture=[FurnitureObservation(item="sofa", keep_candidate=True)],
+            architectural_features=["crown molding"],
+            flooring="hardwood",
+            existing_palette=["gray", "oak"],
+            overall_warmth="warm",
+            style_signals=["mid-century"],
+            behavioral_signals=[BehavioralSignal(observation="books", inference="reader")],
+            tensions=["modern furniture vs traditional architecture"],
+            hypothesis="Warm family room with good bones",
+            strengths=["natural light"],
+            opportunities=["better furniture layout"],
+            uncertain_aspects=["ceiling height"],
+            photo_count=3,
+        )
+        assert ra.room_type_confidence == 0.9
+        assert len(ra.furniture) == 1
+        assert ra.furniture[0].keep_candidate is True
+
+    def test_confidence_bounds(self):
+        """room_type_confidence must be 0-1."""
+        with pytest.raises(ValidationError):
+            RoomAnalysis(room_type_confidence=1.5)
+        with pytest.raises(ValidationError):
+            RoomAnalysis(room_type_confidence=-0.1)
+
+    def test_confidence_edges(self):
+        """Boundary values 0 and 1 are valid."""
+        assert RoomAnalysis(room_type_confidence=0.0).room_type_confidence == 0.0
+        assert RoomAnalysis(room_type_confidence=1.0).room_type_confidence == 1.0
+
+    def test_round_trip(self):
+        """Full round-trip serialization with nested objects."""
+        ra = RoomAnalysis(
+            room_type="bedroom",
+            lighting=LightingAssessment(natural_light_direction="east"),
+            furniture=[FurnitureObservation(item="bed", condition="good")],
+            behavioral_signals=[
+                BehavioralSignal(observation="alarm clock", inference="early riser")
+            ],
+            hypothesis="Cozy bedroom",
+            photo_count=2,
+        )
+        restored = RoomAnalysis.model_validate_json(ra.model_dump_json())
+        assert restored == ra
+        assert restored.furniture[0].item == "bed"
+        assert restored.behavioral_signals[0].inference == "early riser"
+
+
+class TestRoomContext:
+    """RoomContext — progressive enrichment container."""
+
+    def test_empty_valid(self):
+        """All fields are optional; empty construction succeeds."""
+        rc = RoomContext()
+        assert rc.photo_analysis is None
+        assert rc.room_dimensions is None
+        assert rc.enrichment_sources == []
+
+    def test_photo_only(self):
+        """Photo analysis without LiDAR."""
+        rc = RoomContext(
+            photo_analysis=RoomAnalysis(room_type="kitchen"),
+            enrichment_sources=["photos"],
+        )
+        assert rc.room_dimensions is None
+        assert "photos" in rc.enrichment_sources
+
+    def test_full_enrichment(self):
+        """Both photo analysis and LiDAR dimensions."""
+        rc = RoomContext(
+            photo_analysis=RoomAnalysis(room_type="office"),
+            room_dimensions=RoomDimensions(width_m=4.0, length_m=5.0, height_m=2.7),
+            enrichment_sources=["photos", "lidar"],
+        )
+        assert rc.room_dimensions.width_m == 4.0
+        assert len(rc.enrichment_sources) == 2
+
+    def test_round_trip(self):
+        """JSON round-trip with nested models."""
+        rc = RoomContext(
+            photo_analysis=RoomAnalysis(hypothesis="test"),
+            room_dimensions=RoomDimensions(width_m=3.0, length_m=4.0, height_m=2.5),
+            enrichment_sources=["photos", "lidar"],
+        )
+        restored = RoomContext.model_validate_json(rc.model_dump_json())
+        assert restored == rc
+
+
+class TestAnalyzeRoomPhotosIO:
+    """Activity I/O contracts for room photo analysis."""
+
+    def test_input_minimal(self):
+        """Only room_photo_urls is required."""
+        inp = AnalyzeRoomPhotosInput(room_photo_urls=["https://r2.example.com/photo1.jpg"])
+        assert inp.inspiration_photo_urls == []
+        assert inp.inspiration_notes == []
+
+    def test_input_full(self):
+        """All fields populated."""
+        inp = AnalyzeRoomPhotosInput(
+            room_photo_urls=["https://r2.example.com/p1.jpg", "https://r2.example.com/p2.jpg"],
+            inspiration_photo_urls=["https://r2.example.com/inspo.jpg"],
+            inspiration_notes=[InspirationNote(photo_index=0, note="love the shelving")],
+        )
+        assert len(inp.room_photo_urls) == 2
+        assert len(inp.inspiration_notes) == 1
+
+    def test_output_valid(self):
+        """Output wraps a RoomAnalysis."""
+        out = AnalyzeRoomPhotosOutput(analysis=RoomAnalysis(room_type="living room", photo_count=2))
+        assert out.analysis.room_type == "living room"
+
+    def test_round_trip(self):
+        """I/O round-trip."""
+        inp = AnalyzeRoomPhotosInput(
+            room_photo_urls=["url1"],
+            inspiration_notes=[InspirationNote(photo_index=0, note="warm tones")],
+        )
+        restored = AnalyzeRoomPhotosInput.model_validate_json(inp.model_dump_json())
+        assert restored == inp
+
+
+class TestDesignBriefEnhancement:
+    """Additive Designer Brain fields on DesignBrief."""
+
+    def test_backward_compat(self):
+        """Old JSON without new fields deserializes correctly."""
+        old_json = '{"room_type": "living room"}'
+        brief = DesignBrief.model_validate_json(old_json)
+        assert brief.emotional_drivers == []
+        assert brief.usage_patterns is None
+        assert brief.renovation_willingness is None
+        assert brief.room_analysis_hypothesis is None
+
+    def test_new_fields_populate(self):
+        """New fields can be set."""
+        brief = DesignBrief(
+            room_type="office",
+            emotional_drivers=["started WFH", "room feels oppressive"],
+            usage_patterns="couple WFH Mon-Fri, host dinners monthly",
+            renovation_willingness="repaint yes, replace flooring no",
+            room_analysis_hypothesis="Cramped WFH setup in spare bedroom",
+        )
+        assert len(brief.emotional_drivers) == 2
+        assert "WFH" in brief.usage_patterns
+
+    def test_round_trip_with_new_fields(self):
+        """Round-trip preserves all fields including new ones."""
+        brief = DesignBrief(
+            room_type="bedroom",
+            emotional_drivers=["new baby"],
+            usage_patterns="nursery + guest room",
+        )
+        restored = DesignBrief.model_validate_json(brief.model_dump_json())
+        assert restored == brief
+        assert restored.emotional_drivers == ["new baby"]
+
+
+class TestWorkflowStateEnhancement:
+    """Additive Designer Brain fields on WorkflowState."""
+
+    def test_backward_compat(self):
+        """Old JSON without room_analysis/room_context deserializes."""
+        old_json = '{"step": "photos"}'
+        state = WorkflowState.model_validate_json(old_json)
+        assert state.room_analysis is None
+        assert state.room_context is None
+
+    def test_with_room_analysis(self):
+        """WorkflowState carries room analysis."""
+        state = WorkflowState(
+            step="intake",
+            room_analysis=RoomAnalysis(
+                room_type="living room",
+                hypothesis="Bright open plan with mixed warmth",
+            ),
+        )
+        assert state.room_analysis.room_type == "living room"
+
+    def test_with_room_context(self):
+        """WorkflowState carries full room context."""
+        state = WorkflowState(
+            step="intake",
+            room_context=RoomContext(
+                photo_analysis=RoomAnalysis(room_type="kitchen"),
+                room_dimensions=RoomDimensions(width_m=3.0, length_m=4.0, height_m=2.5),
+                enrichment_sources=["photos", "lidar"],
+            ),
+        )
+        assert state.room_context.enrichment_sources == ["photos", "lidar"]
+
+    def test_round_trip(self):
+        """Full round-trip with nested room analysis."""
+        state = WorkflowState(
+            step="scan",
+            room_analysis=RoomAnalysis(
+                room_type="office",
+                furniture=[FurnitureObservation(item="desk")],
+            ),
+            room_context=RoomContext(enrichment_sources=["photos"]),
+        )
+        restored = WorkflowState.model_validate_json(state.model_dump_json())
+        assert restored == state
+        assert restored.room_analysis.furniture[0].item == "desk"
+
+
+class TestMockAnalyzeRoomPhotos:
+    """Mock stub returns valid AnalyzeRoomPhotosOutput."""
+
+    @pytest.mark.asyncio
+    async def test_returns_valid_output(self):
+        """Mock returns well-formed RoomAnalysis."""
+        inp = AnalyzeRoomPhotosInput(
+            room_photo_urls=["https://r2.example.com/p1.jpg", "https://r2.example.com/p2.jpg"]
+        )
+        out = await mock_analyze_room_photos(inp)
+        assert isinstance(out, AnalyzeRoomPhotosOutput)
+        assert out.analysis.room_type == "living room"
+        assert out.analysis.room_type_confidence == 0.85
+        assert out.analysis.photo_count == 2
+
+    @pytest.mark.asyncio
+    async def test_photo_count_matches_input(self):
+        """Mock photo_count reflects actual input length."""
+        inp = AnalyzeRoomPhotosInput(room_photo_urls=["url1", "url2", "url3"])
+        out = await mock_analyze_room_photos(inp)
+        assert out.analysis.photo_count == 3
+
+    @pytest.mark.asyncio
+    async def test_nested_models_valid(self):
+        """All nested models in mock output are well-formed."""
+        inp = AnalyzeRoomPhotosInput(room_photo_urls=["url1"])
+        out = await mock_analyze_room_photos(inp)
+        assert out.analysis.lighting is not None
+        assert out.analysis.lighting.natural_light_intensity == "abundant"
+        assert len(out.analysis.furniture) == 2
+        assert out.analysis.furniture[0].keep_candidate is True
+        assert len(out.analysis.behavioral_signals) == 1
+
+    @pytest.mark.asyncio
+    async def test_round_trip_serialization(self):
+        """Mock output survives JSON round-trip (Temporal serialization)."""
+        inp = AnalyzeRoomPhotosInput(room_photo_urls=["url1", "url2"])
+        out = await mock_analyze_room_photos(inp)
+        restored = AnalyzeRoomPhotosOutput.model_validate_json(out.model_dump_json())
+        assert restored == out

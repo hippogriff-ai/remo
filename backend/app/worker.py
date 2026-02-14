@@ -28,6 +28,7 @@ def _load_activities() -> list:
     """Load mock or real activity implementations based on config."""
     if settings.use_mock_activities:
         from app.activities.mock_stubs import (
+            analyze_room_photos,
             edit_design,
             generate_designs,
             generate_shopping_list,
@@ -43,14 +44,16 @@ def _load_activities() -> list:
                 f"Failed to import real activity modules (USE_MOCK_ACTIVITIES=false): {exc}. "
                 "Set USE_MOCK_ACTIVITIES=true for mock stubs."
             ) from exc
-        # Real load_style_skill not yet implemented (T3-owned).
-        # Use mock stub so the activity is registered for workflow calls.
+        from app.activities.analyze_room import analyze_room_photos
+
+        # Real load_style_skill not yet implemented — use mock stub.
         from app.activities.mock_stubs import load_style_skill
 
     return [
         generate_designs,
         edit_design,
         generate_shopping_list,
+        analyze_room_photos,
         load_style_skill,
         purge_project_data,
     ]

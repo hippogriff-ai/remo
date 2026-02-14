@@ -1,6 +1,8 @@
 appId: com.hippogriff.remo
 ---
-# IterationScreen → approve to jump to completed state
+# IterationScreen → approve (with confirmation dialog) to jump to completed state
 - tapOn:
     id: "iteration_approve"
+# Confirm the approval dialog
+- tapOn: "Approve"
 - takeScreenshot: 06-approve-design

@@ -32,9 +32,18 @@ public struct PhotoUploadScreen: View {
                         .foregroundStyle(.tint)
                     Text("Upload Room Photos")
                         .font(.title2.bold())
-                    Text("Take at least 2 photos of your room.\nOptionally add up to 3 inspiration photos.")
+                    Text("Take 2 photos from opposite corners of the room\nso we can see the full space.")
                         .font(.subheadline)
                         .foregroundStyle(.secondary)
+                        .multilineTextAlignment(.center)
+
+                    CameraDiagram()
+                        .frame(width: 160, height: 120)
+                        .padding(.vertical, 4)
+
+                    Text("Optionally add up to 3 inspiration photos.")
+                        .font(.caption)
+                        .foregroundStyle(.tertiary)
                         .multilineTextAlignment(.center)
                 }
                 .padding(.top)
@@ -49,6 +58,38 @@ public struct PhotoUploadScreen: View {
                         }
                     }
                     .padding(.horizontal)
+
+                    // Inspiration photo notes
+                    let inspirationPhotos = projectState.photos.filter { $0.photoType == "inspiration" }
+                    if !inspirationPhotos.isEmpty {
+                        VStack(alignment: .leading, spacing: 8) {
+                            Text("Inspiration Notes")
+                                .font(.caption.bold())
+                                .foregroundStyle(.secondary)
+                            ForEach(inspirationPhotos) { photo in
+                                if let index = projectState.photos.firstIndex(where: { $0.photoId == photo.photoId }) {
+                                    HStack(spacing: 8) {
+                                        Image(systemName: "sparkles")
+                                            .font(.caption)
+                                            .foregroundStyle(.purple)
+                                        TextField(
+                                            "What do you like about this?",
+                                            text: Binding(
+                                                get: { projectState.photos[index].note ?? "" },
+                                                set: { projectState.photos[index].note = $0.isEmpty ? nil : String($0.prefix(200)) }
+                                            )
+                                        )
+                                        .textFieldStyle(.roundedBorder)
+                                        .font(.caption)
+                                        .onSubmit {
+                                            Task { await persistNote(photoId: photo.photoId, note: projectState.photos[index].note) }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        .padding(.horizontal)
+                    }
                 }
 
                 // Status
@@ -132,6 +173,9 @@ public struct PhotoUploadScreen: View {
         .onChange(of: selectedInspirationItems) { _, items in
             Task { await uploadSelectedPhotos(items, type: "inspiration") }
         }
+        .onDisappear {
+            Task { await persistAllNotes() }
+        }
         #if os(iOS)
         .sheet(isPresented: $showCamera) {
             CameraView(
@@ -180,10 +224,14 @@ public struct PhotoUploadScreen: View {
             if !response.validation.passed {
                 validationMessages = response.validation.messages
             } else {
-                validationMessages = []
                 // Refresh state to pick up new photos and possible step transition
                 let newState = try await client.getState(projectId: projectId)
                 projectState.apply(newState)
+                if let workflowError = newState.error {
+                    validationMessages = [workflowError.message]
+                } else {
+                    validationMessages = []
+                }
             }
         } catch {
             validationMessages = [error.localizedDescription]
@@ -216,6 +264,22 @@ public struct PhotoUploadScreen: View {
                 }
                 validationMessages = ["Failed to delete photo: \(error.localizedDescription)"]
             }
+        }
+    }
+
+    private func persistNote(photoId: String, note: String?) async {
+        guard let projectId = projectState.projectId else { return }
+        do {
+            try await client.updatePhotoNote(projectId: projectId, photoId: photoId, note: note)
+        } catch {
+            // Non-critical: note will be retried on next submit or onDisappear
+        }
+    }
+
+    private func persistAllNotes() async {
+        guard let projectId = projectState.projectId else { return }
+        for photo in projectState.photos where photo.photoType == "inspiration" {
+            try? await client.updatePhotoNote(projectId: projectId, photoId: photo.photoId, note: photo.note)
         }
     }
 }
@@ -255,6 +319,56 @@ struct PhotoThumbnail: View {
             }
             .accessibilityElement(children: .combine)
             .accessibilityLabel("\(photo.photoType.capitalized) photo")
+    }
+}
+
+// MARK: - Camera Diagram
+
+/// Top-down room diagram showing two camera positions in opposite corners with field-of-view cones.
+struct CameraDiagram: View {
+    var body: some View {
+        Canvas { context, size in
+            let w = size.width
+            let h = size.height
+            let inset: CGFloat = 8
+
+            // Room rectangle
+            let roomRect = CGRect(x: inset, y: inset, width: w - inset * 2, height: h - inset * 2)
+            context.stroke(Path(roomRect), with: .color(.secondary), lineWidth: 2)
+
+            // Camera 1 — bottom-left corner, facing top-right
+            drawCamera(context: &context, position: CGPoint(x: roomRect.minX + 12, y: roomRect.maxY - 12),
+                       angle: -.pi / 4, size: size)
+
+            // Camera 2 — top-right corner, facing bottom-left
+            drawCamera(context: &context, position: CGPoint(x: roomRect.maxX - 12, y: roomRect.minY + 12),
+                       angle: .pi * 3 / 4, size: size)
+        }
+        .accessibilityLabel("Diagram showing two camera positions in opposite corners of a room")
+    }
+
+    private func drawCamera(context: inout GraphicsContext, position: CGPoint, angle: CGFloat, size: CGSize) {
+        let fovAngle: CGFloat = .pi / 3
+        let coneLength: CGFloat = min(size.width, size.height) * 0.5
+
+        // Field-of-view cone
+        var conePath = Path()
+        conePath.move(to: position)
+        conePath.addLine(to: CGPoint(
+            x: position.x + coneLength * cos(angle - fovAngle / 2),
+            y: position.y + coneLength * sin(angle - fovAngle / 2)
+        ))
+        conePath.addLine(to: CGPoint(
+            x: position.x + coneLength * cos(angle + fovAngle / 2),
+            y: position.y + coneLength * sin(angle + fovAngle / 2)
+        ))
+        conePath.closeSubpath()
+        context.fill(conePath, with: .color(.accentColor.opacity(0.15)))
+        context.stroke(conePath, with: .color(.accentColor.opacity(0.4)), lineWidth: 1)
+
+        // Camera icon (small filled circle)
+        let camRect = CGRect(x: position.x - 5, y: position.y - 5, width: 10, height: 10)
+        context.fill(Path(ellipseIn: camRect), with: .color(.accentColor))
     }
 }
 

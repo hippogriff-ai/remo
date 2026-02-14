@@ -34,6 +34,14 @@ struct ProjectRouter: View {
             ShoppingGeneratingScreen(projectState: projectState, client: client)
         case .completed:
             OutputScreen(projectState: projectState, client: client)
+        case .abandoned, .cancelled:
+            ContentUnavailableView(
+                step == .abandoned ? "Project Expired" : "Project Cancelled",
+                systemImage: step == .abandoned ? "clock.badge.xmark" : "xmark.circle",
+                description: Text(step == .abandoned
+                    ? "This project was automatically deleted after 48 hours of inactivity."
+                    : "This project has been cancelled.")
+            )
         }
     }
 }

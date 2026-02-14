@@ -14,6 +14,12 @@ Expected input schema (from T1 iOS):
     { "type": "door", "wall_id": "wall_0", "width": 0.9, "height": 2.1,
       "position": { "x": 1.5 } }
   ],
+  "furniture": [
+    { "type": "sofa", "width": 2.1, "depth": 0.9, "height": 0.8 }
+  ],
+  "surfaces": [
+    { "type": "floor", "material": "hardwood" }
+  ],
   "floor_area_sqm": 24.36
 }
 """
@@ -63,6 +69,27 @@ def parse_room_dimensions(raw: dict) -> RoomDimensions:
     if not isinstance(openings, list):
         openings = []
 
+    furniture = raw.get("furniture", [])
+    if not isinstance(furniture, list):
+        furniture = []
+
+    surfaces = raw.get("surfaces", [])
+    if not isinstance(surfaces, list):
+        surfaces = []
+
+    # Prefer RoomPlan's floor_area_sqm if valid; fall back to width * length
+    raw_area = raw.get("floor_area_sqm")
+    floor_area_sqm: float | None = None
+    if raw_area is not None:
+        try:
+            area = float(raw_area)
+            if math.isfinite(area) and area > 0:
+                floor_area_sqm = area
+        except (TypeError, ValueError):
+            pass
+    if floor_area_sqm is None:
+        floor_area_sqm = width * length
+
     try:
         dimensions = RoomDimensions(
             width_m=width,
@@ -70,6 +97,9 @@ def parse_room_dimensions(raw: dict) -> RoomDimensions:
             height_m=height,
             walls=walls,
             openings=openings,
+            furniture=furniture,
+            surfaces=surfaces,
+            floor_area_sqm=floor_area_sqm,
         )
     except (ValueError, TypeError) as e:
         raise LidarParseError(f"Invalid scan structure: {e}") from e
@@ -81,5 +111,8 @@ def parse_room_dimensions(raw: dict) -> RoomDimensions:
         height_m=height,
         wall_count=len(walls),
         opening_count=len(openings),
+        furniture_count=len(furniture),
+        surface_count=len(surfaces),
+        floor_area_sqm=floor_area_sqm,
     )
     return dimensions

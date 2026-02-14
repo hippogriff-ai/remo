@@ -21,10 +21,10 @@ appId: com.hippogriff.remo
 - tapOn:
     id: "scan_skip"
 - tapOn: "Skip"
-# Skip intake (confirm destructive dialog)
+# Skip intake from mode selection (confirm destructive dialog)
 - assertVisible: "Design Chat"
 - tapOn:
-    id: "chat_skip"
+    id: "mode_skip"
 - tapOn: "Skip"
 - takeScreenshot: 08-intake-skip
 - assertVisible: "Choose a Design"

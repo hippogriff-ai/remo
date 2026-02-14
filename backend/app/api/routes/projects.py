@@ -16,6 +16,7 @@ from typing import Literal
 import structlog
 from fastapi import APIRouter, Request, UploadFile
 from fastapi.responses import JSONResponse
+from pydantic import BaseModel
 
 from app.activities.validation import validate_photo
 from app.config import settings
@@ -485,6 +486,55 @@ async def delete_photo(project_id: str, photo_id: str, request: Request):
     logger.info("photo_deleted", project_id=project_id, photo_id=photo_id)
 
 
+# --- Photo note ---
+
+
+class UpdatePhotoNoteRequest(BaseModel):
+    note: str | None = None
+
+
+@router.patch(
+    "/projects/{project_id}/photos/{photo_id}/note",
+    response_model=ActionResponse,
+    responses={
+        404: {"model": ErrorResponse},
+        409: {"model": ErrorResponse},
+        422: {"model": ErrorResponse},
+    },
+)
+async def update_photo_note(
+    project_id: str, photo_id: str, body: UpdatePhotoNoteRequest, request: Request
+):
+    """Update or clear the note on an inspiration photo."""
+    state = await _resolve_state(request, project_id)
+    if err := _check_step(state, ("photos", "scan", "intake"), "update photo note"):
+        return err
+    assert state is not None
+
+    photo = next((p for p in state.photos if p.photo_id == photo_id), None)
+    if photo is None:
+        return _error(404, "photo_not_found", f"Photo {photo_id} not found")
+    if photo.photo_type != "inspiration":
+        return _error(422, "note_not_allowed", "Notes are only allowed on inspiration photos")
+    if body.note is not None and len(body.note) > 200:
+        return _error(
+            422, "note_too_long", "Inspiration photo note must be 200 characters or fewer"
+        )
+
+    if settings.use_temporal:
+        from app.workflows.design_project import DesignProjectWorkflow
+
+        if err := await _signal_workflow(
+            request, project_id, DesignProjectWorkflow.update_photo_note, photo_id, body.note
+        ):
+            return err
+    else:
+        photo.note = body.note
+
+    logger.info("photo_note_updated", project_id=project_id, photo_id=photo_id)
+    return ActionResponse()
+
+
 # --- Scan ---
 
 
@@ -703,6 +753,10 @@ async def _real_intake_message(
     }
     if session.last_partial_brief is not None:
         project_context["previous_brief"] = session.last_partial_brief.model_dump()
+    if state.room_analysis is not None:
+        project_context["room_analysis"] = state.room_analysis.model_dump()
+    if state.room_context is not None:
+        project_context["room_context"] = state.room_context.model_dump()
 
     intake_input = IntakeChatInput(
         mode=session.mode,

@@ -8,6 +8,7 @@ public struct ApprovalScreen: View {
     let client: any WorkflowClientProtocol
 
     @State private var isApproving = false
+    @State private var showApprovalConfirmation = false
     @State private var errorMessage: String?
 
     public init(projectState: ProjectState, client: any WorkflowClientProtocol) {
@@ -36,7 +37,7 @@ public struct ApprovalScreen: View {
             Spacer()
 
             Button {
-                Task { await approve() }
+                showApprovalConfirmation = true
             } label: {
                 HStack(spacing: 8) {
                     if isApproving {
@@ -64,6 +65,14 @@ public struct ApprovalScreen: View {
             Button("OK") { errorMessage = nil }
         } message: {
             Text(errorMessage ?? "")
+        }
+        .confirmationDialog("Approve Design?", isPresented: $showApprovalConfirmation, titleVisibility: .visible) {
+            Button("Approve") {
+                Task { await approve() }
+            }
+            Button("Keep Editing", role: .cancel) {}
+        } message: {
+            Text("Happy with this design? Once approved, it's final.")
         }
     }
 

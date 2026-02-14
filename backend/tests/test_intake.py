@@ -24,6 +24,7 @@ from app.activities.intake import (
     MODE_INSTRUCTIONS,
     SKILL_NAMES,
     _format_brief_context,
+    _format_room_analysis_section,
     _get_inspiration_note,
     _run_intake_core,
     build_brief,
@@ -184,6 +185,110 @@ class TestBriefContextInjection:
         """Empty brief should return fallback message."""
         ctx = _format_brief_context({})
         assert ctx == "No information gathered yet."
+
+
+class TestRoomAnalysisInjection:
+    """PR-6: Room analysis injection into the intake system prompt."""
+
+    def test_no_analysis_fallback(self):
+        """Without analysis, prompt contains fallback instruction."""
+        section = _format_room_analysis_section(None)
+        assert "no pre-analysis" in section.lower()
+
+    def test_empty_analysis_fallback(self):
+        """Empty dict analysis returns fallback."""
+        section = _format_room_analysis_section({})
+        assert "no pre-analysis" in section.lower()
+
+    def test_analysis_with_hypothesis(self):
+        """Hypothesis appears in the analysis section."""
+        analysis = {
+            "room_type": "living room",
+            "room_type_confidence": 0.85,
+            "hypothesis": "Well-lit family space with mixed warmth",
+        }
+        section = _format_room_analysis_section(analysis)
+        assert "living room" in section
+        assert "85%" in section
+        assert "Well-lit family space" in section
+        assert "HYPOTHESIS CORRECTIONS" in section
+
+    def test_analysis_with_lighting(self):
+        """Lighting details appear in the section."""
+        analysis = {
+            "room_type": "bedroom",
+            "lighting": {
+                "natural_light_intensity": "limited",
+                "natural_light_direction": "north-facing",
+                "existing_artificial": "single overhead",
+                "lighting_gaps": ["dark reading corner"],
+            },
+        }
+        section = _format_room_analysis_section(analysis)
+        assert "limited" in section
+        assert "north-facing" in section
+        assert "dark reading corner" in section
+
+    def test_analysis_with_furniture(self):
+        """Furniture observations appear in the section."""
+        analysis = {
+            "room_type": "kitchen",
+            "furniture": [
+                {"item": "oak dining table", "condition": "good", "keep_candidate": True},
+                {"item": "metal stools", "condition": "worn"},
+            ],
+        }
+        section = _format_room_analysis_section(analysis)
+        assert "oak dining table" in section
+        assert "[keep]" in section
+        assert "metal stools" in section
+        assert "worn" in section
+
+    def test_analysis_with_behavioral_signals(self):
+        """Behavioral signals appear in the section."""
+        analysis = {
+            "room_type": "living room",
+            "behavioral_signals": [
+                {"observation": "toys on floor", "inference": "young children"},
+            ],
+        }
+        section = _format_room_analysis_section(analysis)
+        assert "toys on floor" in section
+        assert "young children" in section
+
+    def test_analysis_with_uncertain_aspects(self):
+        """Uncertain aspects are flagged for probing."""
+        analysis = {
+            "room_type": "bedroom",
+            "uncertain_aspects": ["ceiling height", "wall color accuracy"],
+        }
+        section = _format_room_analysis_section(analysis)
+        assert "Uncertain" in section
+        assert "ceiling height" in section
+
+    def test_analysis_instructions_present(self):
+        """Using This Analysis and HYPOTHESIS CORRECTIONS instructions present."""
+        analysis = {"room_type": "living room"}
+        section = _format_room_analysis_section(analysis)
+        assert "Do NOT re-ask" in section
+        assert "HYPOTHESIS CORRECTIONS" in section
+        assert "photos can be misleading" in section
+
+    def test_system_prompt_includes_analysis(self):
+        """load_system_prompt injects analysis section into prompt."""
+        analysis = {
+            "room_type": "bedroom",
+            "hypothesis": "Dark bedroom needing light layers",
+        }
+        prompt = load_system_prompt("quick", 1, room_analysis=analysis)
+        assert "Dark bedroom needing light layers" in prompt
+        assert "ROOM ANALYSIS" in prompt
+
+    def test_system_prompt_without_analysis(self):
+        """load_system_prompt works without analysis (backward compat)."""
+        prompt = load_system_prompt("quick", 1)
+        assert "ROOM ANALYSIS" in prompt
+        assert "no pre-analysis" in prompt.lower()
 
 
 # === Message Building Tests ===
@@ -492,6 +597,52 @@ class TestBuildBrief:
         assert isinstance(brief, DesignBrief)
         assert isinstance(brief.style_profile, StyleProfile)
 
+    def test_brief_with_new_designer_brain_fields(self):
+        """New Designer Brain fields are populated from tool data."""
+        data = {
+            "room_type": "living room",
+            "emotional_drivers": ["started WFH", "room feels oppressive"],
+            "usage_patterns": "couple WFH Mon-Fri, host dinners monthly",
+            "renovation_willingness": "repaint yes, fixtures maybe, tile no",
+            "room_analysis_hypothesis": "Bright room needing warmth and storage",
+        }
+        brief = build_brief(data)
+        assert brief.emotional_drivers == ["started WFH", "room feels oppressive"]
+        assert brief.usage_patterns == "couple WFH Mon-Fri, host dinners monthly"
+        assert brief.renovation_willingness == "repaint yes, fixtures maybe, tile no"
+        assert brief.room_analysis_hypothesis == "Bright room needing warmth and storage"
+
+    def test_brief_new_fields_default_when_missing(self):
+        """New Designer Brain fields have safe defaults when omitted."""
+        brief = build_brief({"room_type": "kitchen"})
+        assert brief.emotional_drivers == []
+        assert brief.usage_patterns is None
+        assert brief.renovation_willingness is None
+        assert brief.room_analysis_hypothesis is None
+
+    def test_brief_lifestyle_merged_and_preserved(self):
+        """Lifestyle is merged into occupants for iOS compat AND stored separately."""
+        data = {
+            "room_type": "living room",
+            "occupants": "couple, 30s",
+            "lifestyle": "Morning yoga, weekend hosting",
+        }
+        brief = build_brief(data)
+        # Merged for backward compat (iOS doesn't have lifestyle field yet)
+        assert brief.occupants == "couple, 30s — Morning yoga, weekend hosting"
+        # Also preserved as separate field for new consumers
+        assert brief.lifestyle == "Morning yoga, weekend hosting"
+
+    def test_brief_lifestyle_only_no_occupants(self):
+        """When occupants is absent, lifestyle becomes occupants."""
+        data = {
+            "room_type": "bedroom",
+            "lifestyle": "Remote worker, needs quiet space",
+        }
+        brief = build_brief(data)
+        assert brief.occupants == "Remote worker, needs quiet space"
+        assert brief.lifestyle == "Remote worker, needs quiet space"
+
 
 # === Options Building Tests ===
 
@@ -592,6 +743,24 @@ class TestToolDefinitions:
         ]["properties"]
         for key in ("lighting", "colors", "textures", "mood", "clutter_level"):
             assert "description" in sp_props[key], f"style_profile.{key} missing description"
+
+    def test_designer_brain_fields_in_brief_schema(self):
+        """PR-6: New Designer Brain fields in brief properties."""
+        tool = next(t for t in INTAKE_TOOLS if t["name"] == "draft_design_brief")
+        props = tool["input_schema"]["properties"]["design_brief"]["properties"]
+        assert "emotional_drivers" in props
+        assert "usage_patterns" in props
+        assert "renovation_willingness" in props
+        assert "room_analysis_hypothesis" in props
+
+    def test_designer_brain_fields_in_interview_partial_brief(self):
+        """PR-6: New fields also in interview_client partial_brief_update."""
+        tool = next(t for t in INTAKE_TOOLS if t["name"] == "interview_client")
+        props = tool["input_schema"]["properties"]["partial_brief_update"]["properties"]
+        assert "emotional_drivers" in props
+        assert "usage_patterns" in props
+        assert "renovation_willingness" in props
+        assert "room_analysis_hypothesis" in props
 
 
 # === Turn Counting Tests ===
@@ -1298,3 +1467,49 @@ class TestIntakeErrorHandling:
         with pytest.raises(ApplicationError) as exc_info:
             asyncio.run(_run_intake_core(self._make_input()))
         assert exc_info.value.non_retryable is False
+
+    @patch.dict("os.environ", {"ANTHROPIC_API_KEY": "test-key"})
+    @patch("app.activities.intake.anthropic.AsyncAnthropic")
+    def test_auth_error_is_non_retryable(self, mock_client_cls):
+        """401 Unauthorized should raise non-retryable ApplicationError."""
+        import anthropic
+        import pytest
+        from temporalio.exceptions import ApplicationError
+
+        error = anthropic.AuthenticationError(
+            message="Invalid API key",
+            response=_make_httpx_response(401),
+            body=None,
+        )
+        mock_instance = MagicMock()
+        mock_instance.messages = MagicMock()
+        mock_instance.messages.create = AsyncMock(side_effect=error)
+        mock_client_cls.return_value = mock_instance
+
+        with pytest.raises(ApplicationError) as exc_info:
+            asyncio.run(_run_intake_core(self._make_input()))
+        assert exc_info.value.non_retryable is True
+
+
+class TestRunIntakeChatWrapper:
+    """Test the Temporal activity wrapper delegates to _run_intake_core."""
+
+    @patch("app.activities.intake._run_intake_core")
+    def test_delegates_to_core(self, mock_core):
+        """run_intake_chat should directly call _run_intake_core with the same input."""
+        from app.activities.intake import run_intake_chat
+
+        mock_output = MagicMock()
+        mock_core.return_value = mock_output
+
+        input_data = IntakeChatInput(
+            mode="full",
+            project_context={"project_id": "test-proj"},
+            conversation_history=[],
+            user_message="hello",
+        )
+
+        result = asyncio.run(run_intake_chat(input_data))
+
+        mock_core.assert_called_once_with(input_data)
+        assert result is mock_output

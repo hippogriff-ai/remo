@@ -88,7 +88,7 @@ def _check_resolution(img: Image.Image) -> tuple[bool, str]:
     if shortest < MIN_RESOLUTION:
         return (
             False,
-            f"Image is too small ({shortest}px). Minimum {MIN_RESOLUTION}px on shortest side.",
+            "This photo is too low resolution. Please use a higher quality image.",
         )
     return True, ""
 
@@ -121,7 +121,7 @@ def _check_blur(img: Image.Image) -> tuple[bool, str]:
     if variance < BLUR_THRESHOLD:
         return (
             False,
-            f"Image appears blurry (score: {variance:.0f}, minimum: {BLUR_THRESHOLD:.0f}).",
+            "This photo looks blurry. Please retake with a steady hand.",
         )
     return True, ""
 
@@ -196,8 +196,10 @@ def _check_content(image_data: bytes, photo_type: str) -> tuple[bool, str]:
                     "Inspiration photos should show spaces, furniture, or design details "
                     "— not people or animals. Please choose a different image."
                 )
-            reason = response.content[0].text.strip()
-            return False, f"This doesn't look like a valid {photo_type} photo. {reason}"
+            return False, (
+                "We couldn't identify a room in this photo."
+                " Please upload a photo of an interior space."
+            )
         return True, ""
     except anthropic.APIError as exc:
         logger.error(
