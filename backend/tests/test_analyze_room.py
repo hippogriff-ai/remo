@@ -189,6 +189,24 @@ class TestBuildRoomAnalysis:
         assert analysis.room_type_confidence == 0.5
         assert analysis.photo_count == 1
 
+    def test_null_lists_treated_as_empty(self):
+        """Claude returning null for list fields should not raise TypeError."""
+        data = {
+            "room_type": "kitchen",
+            "furniture": None,
+            "behavioral_signals": None,
+            "lighting": {
+                "natural_light_direction": "north",
+                "lighting_gaps": None,
+            },
+        }
+        analysis = build_room_analysis(data, photo_count=1)
+        assert analysis.room_type == "kitchen"
+        assert analysis.furniture == []
+        assert analysis.behavioral_signals == []
+        assert analysis.lighting is not None
+        assert analysis.lighting.lighting_gaps == []
+
     def test_invalid_furniture_skipped_with_warning(self, caplog):
         """Malformed furniture entries are skipped with a warning log."""
         data = {

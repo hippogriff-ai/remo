@@ -246,11 +246,11 @@ def build_room_analysis(data: dict[str, Any], photo_count: int) -> RoomAnalysis:
             natural_light_intensity=lighting_data.get("natural_light_intensity"),
             window_coverage=lighting_data.get("window_coverage"),
             existing_artificial=lighting_data.get("existing_artificial"),
-            lighting_gaps=lighting_data.get("lighting_gaps", []),
+            lighting_gaps=lighting_data.get("lighting_gaps") or [],
         )
 
     furniture = []
-    for item_data in data.get("furniture", []):
+    for item_data in data.get("furniture") or []:
         if isinstance(item_data, dict) and "item" in item_data:
             furniture.append(
                 FurnitureObservation(
@@ -264,7 +264,7 @@ def build_room_analysis(data: dict[str, Any], photo_count: int) -> RoomAnalysis:
             log.warning("skipped_malformed_furniture", data=repr(item_data)[:200])
 
     behavioral_signals = []
-    for sig_data in data.get("behavioral_signals", []):
+    for sig_data in data.get("behavioral_signals") or []:
         if isinstance(sig_data, dict) and "observation" in sig_data and "inference" in sig_data:
             behavioral_signals.append(
                 BehavioralSignal(

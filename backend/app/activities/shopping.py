@@ -723,7 +723,13 @@ def _build_scoring_prompt(
     """Fill scoring prompt template for a specific item-product pair."""
     template = _load_scoring_prompt()
 
-    weights = SCORING_WEIGHTS_LIDAR if room_dimensions else SCORING_WEIGHTS_DEFAULT
+    has_valid_dims = (
+        room_dimensions is not None
+        and room_dimensions.width_m > 0
+        and room_dimensions.length_m > 0
+        and room_dimensions.height_m > 0
+    )
+    weights = SCORING_WEIGHTS_LIDAR if has_valid_dims else SCORING_WEIGHTS_DEFAULT
 
     style_mood = ""
     color_palette = ""

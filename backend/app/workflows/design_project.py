@@ -562,6 +562,11 @@ class DesignProjectWorkflow:
                 "read_the_room still running, intake starts without it for project %s",
                 self._project_id,
             )
+        except asyncio.CancelledError:
+            workflow.logger.warning(
+                "read_the_room cancelled (start_over) for project %s",
+                self._project_id,
+            )
         except Exception as exc:
             workflow.logger.warning(
                 "read_the_room failed (non-fatal) for project %s: %s",

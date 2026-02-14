@@ -2143,6 +2143,34 @@ class TestSearchAllItems:
         assert results == []
 
 
+class TestScoringWeightValidation:
+    """LiDAR weights should only apply when dimensions are valid."""
+
+    def test_invalid_dims_use_default_weights(self):
+        """Non-positive dimensions should fall back to default scoring weights."""
+        bad_dims = RoomDimensions(width_m=0.0, length_m=5.0, height_m=2.7)
+        prompt = _build_scoring_prompt(
+            {"category": "Sofa", "description": "sofa"},
+            {"title": "Test Sofa", "url": "https://a.com", "text": ""},
+            None,
+            room_dimensions=bad_dims,
+        )
+        # Default weights: dimensions = 0.10 (10%)
+        assert "10%" in prompt or "0.10" in prompt
+
+    def test_valid_dims_use_lidar_weights(self):
+        """Positive dimensions should use LiDAR scoring weights."""
+        good_dims = RoomDimensions(width_m=4.0, length_m=5.0, height_m=2.7)
+        prompt = _build_scoring_prompt(
+            {"category": "Sofa", "description": "sofa"},
+            {"title": "Test Sofa", "url": "https://a.com", "text": ""},
+            None,
+            room_dimensions=good_dims,
+        )
+        # LiDAR weights: dimensions = 0.20 (20%)
+        assert "20%" in prompt or "0.20" in prompt
+
+
 class TestAuthErrorNonRetryable:
     """401/403 auth errors should be non-retryable across all activities."""
 
