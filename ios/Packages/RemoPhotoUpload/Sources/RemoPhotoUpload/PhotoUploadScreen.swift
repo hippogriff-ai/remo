@@ -278,7 +278,7 @@ public struct PhotoUploadScreen: View {
 
     private func persistAllNotes() async {
         guard let projectId = projectState.projectId else { return }
-        for photo in projectState.photos where photo.photoType == "inspiration" && photo.note != nil {
+        for photo in projectState.photos where photo.photoType == "inspiration" {
             try? await client.updatePhotoNote(projectId: projectId, photoId: photo.photoId, note: photo.note)
         }
     }

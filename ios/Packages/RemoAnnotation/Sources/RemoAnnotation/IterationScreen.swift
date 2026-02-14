@@ -210,6 +210,8 @@ public struct IterationScreen: View {
                     #if os(iOS)
                     UIImpactFeedbackGenerator(style: .light).impactOccurred()
                     #endif
+                }, onWillReorder: {
+                    snapshotRegions()
                 }, onHighlight: { regionId in
                     highlightedRegionId = regionId
                 })
@@ -679,6 +681,7 @@ private let regionActions = ["Replace", "Remove", "Change finish", "Resize", "Re
 struct RegionListPanel: View {
     @Binding var regions: [AnnotationRegion]
     let onDelete: (Int) -> Void
+    var onWillReorder: (() -> Void)?
     var onHighlight: ((Int?) -> Void)?
 
     @State private var expandedRegionId: Int?
@@ -708,6 +711,7 @@ struct RegionListPanel: View {
                 }
             }
             .onMove { source, destination in
+                onWillReorder?()
                 regions.move(fromOffsets: source, toOffset: destination)
                 renumberRegions()
             }
