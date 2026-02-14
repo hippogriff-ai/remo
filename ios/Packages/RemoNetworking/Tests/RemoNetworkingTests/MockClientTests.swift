@@ -103,7 +103,9 @@ final class MockClientTests: XCTestCase {
         let id = try await client.createProject(deviceFingerprint: "test", hasLidar: true)
         _ = try await client.uploadPhoto(projectId: id, imageData: Data(), photoType: "room")
         _ = try await client.uploadPhoto(projectId: id, imageData: Data(), photoType: "room")
-        try await client.uploadScan(projectId: id, scanData: ["rooms": [["width": 4.0]]])
+        try await client.uploadScan(projectId: id, scanData: [
+            "room": ["width": 4.0, "length": 5.0, "height": 2.5, "unit": "meters"] as [String: Any],
+        ])
         let state = try await client.getState(projectId: id)
         XCTAssertEqual(state.step, "intake")
         XCTAssertNotNil(state.scanData)

@@ -28,6 +28,7 @@ dev = [
     "pytest-cov>=6,<7",
     "ruff>=0.9,<1",
     "mypy>=1.14,<2",
+    "langsmith>=0.2,<1",
 ]
 
 [build-system]

@@ -1,0 +1,22 @@
+{
+  "room": { "width": 4.2, "length": 5.8, "height": 2.7, "unit": "meters" },
+  "walls": [
+    { "id": "wall_0", "width": 4.2, "height": 2.7, "orientation": 0.0 },
+    { "id": "wall_1", "width": 5.8, "height": 2.7, "orientation": 90.0 },
+    { "id": "wall_2", "width": 4.2, "height": 2.7, "orientation": 180.0 },
+    { "id": "wall_3", "width": 5.8, "height": 2.7, "orientation": 270.0 }
+  ],
+  "openings": [
+    { "type": "door", "wall_id": "wall_0", "width": 0.9, "height": 2.1, "position": { "x": 1.5 } },
+    { "type": "window", "wall_id": "wall_1", "width": 1.5, "height": 1.2, "position": { "x": 2.0 } }
+  ],
+  "furniture": [
+    { "type": "sofa", "width": 2.1, "depth": 0.9, "height": 0.8 },
+    { "type": "table", "width": 1.2, "depth": 0.8, "height": 0.75 },
+    { "type": "chair", "width": 0.5, "depth": 0.5, "height": 0.9 }
+  ],
+  "surfaces": [
+    { "type": "floor" }
+  ],
+  "floor_area_sqm": 24.36
+}

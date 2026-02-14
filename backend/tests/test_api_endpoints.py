@@ -741,6 +741,160 @@ class TestScanEndpoints:
         body = resp.json()
         assert body["error"] == "wrong_step"
 
+    @pytest.mark.asyncio
+    async def test_upload_scan_oversized_payload_returns_413(self, client, project_id):
+        """G8: Scan payload exceeding 1 MB limit is rejected."""
+        _mock_states[project_id].step = "scan"
+        resp = await client.post(
+            f"/api/v1/projects/{project_id}/scan",
+            json={"room": {"width": 4.0, "length": 5.0, "height": 2.5}},
+            headers={"content-length": str(2 * 1024 * 1024)},  # 2 MB
+        )
+        assert resp.status_code == 413
+        assert resp.json()["error"] == "scan_too_large"
+
+    @pytest.mark.asyncio
+    async def test_upload_scan_malformed_content_length_returns_400(self, client, project_id):
+        """G8: Malformed Content-Length header returns 400 (not 500)."""
+        _mock_states[project_id].step = "scan"
+        resp = await client.post(
+            f"/api/v1/projects/{project_id}/scan",
+            json={"room": {"width": 4.0, "length": 5.0, "height": 2.5}},
+            headers={"content-length": "not-a-number"},
+        )
+        assert resp.status_code == 400
+        assert resp.json()["error"] == "bad_request"
+
+    @pytest.mark.asyncio
+    async def test_upload_scan_negative_content_length_returns_400(self, client, project_id):
+        """G24: Negative Content-Length header returns 400."""
+        _mock_states[project_id].step = "scan"
+        resp = await client.post(
+            f"/api/v1/projects/{project_id}/scan",
+            json={"room": {"width": 4.0, "length": 5.0, "height": 2.5}},
+            headers={"content-length": "-1024"},
+        )
+        assert resp.status_code == 400
+        assert resp.json()["error"] == "bad_request"
+
+    @pytest.mark.asyncio
+    async def test_upload_scan_after_skip_returns_409(self, client, project_id):
+        """G18: Uploading scan after skip returns 409 (already past scan step)."""
+        _mock_states[project_id].step = "scan"
+        # Skip scan first
+        resp = await client.post(f"/api/v1/projects/{project_id}/scan/skip")
+        assert resp.status_code == 200
+
+        # Now try to upload scan — should be rejected (step is 'intake')
+        resp = await client.post(
+            f"/api/v1/projects/{project_id}/scan",
+            json={"room": {"width": 4.0, "length": 5.0, "height": 2.5}},
+        )
+        assert resp.status_code == 409
+        assert resp.json()["error"] == "wrong_step"
+
+    @pytest.mark.asyncio
+    async def test_double_submit_scan_returns_409(self, client, project_id):
+        """G18: Submitting scan a second time returns 409 (already past scan step)."""
+        _mock_states[project_id].step = "scan"
+        scan_body = {"room": {"width": 4.0, "length": 5.0, "height": 2.5}}
+
+        # First scan succeeds
+        resp = await client.post(
+            f"/api/v1/projects/{project_id}/scan",
+            json=scan_body,
+        )
+        assert resp.status_code == 200
+
+        # Second scan fails — step is now 'intake'
+        resp = await client.post(
+            f"/api/v1/projects/{project_id}/scan",
+            json=scan_body,
+        )
+        assert resp.status_code == 409
+        assert resp.json()["error"] == "wrong_step"
+
+    @pytest.mark.asyncio
+    async def test_upload_scan_exactly_1mb_accepted(self, client, project_id):
+        """G8: Scan payload at exactly 1 MB boundary should be accepted (not 413)."""
+        _mock_states[project_id].step = "scan"
+        resp = await client.post(
+            f"/api/v1/projects/{project_id}/scan",
+            json={"room": {"width": 4.0, "length": 5.0, "height": 2.5}},
+            headers={"content-length": str(1 * 1024 * 1024)},  # exactly 1 MB
+        )
+        assert resp.status_code == 200
+
+    @pytest.mark.asyncio
+    async def test_upload_scan_without_analysis_leaves_room_context_null(self, client, project_id):
+        """G25: Scan alone (no photo analysis) does not build room_context.
+
+        Mirrors the real workflow's _build_room_context() which early-returns
+        when room_analysis is None. The mock doesn't run photo analysis, so
+        room_context stays None until analysis completes.
+        """
+        _mock_states[project_id].step = "scan"
+        scan_body = {
+            "room": {"width": 4.5, "length": 6.0, "height": 2.7},
+            "walls": [{"id": "wall_0", "width": 4.5, "height": 2.7}],
+            "openings": [],
+        }
+        resp = await client.post(
+            f"/api/v1/projects/{project_id}/scan",
+            json=scan_body,
+        )
+        assert resp.status_code == 200
+        body = (await client.get(f"/api/v1/projects/{project_id}")).json()
+        # scan_data is populated
+        assert body["scan_data"] is not None
+        assert body["scan_data"]["room_dimensions"]["width_m"] == 4.5
+        # room_context stays None (no analysis yet, matches real workflow)
+        assert body["room_context"] is None
+
+    @pytest.mark.asyncio
+    async def test_upload_scan_with_analysis_builds_room_context(self, client, project_id):
+        """G25: Scan + pre-existing analysis → full room_context with ["photos", "lidar"].
+
+        Mirrors the real workflow's _build_room_context() when analysis has
+        completed before scan arrives. Also verifies estimated_dimensions is
+        overwritten with LiDAR-precise measurements.
+        """
+        state = _mock_states[project_id]
+        state.step = "scan"
+        state.room_analysis = RoomAnalysis(
+            room_type="living room",
+            estimated_dimensions="approximately 15x20 feet",
+        )
+        scan_body = {
+            "room": {"width": 4.5, "length": 6.0, "height": 2.7},
+            "walls": [{"id": "wall_0", "width": 4.5, "height": 2.7}],
+            "openings": [],
+        }
+        resp = await client.post(
+            f"/api/v1/projects/{project_id}/scan",
+            json=scan_body,
+        )
+        assert resp.status_code == 200
+        body = (await client.get(f"/api/v1/projects/{project_id}")).json()
+        ctx = body["room_context"]
+        assert ctx is not None
+        assert ctx["enrichment_sources"] == ["photos", "lidar"]
+        assert ctx["room_dimensions"]["width_m"] == 4.5
+        assert ctx["room_dimensions"]["length_m"] == 6.0
+        assert ctx["room_dimensions"]["height_m"] == 2.7
+        assert ctx["photo_analysis"] is not None
+        assert ctx["photo_analysis"]["room_type"] == "living room"
+        # estimated_dimensions overwritten with LiDAR-precise values
+        assert ctx["photo_analysis"]["estimated_dimensions"] == ("4.5m x 6.0m (ceiling 2.7m)")
+
+    @pytest.mark.asyncio
+    async def test_skip_scan_leaves_room_context_null(self, client, project_id):
+        """G25: Skipping scan does not populate room_context."""
+        _mock_states[project_id].step = "scan"
+        await client.post(f"/api/v1/projects/{project_id}/scan/skip")
+        body = (await client.get(f"/api/v1/projects/{project_id}")).json()
+        assert body["room_context"] is None
+
 
 class TestIntakeEndpoints:
     """POST /api/v1/projects/{id}/intake/*"""
@@ -1373,6 +1527,39 @@ class TestSelectionEndpoints:
         assert body["step"] == "intake"
         assert body["generated_options"] == []
         assert body["design_brief"] is None
+
+    @pytest.mark.asyncio
+    async def test_start_over_clears_room_analysis_and_room_context(self, client, project_id):
+        """G25: start_over clears room_analysis and room_context.
+
+        Mirrors the real workflow behavior (design_project.py lines 427-428):
+        analysis and context are cleared so intake re-fires analysis. Scan data
+        (photos + LiDAR) is preserved since re-scanning is expensive.
+        """
+        from app.models.contracts import RoomDimensions, ScanData
+
+        state = _mock_states[project_id]
+        state.step = "iteration"
+        state.room_analysis = RoomAnalysis(room_type="living room")
+        state.room_context = RoomContext(
+            photo_analysis=state.room_analysis,
+            enrichment_sources=["photos", "lidar"],
+        )
+        state.scan_data = ScanData(
+            storage_key="projects/test/lidar/scan.json",
+            room_dimensions=RoomDimensions(width_m=5.0, length_m=6.0, height_m=2.7),
+        )
+
+        resp = await client.post(f"/api/v1/projects/{project_id}/start-over")
+        assert resp.status_code == 200
+
+        body = (await client.get(f"/api/v1/projects/{project_id}")).json()
+        # Analysis and context cleared (workflow re-fires analysis on restart)
+        assert body["room_analysis"] is None
+        assert body["room_context"] is None
+        # Scan data preserved (re-scanning is expensive)
+        assert body["scan_data"] is not None
+        assert body["scan_data"]["room_dimensions"]["width_m"] == 5.0
 
     @pytest.mark.asyncio
     async def test_start_over_clears_error(self, client, project_id):

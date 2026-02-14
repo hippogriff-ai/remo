@@ -338,7 +338,9 @@ async def analyze_room_photos(
         inspiration_photo_count=len(input.inspiration_photo_urls),
     )
 
-    client = anthropic.AsyncAnthropic(api_key=api_key)
+    from app.utils.tracing import wrap_anthropic
+
+    client = wrap_anthropic(anthropic.AsyncAnthropic(api_key=api_key))
 
     try:
         response = await client.messages.create(  # type: ignore[call-overload]

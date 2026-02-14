@@ -30,6 +30,9 @@ targets:
     platform: iOS
     sources:
       - Remo
+      - path: Remo/Resources/reference_room.json
+        buildPhase: resources
+        optional: true
     dependencies:
       - package: RemoModels
       - package: RemoNetworking

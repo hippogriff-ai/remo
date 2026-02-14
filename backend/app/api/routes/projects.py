@@ -40,6 +40,7 @@ from app.models.contracts import (
     ProductMatch,
     QuickReplyOption,
     RevisionRecord,
+    RoomContext,
     ScanData,
     SelectOptionRequest,
     TextFeedbackRequest,
@@ -54,6 +55,7 @@ logger = structlog.get_logger()
 router = APIRouter(tags=["projects"])
 
 MAX_PHOTO_BYTES = 20 * 1024 * 1024  # 20 MB
+MAX_SCAN_BYTES = 1 * 1024 * 1024  # 1 MB — LiDAR JSON is typically <100 KB
 MAX_INSPIRATION_PHOTOS = 3
 
 
@@ -542,8 +544,10 @@ async def update_photo_note(
     "/projects/{project_id}/scan",
     response_model=ActionResponse,
     responses={
+        400: {"model": ErrorResponse},
         404: {"model": ErrorResponse},
         409: {"model": ErrorResponse},
+        413: {"model": ErrorResponse},
         422: {"model": ErrorResponse},
     },
 )
@@ -553,6 +557,21 @@ async def upload_scan(project_id: str, body: dict, request: Request):
     if err := _check_step(state, "scan", "upload scan"):
         return err
     assert state is not None
+
+    # G8: Best-effort size check via Content-Length header. Body is already parsed
+    # by FastAPI, so this doesn't prevent memory allocation — it catches well-behaved
+    # clients early. True defense requires ASGI-level body limits (e.g. uvicorn config).
+    content_length = request.headers.get("content-length")
+    if content_length:
+        try:
+            cl_int = int(content_length)
+            if cl_int < 0:
+                return _error(400, "bad_request", "Invalid Content-Length header")
+            if cl_int > MAX_SCAN_BYTES:
+                mb = MAX_SCAN_BYTES // (1024 * 1024)
+                return _error(413, "scan_too_large", f"Scan data exceeds {mb} MB limit")
+        except ValueError:
+            return _error(400, "bad_request", "Invalid Content-Length header")
 
     try:
         dimensions = parse_room_dimensions(body)
@@ -574,6 +593,21 @@ async def upload_scan(project_id: str, body: dict, request: Request):
             return err
     else:
         state.scan_data = scan_data
+        # Mirror _build_room_context(): merge analysis + LiDAR into RoomContext.
+        # The real workflow early-returns when room_analysis is None, so we do
+        # the same. In typical mock usage (no photo analysis), room_context stays
+        # None. When room_analysis IS set (e.g., by a test or future mock
+        # enhancement), we build the full context with ["photos", "lidar"].
+        if state.room_analysis is not None:
+            state.room_analysis.estimated_dimensions = (
+                f"{dimensions.width_m:.1f}m x {dimensions.length_m:.1f}m "
+                f"(ceiling {dimensions.height_m:.1f}m)"
+            )
+            state.room_context = RoomContext(
+                photo_analysis=state.room_analysis,
+                room_dimensions=dimensions,
+                enrichment_sources=["photos", "lidar"],
+            )
         state.step = "intake"
 
     logger.info(
@@ -919,6 +953,11 @@ async def start_over(project_id: str, request: Request):
         state.shopping_list = None
         state.error = None
         state.chat_history_key = None
+        # Match workflow (lines 412-428): clear analysis/context so intake
+        # re-fires analysis. Workflow also clears intake_skipped and
+        # _action_queue, which are internal loop state not in the mock.
+        state.room_analysis = None
+        state.room_context = None
         state.step = "intake"
         _mock_pending_generation.pop(project_id, None)
         _mock_pending_shopping.pop(project_id, None)

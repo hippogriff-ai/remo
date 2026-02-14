@@ -120,7 +120,7 @@ class DesignProjectWorkflow:
         await self._wait(lambda: self.scan_data is not None or self.scan_skipped)
 
         # Merge LiDAR into analysis if both available (deterministic, no I/O)
-        self._enrich_context()
+        self._build_room_context()
 
         # --- Phase: Intake -> Generation -> Selection -> Iteration (with Start Over loop) ---
         while True:
@@ -254,6 +254,13 @@ class DesignProjectWorkflow:
             break  # proceed to shopping
 
         # --- Phase: Shopping List ---
+        # Collect late-arriving analysis (shield kept activity alive after intake timeout)
+        await self._resolve_analysis()
+        if not self.room_context:
+            workflow.logger.warning(
+                "Shopping proceeds without room analysis for project %s",
+                self._project_id,
+            )
         self.step = "shopping"
         while self.shopping_list is None:
             try:
@@ -344,6 +351,13 @@ class DesignProjectWorkflow:
 
     @workflow.signal
     async def complete_scan(self, scan: ScanData) -> None:
+        if self.step != "scan":
+            workflow.logger.warning(
+                "complete_scan ignored: step is '%s' (expected 'scan') for project %s",
+                self.step,
+                self._project_id,
+            )
+            return
         self.scan_data = scan
 
     @workflow.signal
@@ -489,6 +503,7 @@ class DesignProjectWorkflow:
             inspiration_notes=notes,
             design_brief=self.design_brief,
             room_dimensions=self.scan_data.room_dimensions if self.scan_data else None,
+            room_context=self.room_context,
         )
 
     def _edit_input(self, action_type: str, payload: Any) -> EditDesignInput:
@@ -502,6 +517,8 @@ class DesignProjectWorkflow:
             ],
             design_brief=self.design_brief,
             chat_history_key=self.chat_history_key,
+            room_dimensions=self.scan_data.room_dimensions if self.scan_data else None,
+            room_context=self.room_context,
         )
         if action_type == "annotation":
             base.annotations = [
@@ -550,6 +567,11 @@ class DesignProjectWorkflow:
         Uses asyncio.shield() so the activity continues running in the background
         if the 30s timeout expires — a slow model response can still be collected
         later (e.g., before shopping) instead of being cancelled.
+
+        Called twice: once at intake start (line 134) and once before shopping
+        (line 258). The second call collects late-arriving results from slow
+        analyses. After success or terminal failure, the handle is cleared so
+        subsequent calls are no-ops.
         """
         if self._analysis_handle is None:
             return
@@ -557,43 +579,35 @@ class DesignProjectWorkflow:
             result = await asyncio.wait_for(asyncio.shield(self._analysis_handle), timeout=30)
             self.room_analysis = result.analysis
             self._build_room_context()
+            self._analysis_handle = None
         except TimeoutError:
             workflow.logger.warning(
-                "read_the_room still running, intake starts without it for project %s",
+                "read_the_room still running after 30s for project %s",
                 self._project_id,
             )
+            # Keep handle alive — shield prevented cancellation, retry later
         except asyncio.CancelledError:
             workflow.logger.warning(
-                "read_the_room cancelled (start_over) for project %s",
+                "read_the_room cancelled for project %s",
                 self._project_id,
             )
+            self._analysis_handle = None
         except Exception as exc:
             workflow.logger.warning(
                 "read_the_room failed (non-fatal) for project %s: %s",
                 self._project_id,
                 exc,
             )
-
-    def _enrich_context(self) -> None:
-        """Deterministic merge of photo analysis + LiDAR. No I/O, no AI call."""
-        if self.room_analysis and self.scan_data and self.scan_data.room_dimensions:
-            dims = self.scan_data.room_dimensions
-            self.room_analysis.estimated_dimensions = (
-                f"{dims.width_m:.1f}m x {dims.length_m:.1f}m (ceiling {dims.height_m:.1f}m)"
-            )
-            self.room_context = RoomContext(
-                photo_analysis=self.room_analysis,
-                room_dimensions=dims,
-                enrichment_sources=["photos", "lidar"],
-            )
-        elif self.room_analysis:
-            self.room_context = RoomContext(
-                photo_analysis=self.room_analysis,
-                enrichment_sources=["photos"],
-            )
+            self._analysis_handle = None
 
     def _build_room_context(self) -> None:
-        """Build room context after analysis completes. Called from _resolve_analysis."""
+        """Merge photo analysis + LiDAR into RoomContext. Deterministic, no I/O.
+
+        Called from two sites:
+        - After scan completes (line 123): merges early analysis with LiDAR
+        - After _resolve_analysis (line 580): merges late analysis with LiDAR
+        Idempotent — safe to call multiple times with the same state.
+        """
         if self.room_analysis is None:
             return
         if self.scan_data and self.scan_data.room_dimensions:
