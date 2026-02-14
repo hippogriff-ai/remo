@@ -1,0 +1,13 @@
+{
+  "room_type": "living room",
+  "style_profile": {
+    "mood": "warm mid-century modern",
+    "colors": ["warm walnut", "mustard yellow", "olive green", "cream"],
+    "textures": ["teak wood", "bouclé fabric", "brass accents"],
+    "lighting": "warm ambient with brass floor lamps",
+    "clutter_level": "minimal"
+  },
+  "keep_items": ["built-in bookshelves"],
+  "constraints": ["keep existing hardwood floors"],
+  "pain_points": ["room feels dated", "lacks cohesive color scheme"]
+}

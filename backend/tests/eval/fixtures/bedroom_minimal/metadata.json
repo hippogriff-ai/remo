@@ -1,0 +1,12 @@
+{
+  "scenario": "bedroom_minimal",
+  "expected_scores": {
+    "generation": {"min": 60, "max": 100, "expected_tag": "GOOD"},
+    "fast_eval": {
+      "clip_text_min": 0.18,
+      "clip_image_min": 0.60,
+      "edge_ssim_min": 0.25
+    }
+  },
+  "notes": "Minimalist style should score well on design coherence due to limited elements."
+}

@@ -176,7 +176,7 @@ class TestPromptBuilding:
 
         prompt = _build_generation_prompt(None, [])
         assert "camera angle" in prompt
-        assert "room geometry" in prompt or "architecture" in prompt
+        assert "architectural elements" in prompt or "architecture" in prompt
 
     def test_build_prompt_with_designer_brain_fields(self):
         """PR-6 follow-up: New DesignBrief fields appear in generation prompt."""
@@ -218,6 +218,40 @@ class TestPromptBuilding:
         prompt = _build_generation_prompt(brief, [])
         assert "couple, 30s" in prompt
         assert "Morning yoga, weekend hosting" in prompt
+
+    def test_build_prompt_with_variant(self):
+        """Option variant text appears in the generated prompt (A5)."""
+        from app.activities.generate import _build_generation_prompt
+
+        prompt = _build_generation_prompt(None, [], option_variant="Test variant direction")
+        assert "Test variant direction" in prompt
+
+    def test_build_prompt_without_variant(self):
+        """Default option_variant is empty string, producing no extra text."""
+        from app.activities.generate import _build_generation_prompt
+
+        prompt = _build_generation_prompt(None, [])
+        assert "Design Direction:" not in prompt
+
+    def test_variant_a_and_b_differ(self):
+        """Variant A and B produce meaningfully different prompts (A5)."""
+        from app.activities.generate import _OPTION_VARIANTS, _build_generation_prompt
+
+        brief = DesignBrief(room_type="living room")
+        prompt_a = _build_generation_prompt(brief, [], option_variant=_OPTION_VARIANTS[0])
+        prompt_b = _build_generation_prompt(brief, [], option_variant=_OPTION_VARIANTS[1])
+        assert prompt_a != prompt_b
+        assert "primary style" in prompt_a
+        assert "complementary variation" in prompt_b
+
+    def test_prompt_uses_narrative_format(self):
+        """A3: Prompt uses narrative paragraphs, not bullet lists."""
+        from app.activities.generate import _build_generation_prompt
+
+        prompt = _build_generation_prompt(None, [])
+        assert "editorial interior design photograph" in prompt
+        assert "full-frame camera" in prompt
+        assert "physically accurate materials" in prompt
 
 
 class TestRoomContextFormatting:
@@ -660,6 +694,120 @@ class TestRoomContextFormatting:
         assert "redesign" in prompt.lower() or "interior design" in prompt.lower()
 
 
+class TestAspectRatioDetection:
+    """Tests for _detect_aspect_ratio — snaps input image ratio to nearest Gemini-supported value.
+
+    Covers A2: aspect ratio matching so output matches input room photo proportions.
+    """
+
+    def test_landscape_4_3(self):
+        """Standard 4:3 landscape photo (e.g., 4032x3024 iPhone)."""
+        from app.activities.generate import _detect_aspect_ratio
+
+        img = Image.new("RGB", (4032, 3024))
+        assert _detect_aspect_ratio(img) == "4:3"
+
+    def test_landscape_16_9(self):
+        """Widescreen 16:9 landscape photo."""
+        from app.activities.generate import _detect_aspect_ratio
+
+        img = Image.new("RGB", (1920, 1080))
+        assert _detect_aspect_ratio(img) == "16:9"
+
+    def test_portrait_3_4(self):
+        """Portrait mode phone photo (3:4)."""
+        from app.activities.generate import _detect_aspect_ratio
+
+        img = Image.new("RGB", (3024, 4032))
+        assert _detect_aspect_ratio(img) == "3:4"
+
+    def test_portrait_9_16(self):
+        """Vertical video / portrait 9:16."""
+        from app.activities.generate import _detect_aspect_ratio
+
+        img = Image.new("RGB", (1080, 1920))
+        assert _detect_aspect_ratio(img) == "9:16"
+
+    def test_square(self):
+        """Square image -> 1:1."""
+        from app.activities.generate import _detect_aspect_ratio
+
+        img = Image.new("RGB", (500, 500))
+        assert _detect_aspect_ratio(img) == "1:1"
+
+    def test_near_4_3(self):
+        """Slightly off from 4:3 still snaps to 4:3."""
+        from app.activities.generate import _detect_aspect_ratio
+
+        img = Image.new("RGB", (1350, 1000))  # 1.35:1, closest to 4:3 (1.333)
+        assert _detect_aspect_ratio(img) == "4:3"
+
+    def test_zero_height(self):
+        """Degenerate zero-height image falls back to 1:1."""
+        from app.activities.generate import _detect_aspect_ratio
+
+        img = Image.new("RGB", (100, 0))
+        assert _detect_aspect_ratio(img) == "1:1"
+
+    def test_zero_width(self):
+        """Degenerate zero-width image falls back to 1:1."""
+        from app.activities.generate import _detect_aspect_ratio
+
+        img = Image.new("RGB", (0, 100))
+        assert _detect_aspect_ratio(img) == "1:1"
+
+
+class TestMakeImageConfig:
+    """Tests for _make_image_config — per-call config with aspect ratio override.
+
+    Covers A1 (2K resolution) and A2 (aspect ratio matching).
+    """
+
+    def test_returns_global_config_when_no_ratio(self):
+        """Without aspect_ratio, returns the global IMAGE_CONFIG (2K)."""
+        from app.activities.generate import _make_image_config
+        from app.utils.gemini_chat import IMAGE_CONFIG
+
+        config = _make_image_config(None)
+        assert config is IMAGE_CONFIG
+
+    def test_includes_2k_and_aspect_ratio(self):
+        """With aspect_ratio, builds new config with both 2K and ratio."""
+        from app.activities.generate import _make_image_config
+
+        config = _make_image_config("16:9")
+        assert config.image_config is not None
+        assert config.image_config.image_size == "2K"
+        assert config.image_config.aspect_ratio == "16:9"
+
+    def test_different_ratios(self):
+        """All supported ratios produce valid configs."""
+        from app.activities.generate import _make_image_config
+
+        for ratio in ["1:1", "3:4", "4:3", "9:16", "16:9"]:
+            config = _make_image_config(ratio)
+            assert config.image_config.aspect_ratio == ratio
+
+    def test_invalid_ratio_falls_back_to_global(self):
+        """Unsupported ratio falls back to global IMAGE_CONFIG (no crash)."""
+        from app.activities.generate import _make_image_config
+        from app.utils.gemini_chat import IMAGE_CONFIG
+
+        config = _make_image_config("21:9")
+        assert config is IMAGE_CONFIG
+
+
+class TestGlobalImageConfig:
+    """Verify the global IMAGE_CONFIG uses 2K resolution (A1)."""
+
+    def test_image_config_has_2k(self):
+        """IMAGE_CONFIG should include 2K image_size for free quality boost."""
+        from app.utils.gemini_chat import IMAGE_CONFIG
+
+        assert IMAGE_CONFIG.image_config is not None
+        assert IMAGE_CONFIG.image_config.image_size == "2K"
+
+
 class TestPromptFiles:
     """Verify prompt template files exist and are valid."""
 
@@ -669,6 +817,7 @@ class TestPromptFiles:
         content = path.read_text()
         assert "{brief}" in content
         assert "{room_context}" in content
+        assert "{option_variant}" in content
         assert len(content) > 50
 
     def test_edit_prompt_exists(self):

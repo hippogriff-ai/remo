@@ -1,0 +1,15 @@
+You are an expert interior designer. Create a photorealistic room redesign based on the reference photos and design brief.
+
+Design Brief:
+{brief}
+{room_context}
+{option_variant}
+
+Rules:
+- Maintain the room's architecture, walls, windows, and doors
+- Match the style described in the brief
+- Use realistic materials and lighting
+{keep_items}
+{room_preservation}
+
+Output only the redesigned room photograph. No text, labels, or annotations.

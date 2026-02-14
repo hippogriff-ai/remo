@@ -1,0 +1,13 @@
+{
+  "room_type": "kitchen",
+  "style_profile": {
+    "mood": "bright contemporary",
+    "colors": ["white", "marble gray", "matte black", "warm brass"],
+    "textures": ["marble countertop", "matte cabinet finish", "brushed brass hardware"],
+    "lighting": "bright task lighting with pendant fixtures over island",
+    "clutter_level": "organized"
+  },
+  "keep_items": ["stainless steel appliances"],
+  "constraints": ["keep existing layout", "island must seat 4"],
+  "pain_points": ["outdated cabinets", "poor task lighting"]
+}

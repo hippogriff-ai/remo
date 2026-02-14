@@ -12,6 +12,8 @@ from __future__ import annotations
 
 import asyncio
 import io
+import os
+import random
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -43,6 +45,9 @@ from app.utils.http import download_image, download_images
 from app.utils.image import draw_annotations
 
 logger = structlog.get_logger()
+
+# Strong references to background eval tasks to prevent GC before completion
+_background_tasks: set[asyncio.Task] = set()  # type: ignore[type-arg]
 
 PROMPTS_DIR = Path(__file__).parent.parent.parent / "prompts"
 
@@ -93,6 +98,16 @@ def _build_edit_instructions(annotations: list[AnnotationRegion]) -> str:
             parts.append(f"Constraints: {', '.join(ann.constraints)}.")
         lines.append(" — ".join(parts))
     return "\n".join(lines)
+
+
+def _build_eval_instruction(input: EditDesignInput) -> str:
+    """Build a combined instruction string for eval from annotations and/or feedback."""
+    parts = []
+    if input.annotations:
+        parts.append(_build_edit_instructions(input.annotations))
+    if input.feedback:
+        parts.append(input.feedback)
+    return "\n".join(parts) if parts else "edit"
 
 
 def _upload_image(image: Image.Image, project_id: str) -> str:
@@ -299,6 +314,58 @@ async def _continue_chat(
     return result_image, updated_history
 
 
+async def _maybe_run_edit_eval(
+    result_image: Image.Image,
+    original_image: Image.Image,
+    original_url: str,
+    revised_url: str,
+    instruction: str,
+) -> None:
+    """Run eval pipeline on edit result if EVAL_MODE is set. Never raises."""
+    eval_mode = os.environ.get("EVAL_MODE", "off").lower()
+    if eval_mode == "off":
+        return
+
+    try:
+        from app.utils.image_eval import run_fast_eval
+
+        fast = run_fast_eval(result_image, original_image, brief=None, is_edit=True)
+        logger.info(
+            "eval_edit_fast_result",
+            composite=fast.composite_score,
+            has_artifacts=fast.has_artifacts,
+            needs_deep=fast.needs_deep_eval,
+        )
+
+        deep_result = None
+        if eval_mode == "full" and (fast.needs_deep_eval or random.random() < 0.2):
+            from app.activities.design_eval import evaluate_edit
+
+            deep_result = await evaluate_edit(
+                original_image_url=original_url,
+                edited_image_url=revised_url,
+                edit_instruction=instruction,
+                fast_eval=fast,
+            )
+            logger.info(
+                "eval_edit_deep_result",
+                total=deep_result.total,
+                tag=deep_result.tag,
+            )
+
+        from app.utils.score_tracking import append_score
+
+        append_score(
+            history_path=Path("eval_history.jsonl"),
+            scenario="edit",
+            prompt_version="v1",
+            fast_eval=fast.__dict__,
+            deep_eval=({"total": deep_result.total, "tag": deep_result.tag} if deep_result else {}),
+        )
+    except Exception:
+        logger.warning("eval_edit_failed", exc_info=True)
+
+
 @activity.defn
 async def edit_design(input: EditDesignInput) -> EditDesignOutput:
     """Edit a design image using annotations or text feedback."""
@@ -330,9 +397,11 @@ async def edit_design(input: EditDesignInput) -> EditDesignOutput:
     )
 
     try:
+        original_image: Image.Image | None = None
         if resolved_input.chat_history_key is None:
             # First call: bootstrap — always needs the base image
             base_image = await download_image(resolved_input.base_image_url)
+            original_image = base_image
             chat, result_image = await _bootstrap_chat(resolved_input, base_image)
 
             if result_image is None:
@@ -355,6 +424,7 @@ async def edit_design(input: EditDesignInput) -> EditDesignOutput:
                 if resolved_input.annotations
                 else None
             )
+            original_image = cont_base
             result_image, updated_history = await _continue_chat(resolved_input, cont_base)
 
             if result_image is None:
@@ -372,6 +442,23 @@ async def edit_design(input: EditDesignInput) -> EditDesignOutput:
             history_key = await asyncio.to_thread(
                 serialize_contents_to_r2, updated_history, resolved_input.project_id
             )
+
+        # Download original for eval if not already available (text-only continue path)
+        if original_image is None:
+            original_image = await download_image(resolved_input.base_image_url)
+
+        # Run eval if enabled — fire-and-forget, never blocks the activity
+        task = asyncio.create_task(
+            _maybe_run_edit_eval(
+                result_image=result_image,
+                original_image=original_image,
+                original_url=resolved_input.base_image_url,
+                revised_url=revised_url,
+                instruction=_build_eval_instruction(input),
+            )
+        )
+        _background_tasks.add(task)
+        task.add_done_callback(_background_tasks.discard)
 
         return EditDesignOutput(
             revised_image_url=revised_url,
