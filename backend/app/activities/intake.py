@@ -724,7 +724,11 @@ async def _run_intake_core(input: IntakeChatInput) -> IntakeChatOutput:
         input.mode, turn_number, previous_brief, room_analysis, loaded_skill_ids
     )
 
-    # Extract photos from project context for multimodal first turn
+    # Skip room photos when room analysis exists: the analyze_room activity (same
+    # model) already extracted structured observations, so re-sending raw images
+    # would duplicate work and add ~3-6k tokens/turn of cognitive load. Fallback
+    # to raw photos if analysis is absent. May revisit if intake needs visual detail
+    # beyond what the analysis schema captures.
     room_photo_urls: list[str] = (
         input.project_context.get("room_photos", []) if not room_analysis else []
     )
