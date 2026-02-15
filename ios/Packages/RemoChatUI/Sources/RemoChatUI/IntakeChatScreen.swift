@@ -145,9 +145,9 @@ public struct IntakeChatScreen: View {
                                 .id(index)
                         }
 
-                        // Quick reply chips — hidden once user selects one (choice shown as chat bubble)
+                        // Quick reply chips — hidden once user selects one or while waiting for response
                         if let options = projectState.currentIntakeOutput?.options, !options.isEmpty,
-                           selectedQuickReply == nil {
+                           selectedQuickReply == nil, !isSending {
                             QuickReplyChips(
                                 options: options,
                                 selectedId: selectedQuickReply,
@@ -155,6 +155,28 @@ public struct IntakeChatScreen: View {
                             ) { option in
                                 selectedQuickReply = option.number
                                 Task { await sendMessage(option.label) }
+                            }
+
+                            // When the question also accepts free text, offer a chip to dismiss options
+                            if projectState.currentIntakeOutput?.isOpenEnded == true {
+                                Button {
+                                    selectedQuickReply = -1
+                                    isInputFocused = true
+                                } label: {
+                                    HStack {
+                                        Image(systemName: "keyboard")
+                                            .frame(width: 24, height: 24)
+                                        Text("Type my own answer...")
+                                            .font(.subheadline)
+                                        Spacer()
+                                    }
+                                    .foregroundStyle(.secondary)
+                                    .padding(.horizontal, 12)
+                                    .padding(.vertical, 10)
+                                    .background(Color.secondary.opacity(0.08))
+                                    .clipShape(RoundedRectangle(cornerRadius: 12))
+                                }
+                                .buttonStyle(.plain)
                             }
                         }
 
@@ -451,11 +473,11 @@ struct SummaryCard: View {
             BriefField(label: "Room Type", value: brief.roomType)
 
             if !brief.painPoints.isEmpty {
-                BriefField(label: "Change", value: brief.painPoints.joined(separator: ", "))
+                BriefField(label: "Change", value: brief.painPoints.map { "• \($0)" }.joined(separator: "\n"))
             }
 
             if !brief.keepItems.isEmpty {
-                BriefField(label: "Keep", value: brief.keepItems.joined(separator: ", "))
+                BriefField(label: "Keep", value: brief.keepItems.map { "• \($0)" }.joined(separator: "\n"))
             }
 
             if let style = brief.styleProfile {

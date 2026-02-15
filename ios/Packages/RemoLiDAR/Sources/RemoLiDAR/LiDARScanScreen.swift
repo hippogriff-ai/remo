@@ -126,7 +126,9 @@ public struct LiDARScanScreen: View {
                     .controlSize(.large)
                     .tint(.green)
                     .padding(.horizontal, 40)
-                    .padding(.bottom, 50)
+                    .padding(.vertical, 16)
+                    .frame(maxWidth: .infinity)
+                    .background(.ultraThinMaterial)
                 }
             }
         }

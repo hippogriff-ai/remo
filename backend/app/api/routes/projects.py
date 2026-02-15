@@ -253,6 +253,25 @@ async def _resolve_state(request: Request, project_id: str) -> WorkflowState | N
     return _get_state(project_id)
 
 
+def _presign_image_urls(state: WorkflowState) -> None:
+    """Resolve R2 storage keys → fresh presigned URLs in-place.
+
+    Activities store R2 keys (``projects/{id}/generated/option_0.png``).
+    This function converts them to presigned URLs before serving to iOS
+    so images never expire while the project is still active.  Already-
+    presigned URLs (mock mode, legacy data) pass through unchanged.
+    """
+    from app.utils.r2 import resolve_url
+
+    for opt in state.generated_options:
+        opt.image_url = resolve_url(opt.image_url)
+    if state.current_image:
+        state.current_image = resolve_url(state.current_image)
+    for rev in state.revision_history:
+        rev.base_image_url = resolve_url(rev.base_image_url)
+        rev.revised_image_url = resolve_url(rev.revised_image_url)
+
+
 # --- Project lifecycle ---
 
 
@@ -290,10 +309,16 @@ async def create_project(body: CreateProjectRequest, request: Request) -> Create
     responses={404: {"model": ErrorResponse}},
 )
 async def get_project_state(project_id: str, request: Request):
-    """Query current workflow state. iOS polls this endpoint."""
+    """Query current workflow state. iOS polls this endpoint.
+
+    Image URLs are presigned on every response so they never expire while
+    the project is still active.  Workflow state stores R2 storage keys;
+    the presigning happens here at the API boundary.
+    """
     state = await _resolve_state(request, project_id)
     if state is None:
         return _error(404, *_NOT_FOUND)
+    _presign_image_urls(state)
     return state
 
 
@@ -690,6 +715,7 @@ async def start_intake(project_id: str, body: IntakeStartRequest, request: Reque
         return err
     assert state is not None
     _intake_sessions[project_id] = _IntakeSession(mode=body.mode)
+    _max_turns = {"quick": 4, "full": 11, "open": 16}
     return IntakeChatOutput(
         agent_message="Welcome! Let's design your perfect room. "
         "What type of room are we working with?",
@@ -701,7 +727,7 @@ async def start_intake(project_id: str, body: IntakeStartRequest, request: Reque
             QuickReplyOption(number=5, label="Dining Room", value="dining room"),
             QuickReplyOption(number=6, label="Home Office", value="home office"),
         ],
-        progress="Question 1 of 3",
+        progress=f"Question 1 of ~{_max_turns.get(body.mode, 4)}",
     )
 
 

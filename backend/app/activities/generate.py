@@ -273,15 +273,20 @@ def _extract_project_id(urls: list[str]) -> str:
 
 
 def _upload_image(image: Image.Image, project_id: str, filename: str) -> str:
-    """Upload a PIL Image to R2 and return the presigned URL."""
-    from app.utils.r2 import generate_presigned_url, upload_object
+    """Upload a PIL Image to R2 and return the storage key.
+
+    Returns the R2 key (not a presigned URL) so the workflow stores a stable
+    reference.  The API layer presigns on every state query, giving iOS
+    always-fresh URLs.
+    """
+    from app.utils.r2 import upload_object
 
     buf = io.BytesIO()
     image.save(buf, format="PNG")
     key = f"projects/{project_id}/generated/{filename}"
     logger.info("r2_upload_start", key=key, size_bytes=buf.tell())
     upload_object(key, buf.getvalue(), content_type="image/png")
-    return generate_presigned_url(key)
+    return key
 
 
 async def _generate_single_option(

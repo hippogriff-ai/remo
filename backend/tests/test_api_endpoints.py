@@ -917,7 +917,7 @@ class TestIntakeEndpoints:
         body = resp.json()
         assert "agent_message" in body
         assert len(body["options"]) == 6
-        assert body["progress"] == "Question 1 of 3"
+        assert body["progress"] == "Question 1 of ~4"
 
     @pytest.mark.asyncio
     async def test_send_message(self, client, project_id):
@@ -987,7 +987,7 @@ class TestIntakeEndpoints:
             json={"mode": "quick"},
         )
         body = resp.json()
-        assert body["progress"] == "Question 1 of 3"
+        assert body["progress"] == "Question 1 of ~4"
         assert len(body["options"]) == 6
 
         # Message 1: room type → style question with options
@@ -1621,7 +1621,7 @@ class TestSelectionEndpoints:
             f"/api/v1/projects/{project_id}/intake/start",
             json={"mode": "quick"},
         )
-        assert resp.json()["progress"] == "Question 1 of 3"
+        assert resp.json()["progress"] == "Question 1 of ~4"
 
         # First message should be question 2 (fresh conversation)
         resp = await client.post(
@@ -2594,7 +2594,7 @@ class TestFullFlow:
 
         # 5. Start intake → conversation flow
         resp = await client.post(f"/api/v1/projects/{pid}/intake/start", json={"mode": "quick"})
-        assert resp.json()["progress"] == "Question 1 of 3"
+        assert resp.json()["progress"] == "Question 1 of ~4"
 
         # 5a. Answer room type
         resp = await client.post(
@@ -3121,7 +3121,7 @@ class TestRealIntakeWiring:
                 options=[
                     QuickReplyOption(number=1, label="Living Room", value="living room"),
                 ],
-                progress="Question 1 of 3",
+                progress="Question 1 of ~4",
             )
         )
         with (

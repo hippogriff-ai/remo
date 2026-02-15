@@ -183,7 +183,9 @@ class TestEditInstructions:
             ),
         ]
         result = _build_edit_instructions(annotations)
-        assert "1 (red circle)" in result
+        assert "Region 1:" in result
+        assert "50% from left" in result
+        assert "50% from top" in result
         assert "oak table" in result
 
     def test_build_instructions_multiple(self):
@@ -206,8 +208,10 @@ class TestEditInstructions:
             ),
         ]
         result = _build_edit_instructions(annotations)
-        assert "1 (red circle)" in result
-        assert "2 (blue circle)" in result
+        assert "Region 1:" in result
+        assert "Region 2:" in result
+        assert "left side" in result  # 30% → left
+        assert "right side" in result  # 70% → right
         assert "sectional" in result
         assert "bookshelf" in result
 
@@ -276,7 +280,8 @@ class TestEditInstructions:
             ),
         ]
         result = _build_edit_instructions(annotations)
-        assert "2 (blue circle)" in result
+        assert "Region 2:" in result
+        assert "center of the image" in result
         assert "Action: Remove" in result
         assert "old armchair" in result
         assert "Avoid: leaving empty space" in result
@@ -320,8 +325,8 @@ class TestEditInstructions:
         assert "Avoid:" not in result
         assert "Constraints:" not in result
 
-    def test_build_instructions_all_three_colors(self):
-        """Verify all three region IDs map to correct colors."""
+    def test_build_instructions_all_three_regions(self):
+        """Verify all three region IDs get coordinate descriptions."""
         from app.activities.edit import _build_edit_instructions
 
         annotations = [
@@ -335,9 +340,13 @@ class TestEditInstructions:
             for i in range(1, 4)
         ]
         result = _build_edit_instructions(annotations)
-        assert "1 (red circle)" in result
-        assert "2 (blue circle)" in result
-        assert "3 (green circle)" in result
+        assert "Region 1:" in result
+        assert "Region 2:" in result
+        assert "Region 3:" in result
+        # Verify position descriptions differ based on coordinates
+        assert "left side" in result   # 0.3 → left
+        assert "center" in result      # 0.6 → center
+        assert "right side" in result  # 0.9 → right
 
     def test_build_instructions_action_and_avoid_only(self):
         """Action + avoid without constraints should omit Constraints label."""
@@ -358,6 +367,53 @@ class TestEditInstructions:
         assert "Action: Remove" in result
         assert "Avoid: leaving marks" in result
         assert "Constraints:" not in result
+
+
+class TestPositionDescription:
+    """Test coordinate-to-text position descriptions."""
+
+    def test_center(self):
+        from app.activities.edit import _position_description
+
+        result = _position_description(0.5, 0.5, 0.1)
+        assert "center of the image" in result
+
+    def test_upper_left(self):
+        from app.activities.edit import _position_description
+
+        result = _position_description(0.1, 0.1, 0.1)
+        assert "upper-left" in result
+
+    def test_lower_right(self):
+        from app.activities.edit import _position_description
+
+        result = _position_description(0.8, 0.8, 0.1)
+        assert "lower-right" in result
+
+    def test_percentage_coordinates(self):
+        from app.activities.edit import _position_description
+
+        result = _position_description(0.3, 0.7, 0.1)
+        assert "30% from left" in result
+        assert "70% from top" in result
+
+    def test_large_area(self):
+        from app.activities.edit import _position_description
+
+        result = _position_description(0.5, 0.5, 0.3)
+        assert "large area" in result
+
+    def test_medium_area(self):
+        from app.activities.edit import _position_description
+
+        result = _position_description(0.5, 0.5, 0.15)
+        assert "medium area" in result
+
+    def test_small_area(self):
+        from app.activities.edit import _position_description
+
+        result = _position_description(0.5, 0.5, 0.05)
+        assert "small area" in result
 
 
 def _make_test_image(w: int = 100, h: int = 100) -> Image.Image:
@@ -1161,25 +1217,21 @@ class TestDownloadImages:
 class TestUploadImage:
     """Tests for _upload_image."""
 
-    def test_upload_image_returns_presigned_url(self):
+    def test_upload_image_returns_storage_key(self):
+        """_upload_image returns an R2 key (not presigned URL) for stable storage."""
         from app.activities.edit import _upload_image
 
         img = _make_test_image()
 
-        with (
-            patch("app.utils.r2.upload_object") as mock_upload,
-            patch(
-                "app.utils.r2.generate_presigned_url",
-                return_value="https://r2.example.com/presigned/rev.png",
-            ),
-        ):
-            url = _upload_image(img, "proj-123")
-            assert url == "https://r2.example.com/presigned/rev.png"
+        with patch("app.utils.r2.upload_object") as mock_upload:
+            key = _upload_image(img, "proj-123")
+            # Returns storage key, not a presigned URL
+            assert key.startswith("projects/proj-123/revisions/")
+            assert key.endswith(".png")
+            assert not key.startswith("http")
             mock_upload.assert_called_once()
-            # Verify upload key format
             call_args = mock_upload.call_args[0]
-            assert call_args[0].startswith("projects/proj-123/revisions/")
-            assert call_args[0].endswith(".png")
+            assert call_args[0] == key
 
 
 class TestBootstrapWithInspirationImages:
