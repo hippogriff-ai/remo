@@ -388,6 +388,8 @@ async def _run_edit_vlm_eval(
             )
 
         text = "".join(b.text for b in response.content if hasattr(b, "text"))
+        # Claude may echo double braces from the response template — normalize
+        text = text.replace("{{", "{").replace("}}", "}")
         raw = _extract_json(text)
         if not raw:
             return {"error": f"Could not parse JSON: {text[:200]}"}

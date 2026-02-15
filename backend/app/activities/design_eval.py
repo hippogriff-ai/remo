@@ -170,7 +170,7 @@ spatial relationships or wildly wrong proportions."""
 
 _GENERATION_RESPONSE_FORMAT = """\
 Respond with EXACTLY this JSON (no markdown fences):
-{{
+{
   "photorealism": <0-15>,
   "style_adherence": <0-15>,
   "color_palette": <0-10>,
@@ -184,7 +184,7 @@ Respond with EXACTLY this JSON (no markdown fences):
   "instruction_adherence": <0-10>,
   "spatial_accuracy": <0-5>,
   "notes": "<1-2 sentences>"
-}}"""
+}"""
 
 _GENERATION_CRITERIA_MAX = {
     "photorealism": 15,
@@ -229,7 +229,7 @@ or non-photorealistic elements. 0: prominent artifacts or annotation-like shapes
 
 _EDIT_RESPONSE_FORMAT = """\
 Respond with EXACTLY this JSON (no markdown fences):
-{{
+{
   "edit_fidelity": <0-15>,
   "preservation_fidelity": <0-15>,
   "artifact_cleanliness": <0-10>,
@@ -237,7 +237,7 @@ Respond with EXACTLY this JSON (no markdown fences):
   "instruction_accuracy": <0-5>,
   "total": <sum, 0-50>,
   "notes": "<1-2 sentences>"
-}}"""
+}"""
 
 _EDIT_CRITERIA_MAX = {
     "edit_fidelity": 15,
@@ -271,13 +271,13 @@ and shown in the room render. 10: close match. 5: vaguely similar. 0: wrong prod
 
 _SHOPPING_RESPONSE_FORMAT = """\
 Respond with EXACTLY this JSON (no markdown fences):
-{{
+{
   "visual_match": <0-15>,
   "style_consistency": <0-10>,
   "scale_appropriateness": <0-5>,
   "total": <sum, 0-30>,
   "notes": "<1-2 sentences>"
-}}"""
+}"""
 
 _SHOPPING_CRITERIA_MAX = {
     "visual_match": 15,

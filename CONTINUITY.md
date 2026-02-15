@@ -220,8 +220,10 @@ Edge SSIM +0.047 is the largest single-metric improvement across all loops. Dire
 - Done: Removed dead `_load_prompt()` and `PROMPTS_DIR` from edit.py (test-1 artifact, we use `load_versioned_prompt()`).
 - Done: Room photo re-anchoring in `_continue_chat()` — downloads room photos and prepends them as spatial anchors ("Reference room photos (preserve this architecture):") to every continuation turn. Prevents architectural drift across multi-turn edits.
 - Done: Cumulative edit changelog — `_build_changelog(history)` scans chat history for previous edit instructions and feedback, builds a summary. `edit_v7.txt` includes `{changelog}` placeholder. Prevents Gemini from forgetting earlier changes.
-- Now: Active: gen_v5 + room_v4 + edit_v7. All code improvements shipped. VLM-only eval pipeline with proper edit rubric.
-- Next: Run real edit eval with edit rubric to establish text-coordinate + changelog baseline scores. Phase B (export positions from iOS RoomPlan).
+- Done: Fixed `{{`/`}}` double-brace bug in all 3 VLM response format constants (generation, edit, shopping). Claude was echoing double braces from the template, causing JSON parse failures.
+- Done: Edit eval baseline established (5 runs, edit rubric, real images): total 41.6/50 (83.2%), preservation_fidelity 13.0/15, artifact_cleanliness 9.4/10. One outlier at 28/50 (Gemini model variance).
+- Now: Active: gen_v5 + room_v4 + edit_v7. All code improvements shipped. VLM-only eval pipeline fully operational.
+- Next: Phase B (export positions from iOS RoomPlan). Consider: improve edit_fidelity (10.8/15 has headroom), tune HoughCircles thresholds to reduce false positives on natural round objects.
 
 ## Prompt Version Status
 | Prompt | Active | New versions | Status |
