@@ -450,8 +450,7 @@ def _print_bootstrap_summary(
 class TestPromptAB:
     """A/B test generation prompt versions using VLM eval."""
 
-    @pytest.mark.asyncio
-    async def test_baseline_vs_candidate(self):
+    def test_baseline_vs_candidate(self):
         """VLM eval: v5+v4 vs v2+v2 baseline."""
         room_image = _make_room_image()
         baseline_prompt = _build_prompt("v2", "v2")
@@ -521,3 +520,159 @@ class TestPromptAB:
         print(f"  SCENE DATA VLM EVAL SUMMARY ({len(room_images)} photos × {NUM_RUNS} runs)")
         print("=" * 60)
         _print_bootstrap_summary("v5+room_v4", "v5+room_v5", all_baseline, all_candidate)
+
+    def test_edit_text_coordinates(self):
+        """Eval the edit workflow with text-coordinate annotations (no circles).
+
+        Generates a base design, then applies an edit using Gemini chat
+        with text-coordinate descriptions (the new approach from test-1).
+        Evaluates the result for:
+        1. Annotation artifact contamination (should be zero)
+        2. VLM quality score
+        3. Whether the edit instruction was followed
+
+        This is a single-arm eval (no A/B), establishing the baseline for
+        the text-coordinate approach introduced in the test-1 merge.
+        """
+        room_image = _make_room_image()
+        gen_prompt = _build_prompt("v5", "v4")
+
+        print("\n" + "=" * 60)
+        print("  EDIT EVAL: Text-Coordinate Approach (edit_v6)")
+        print("=" * 60)
+
+        async def _run_edit_eval():
+            from app.activities.edit import CONTEXT_PROMPT, _build_edit_instructions
+            from app.models.contracts import AnnotationRegion
+            from app.utils.gemini_chat import create_chat, extract_image, get_client
+            from app.utils.image_eval import run_artifact_check
+            from app.utils.prompt_versioning import load_versioned_prompt
+
+            results = []
+            edit_annotations = [
+                AnnotationRegion(
+                    region_id=1,
+                    center_x=0.3,
+                    center_y=0.5,
+                    radius=0.15,
+                    instruction="Replace this furniture with a modern leather armchair",
+                    action="Replace",
+                ),
+                AnnotationRegion(
+                    region_id=2,
+                    center_x=0.7,
+                    center_y=0.3,
+                    radius=0.1,
+                    instruction="Change this light fixture to a pendant lamp",
+                    action="Replace",
+                ),
+            ]
+
+            edit_instructions = _build_edit_instructions(edit_annotations)
+            edit_template = load_versioned_prompt("edit")
+            edit_prompt = edit_template.format(
+                edit_instructions=edit_instructions.replace("{", "{{").replace("}", "}}")
+            )
+
+            for run_idx in range(NUM_RUNS):
+                print(f"\n--- Run {run_idx + 1}/{NUM_RUNS} ---")
+
+                # Generate base design
+                print("  Generating base design...", end=" ", flush=True)
+                base_design = await _generate_image(gen_prompt, room_image)
+                print("done.", end=" ", flush=True)
+
+                # Run edit via Gemini chat directly (mirrors _bootstrap_chat flow)
+                print("Editing...", end=" ", flush=True)
+                client = get_client()
+                try:
+                    chat = await asyncio.to_thread(create_chat, client)
+                    # Turn 1: context (room photo + base design)
+                    context_parts = [room_image, base_design, CONTEXT_PROMPT]
+                    await asyncio.to_thread(chat.send_message, context_parts)
+                    # Turn 2: edit with CLEAN base image + text coordinates
+                    edit_parts = [base_design, edit_prompt]
+                    response = await asyncio.to_thread(chat.send_message, edit_parts)
+                    result_image = extract_image(response)
+
+                    if result_image is None:
+                        # Retry
+                        retry = "Please generate the edited room image now. Output only a clean photograph."
+                        response = await asyncio.to_thread(chat.send_message, retry)
+                        result_image = extract_image(response)
+
+                except Exception as e:
+                    err = str(e)
+                    if "503" in err or "429" in err or "RESOURCE_EXHAUSTED" in err:
+                        print(f"RATE LIMITED: {err[:80]}")
+                        results.append({"error": "rate_limited"})
+                        _append_result("edit_v6_text_coords", {"error": "rate_limited"})
+                        await asyncio.sleep(30)
+                        continue
+                    print(f"EDIT FAILED: {err[:100]}")
+                    results.append({"error": err[:200]})
+                    _append_result("edit_v6_text_coords", {"error": err[:200]})
+                    continue
+
+                if result_image is None:
+                    print("NO IMAGE RETURNED")
+                    results.append({"error": "no_image"})
+                    _append_result("edit_v6_text_coords", {"error": "no_image"})
+                    continue
+
+                print("done.", end=" ", flush=True)
+
+                # Artifact check
+                artifact = run_artifact_check(result_image)
+                artifact_info = {
+                    "has_artifacts": artifact.has_artifacts,
+                    "artifact_count": artifact.artifact_count,
+                }
+                if artifact.has_artifacts:
+                    print(f"ARTIFACTS={artifact.artifact_count}!", end=" ", flush=True)
+                else:
+                    print("clean.", end=" ", flush=True)
+
+                # VLM eval on the edit result
+                print("VLM eval...", end=" ", flush=True)
+                vlm_scores = await _run_vlm_eval(
+                    result_image,
+                    room_image,
+                    brief=TEST_BRIEF,
+                    generation_prompt=edit_prompt,
+                )
+                vlm_scores["artifact_check"] = artifact_info
+
+                if "total" in vlm_scores:
+                    print(f"total={vlm_scores['total']} tag={vlm_scores['tag']} artifacts={artifact.artifact_count}")
+                else:
+                    print(f"EVAL ERROR: {vlm_scores}")
+
+                results.append(vlm_scores)
+                _append_result("edit_v6_text_coords", vlm_scores)
+
+            return results
+
+        all_results = asyncio.get_event_loop().run_until_complete(_run_edit_eval())
+
+        # Summary
+        valid = [r for r in all_results if "total" in r]
+        artifacts = [r for r in all_results if "artifact_check" in r]
+        artifact_count = sum(1 for r in artifacts if r["artifact_check"]["has_artifacts"])
+
+        print("\n" + "=" * 60)
+        print(f"  EDIT EVAL SUMMARY ({len(valid)}/{NUM_RUNS} successful)")
+        print("=" * 60)
+
+        if valid:
+            import numpy as np
+
+            totals = np.array([r["total"] for r in valid], dtype=float)
+            print(f"  VLM total: mean={totals.mean():.1f} std={totals.std():.1f} min={totals.min():.0f} max={totals.max():.0f}")
+            for key in ["photorealism", "style_adherence", "room_preservation", "instruction_adherence"]:
+                vals = np.array([r.get(key, 0) for r in valid], dtype=float)
+                print(f"  {key:25s}: mean={vals.mean():.1f}")
+
+        print(f"  Artifact contamination: {artifact_count}/{len(artifacts)} images had circles")
+        if artifact_count == 0:
+            print("  PASS: Text-coordinate approach: ZERO annotation artifacts")

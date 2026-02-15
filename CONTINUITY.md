@@ -212,7 +212,10 @@ Edge SSIM +0.047 is the largest single-metric improvement across all loops. Dire
 - Done: A/B eval for room_pres_v5: fast eval 3/4 LIKELY_BETTER (P>0.98), deep eval INCONCLUSIVE after 10 runs (+0.2, CI [-0.2, +0.6]). Originally shipped, then rolled back after real-photo VLM eval showed ROLLBACK.
 - Done: VLM-only migration — removed CLIP/SSIM fast eval, kept artifact detection, VLM is single eval signal. Removed ~2GB deps. Added diagnostic scores. Updated all tests, docs, score tracking.
 - Done: room_preservation rolled back to v4 (real-photo eval disproved fast-eval signal).
-- Now: v5+v4 is the active baseline (gen_v5 + room_v4). All prompt-only improvements exhausted. Eval pipeline is VLM-only.
+- Done: Merged test-1 branch (annotation circles → text coordinate descriptions). Gemini was reproducing circles in output despite anti-circle language. New approach: `_position_description()` converts normalized coords to text ("upper-left area, 30% from left, 50% from top"). `_bootstrap_chat` and `_continue_chat` now send clean base_image (no `draw_annotations`).
+- Done: Created `edit_v6.txt` for text-coordinate approach. v5 (anti-circle sandwich) obsolete since circles no longer drawn. v6 preserves INTERPRETATION RULES + PRESERVATION RULES from v5 but removes all circle-reference language.
+- Done: Edit eval with text-coordinate approach (5 runs). VLM total 61.6 mean but scores are misleading — generation rubric not suitable for edit evaluation (room_preservation 2.0/20 because it compares edited design to original room photo, not the base design). HoughCircles artifact detector shows false positives (61-273 per image from natural round objects). The text-coordinate approach eliminates the SOURCE of annotation artifacts — no circles are drawn, so none can leak into output.
+- Now: Active: gen_v5 + room_v4 + edit_v6. Eval pipeline is VLM-only. Edit eval needs its own rubric (not generation rubric).
 - Next: Phase B (T1+T0: export positions from iOS RoomPlan) or T2 code changes (#6 edit changelog, #9 room photo re-inclusion).
 - Blocked: #6 (edit changelog) and #9 (re-include room photo) need T2 code changes to `_continue_chat`/`_bootstrap_chat`
 
@@ -221,10 +224,10 @@ Edge SSIM +0.047 is the largest single-metric improvement across all loops. Dire
 |--------|--------|-------------|--------|
 | generation | **v5** | v3, v4, v6 (no effect), v7 (ICS, ROLLED BACK), v8 (lighting, ROLLED BACK) | Photorealism 13/15 = confirmed Gemini model ceiling |
 | room_preservation | **v4** | v3 (no effect), v5 (LiDAR scene data, **ROLLED BACK**) | v5 rolled back: fast eval false positive, real-photo VLM showed ROLLBACK -25.0. |
-| edit | **v5** | v2, v3 (not A/B testable), v4 (changelog placeholder, BLOCKED on T2), v5 (anti-artifact sandwich) | v5 active — fixes circle leakage. v4 ready for T2 changelog. |
+| edit | **v6** | v2, v3 (not A/B testable), v4 (changelog placeholder, BLOCKED on T2), v5 (anti-artifact sandwich, SUPERSEDED), v6 (text coordinates) | v6 active — no circles drawn on image, text coordinate descriptions instead. v5 obsolete since `draw_annotations` removed. |
 
 ## Code Changes Shipped (apply to all prompt versions)
-- `_build_edit_instructions()` restructured → multi-line format (Loop 6)
+- `_build_edit_instructions()` restructured → text-coordinate descriptions (merged test-1: `_position_description()` converts center_x/y/radius to "upper-left area, 30% from left..."). Replaces color circle references.
 - `CONTEXT_PROMPT` improved → lists specific architectural features (Loop 9), strengthened anti-artifact with explicit color naming (Loop 14)
 - `TEXT_FEEDBACK_TEMPLATE` improved → explicit preservation categories (Loop 9)
 - `_format_color_palette()` added → 60-30-10 proportional color formatting (Loop 11)
