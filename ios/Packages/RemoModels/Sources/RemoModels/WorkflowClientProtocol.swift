@@ -12,6 +12,7 @@ public protocol WorkflowClientProtocol: Sendable {
     func uploadPhoto(projectId: String, imageData: Data, photoType: String) async throws -> PhotoUploadResponse
     func deletePhoto(projectId: String, photoId: String) async throws
     func updatePhotoNote(projectId: String, photoId: String, note: String?) async throws
+    func confirmPhotos(projectId: String) async throws
 
     // Scan
     func uploadScan(projectId: String, scanData: [String: Any]) async throws

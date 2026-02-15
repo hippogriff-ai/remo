@@ -13,6 +13,7 @@ public struct IntakeChatScreen: View {
     @State private var selectedMode: String?
     @State private var showSkipConfirmation = false
     @State private var errorMessage: String?
+    @State private var selectedQuickReply: Int?
 
     public init(projectState: ProjectState, client: any WorkflowClientProtocol) {
         self.projectState = projectState
@@ -145,9 +146,20 @@ public struct IntakeChatScreen: View {
 
                         // Quick reply chips
                         if let options = projectState.currentIntakeOutput?.options, !options.isEmpty {
-                            QuickReplyChips(options: options) { option in
-                                Task { await sendMessage(option.value) }
+                            QuickReplyChips(
+                                options: options,
+                                selectedId: selectedQuickReply,
+                                disabled: isSending
+                            ) { option in
+                                selectedQuickReply = option.number
+                                Task { await sendMessage(option.label) }
                             }
+                        }
+
+                        // Typing indicator
+                        if isSending {
+                            TypingIndicatorBubble()
+                                .id("typing")
                         }
 
                         // Summary card
@@ -169,6 +181,15 @@ public struct IntakeChatScreen: View {
                 .onChange(of: projectState.chatMessages.count) { _, _ in
                     withAnimation {
                         proxy.scrollTo(projectState.chatMessages.count - 1, anchor: .bottom)
+                    }
+                    // Reset quick reply selection after response arrives
+                    selectedQuickReply = nil
+                }
+                .onChange(of: isSending) { _, sending in
+                    if sending {
+                        withAnimation {
+                            proxy.scrollTo("typing", anchor: .bottom)
+                        }
                     }
                 }
             }
@@ -229,9 +250,10 @@ public struct IntakeChatScreen: View {
         guard !trimmed.isEmpty else { return }
 
         isSending = true
-        defer { isSending = false; inputText = "" }
+        defer { isSending = false }
 
         projectState.chatMessages.append(ChatMessage(role: "user", content: trimmed))
+        inputText = ""
 
         do {
             let output = try await client.sendIntakeMessage(projectId: projectId, message: trimmed)
@@ -280,15 +302,28 @@ struct ChatBubble: View {
 
     private var isUser: Bool { message.role == "user" }
 
+    private var markdownContent: AttributedString {
+        (try? AttributedString(markdown: message.content, options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace))) ?? AttributedString(message.content)
+    }
+
     var body: some View {
         HStack {
             if isUser { Spacer(minLength: 60) }
-            Text(message.content)
+            Text(markdownContent)
                 .padding(.horizontal, 14)
                 .padding(.vertical, 10)
                 .background(isUser ? Color.accentColor : Color.secondary.opacity(0.2))
                 .foregroundStyle(isUser ? .white : .primary)
                 .clipShape(RoundedRectangle(cornerRadius: 16))
+                #if os(iOS)
+                .contextMenu {
+                    Button {
+                        UIPasteboard.general.string = message.content
+                    } label: {
+                        Label("Copy", systemImage: "doc.on.doc")
+                    }
+                }
+                #endif
             if !isUser { Spacer(minLength: 60) }
         }
     }
@@ -298,34 +333,79 @@ struct ChatBubble: View {
 
 struct QuickReplyChips: View {
     let options: [QuickReplyOption]
+    var selectedId: Int?
+    var disabled: Bool = false
     let onSelect: (QuickReplyOption) -> Void
 
     var body: some View {
         VStack(spacing: 8) {
             ForEach(options) { option in
+                let isSelected = selectedId == option.number
                 Button {
                     onSelect(option)
                 } label: {
                     HStack {
-                        Text("\(option.number)")
-                            .font(.caption.bold())
-                            .frame(width: 24, height: 24)
-                            .background(Color.accentColor.opacity(0.15))
-                            .clipShape(Circle())
+                        if isSelected {
+                            Image(systemName: "checkmark.circle.fill")
+                                .font(.caption.bold())
+                                .frame(width: 24, height: 24)
+                                .foregroundStyle(.white)
+                        } else {
+                            Text("\(option.number)")
+                                .font(.caption.bold())
+                                .frame(width: 24, height: 24)
+                                .background(Color.accentColor.opacity(0.15))
+                                .clipShape(Circle())
+                        }
                         Text(option.label)
                             .font(.subheadline)
                         Spacer()
                     }
                     .padding(.horizontal, 12)
                     .padding(.vertical, 10)
-                    .background(Color.secondary.opacity(0.12))
+                    .background(isSelected ? Color.accentColor : Color.secondary.opacity(0.12))
+                    .foregroundStyle(isSelected ? .white : .primary)
                     .clipShape(RoundedRectangle(cornerRadius: 12))
+                    .opacity(selectedId != nil && !isSelected ? 0.5 : 1.0)
                 }
                 .buttonStyle(.plain)
+                .disabled(disabled || selectedId != nil)
                 .accessibilityLabel("Option \(option.number): \(option.label)")
                 .accessibilityIdentifier("chat_option_\(option.number)")
             }
         }
+    }
+}
+
+// MARK: - Typing Indicator
+
+struct TypingIndicatorBubble: View {
+    @State private var animating = false
+
+    var body: some View {
+        HStack {
+            HStack(spacing: 4) {
+                ForEach(0..<3, id: \.self) { index in
+                    Circle()
+                        .fill(Color.secondary.opacity(0.5))
+                        .frame(width: 8, height: 8)
+                        .offset(y: animating ? -4 : 0)
+                        .animation(
+                            .easeInOut(duration: 0.4)
+                                .repeatForever(autoreverses: true)
+                                .delay(Double(index) * 0.15),
+                            value: animating
+                        )
+                }
+            }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 12)
+            .background(Color.secondary.opacity(0.2))
+            .clipShape(RoundedRectangle(cornerRadius: 16))
+            Spacer(minLength: 60)
+        }
+        .onAppear { animating = true }
+        .accessibilityLabel("Thinking...")
     }
 }
 
@@ -355,20 +435,30 @@ struct SummaryCard: View {
             Label("Design Brief", systemImage: "doc.text")
                 .font(.headline)
 
-            LabeledContent("Room Type", value: brief.roomType)
+            BriefField(label: "Room Type", value: brief.roomType)
 
             if !brief.painPoints.isEmpty {
-                LabeledContent("Change", value: brief.painPoints.joined(separator: ", "))
+                BriefField(label: "Change", value: brief.painPoints.joined(separator: ", "))
             }
 
             if !brief.keepItems.isEmpty {
-                LabeledContent("Keep", value: brief.keepItems.joined(separator: ", "))
+                BriefField(label: "Keep", value: brief.keepItems.joined(separator: ", "))
+            }
+
+            if let style = brief.styleProfile {
+                if let mood = style.mood, !mood.isEmpty {
+                    BriefField(label: "Mood", value: mood)
+                }
+                if !style.colors.isEmpty {
+                    BriefField(label: "Colors", value: style.colors.joined(separator: ", "))
+                }
             }
 
             Button("Looks Good!") {
                 onAction(.confirm)
             }
             .buttonStyle(.borderedProminent)
+            .controlSize(.large)
             .frame(maxWidth: .infinity)
             .accessibilityIdentifier("chat_confirm_brief")
 
@@ -376,12 +466,28 @@ struct SummaryCard: View {
                 onAction(.change)
             }
             .buttonStyle(.bordered)
+            .controlSize(.large)
             .frame(maxWidth: .infinity)
             .accessibilityIdentifier("chat_change_brief")
         }
         .padding()
         .background(Color.secondary.opacity(0.12))
         .clipShape(RoundedRectangle(cornerRadius: 16))
+    }
+}
+
+struct BriefField: View {
+    let label: String
+    let value: String
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(label)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            Text(value)
+                .font(.subheadline)
+        }
     }
 }
 

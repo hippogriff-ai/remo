@@ -40,6 +40,31 @@ def wrap_anthropic(client: Any) -> Any:
         return client
 
 
+def wrap_gemini(client: Any) -> Any:
+    """Wrap Gemini (google-genai) client for auto-tracing. No-op without LANGSMITH_API_KEY."""
+    if not os.environ.get("LANGSMITH_API_KEY", "").strip():
+        return client
+    try:
+        from langsmith.wrappers import wrap_gemini as _wrap
+    except (ImportError, ModuleNotFoundError):
+        _log.warning(
+            "langsmith_not_installed",
+            reason="LANGSMITH_API_KEY is set but langsmith is not installed; "
+            "install with: pip install 'langsmith>=0.2,<1'",
+        )
+        return client
+    try:
+        return _wrap(client)
+    except Exception as exc:
+        _log.error(
+            "langsmith_wrap_gemini_failed",
+            error=str(exc),
+            error_type=type(exc).__name__,
+            reason="langsmith Gemini wrapping failed; continuing without tracing",
+        )
+        return client
+
+
 def traceable(**kwargs: Any) -> Any:
     """Decorator for tracing arbitrary functions. No-op without LANGSMITH_API_KEY."""
     if not os.environ.get("LANGSMITH_API_KEY", "").strip():

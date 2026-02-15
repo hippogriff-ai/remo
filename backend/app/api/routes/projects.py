@@ -434,10 +434,6 @@ async def upload_photo(
                 return err
         else:
             state.photos.append(photo)
-            # Auto-transition to scan after minimum room photos (mirrors workflow behavior)
-            room_count = sum(1 for p in state.photos if p.photo_type == "room")
-            if room_count >= 2 and state.step == "photos":
-                state.step = "scan"
 
     logger.info(
         "photo_uploaded",
@@ -535,6 +531,37 @@ async def update_photo_note(
         photo.note = body.note
 
     logger.info("photo_note_updated", project_id=project_id, photo_id=photo_id)
+    return ActionResponse()
+
+
+# --- Confirm photos (advance to scan) ---
+
+
+@router.post(
+    "/projects/{project_id}/photos/confirm",
+    response_model=ActionResponse,
+    responses={404: {"model": ErrorResponse}, 409: {"model": ErrorResponse}},
+)
+async def confirm_photos(project_id: str, request: Request):
+    """Confirm photo selection -> advance to scan step."""
+    state = await _resolve_state(request, project_id)
+    if err := _check_step(state, "photos", "confirm photos"):
+        return err
+    assert state is not None
+
+    room_count = sum(1 for p in state.photos if p.photo_type == "room")
+    if room_count < 2:
+        return _error(409, "not_enough_photos", "Need at least 2 room photos before continuing")
+
+    if settings.use_temporal:
+        from app.workflows.design_project import DesignProjectWorkflow
+
+        if err := await _signal_workflow(request, project_id, DesignProjectWorkflow.confirm_photos):
+            return err
+    else:
+        state.step = "scan"
+
+    logger.info("photos_confirmed", project_id=project_id, room_photos=room_count)
     return ActionResponse()
 
 

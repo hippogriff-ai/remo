@@ -453,6 +453,7 @@ class TestOpenAPISchema:
             "/api/v1/projects/{project_id}/photos",
             "/api/v1/projects/{project_id}/photos/{photo_id}",
             "/api/v1/projects/{project_id}/photos/{photo_id}/note",
+            "/api/v1/projects/{project_id}/photos/confirm",
             "/api/v1/projects/{project_id}/scan",
             "/api/v1/projects/{project_id}/scan/skip",
             "/api/v1/projects/{project_id}/intake/start",

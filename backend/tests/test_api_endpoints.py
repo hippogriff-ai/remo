@@ -249,8 +249,8 @@ class TestPhotoUpload:
 
     @pytest.mark.asyncio
     @patch("app.api.routes.projects.validate_photo", return_value=_VALID)
-    async def test_auto_transitions_to_scan_after_two_photos(self, _mock_val, client, project_id):
-        """Step auto-transitions from photos to scan after 2nd valid photo."""
+    async def test_two_photos_stays_in_photos_until_confirmed(self, _mock_val, client, project_id):
+        """Step stays at photos after 2 room photos until explicitly confirmed."""
         for i in range(2):
             await client.post(
                 f"/api/v1/projects/{project_id}/photos",
@@ -258,8 +258,14 @@ class TestPhotoUpload:
             )
         state = await client.get(f"/api/v1/projects/{project_id}")
         body = state.json()
-        assert body["step"] == "scan"
+        assert body["step"] == "photos"
         assert len(body["photos"]) == 2
+
+        # Now confirm -> transitions to scan
+        resp = await client.post(f"/api/v1/projects/{project_id}/photos/confirm")
+        assert resp.status_code == 200
+        state = await client.get(f"/api/v1/projects/{project_id}")
+        assert state.json()["step"] == "scan"
 
     @pytest.mark.asyncio
     @patch("app.api.routes.projects.validate_photo", return_value=_VALID)
@@ -2513,6 +2519,7 @@ class TestProjectIsolation:
                 f"/api/v1/projects/{pid1}/photos",
                 files={"file": (f"room_{i}.jpg", io.BytesIO(b"img"), "image/jpeg")},
             )
+        await client.post(f"/api/v1/projects/{pid1}/photos/confirm")
 
         # Project 1 is at "scan", project 2 still at "photos"
         state1 = (await client.get(f"/api/v1/projects/{pid1}")).json()
@@ -2572,14 +2579,16 @@ class TestFullFlow:
         resp = await client.post("/api/v1/projects", json={"device_fingerprint": "test-e2e"})
         pid = resp.json()["project_id"]
 
-        # 2. Upload 2 photos (auto-transitions to scan after 2nd)
+        # 2. Upload 2 photos
         for i in range(2):
             await client.post(
                 f"/api/v1/projects/{pid}/photos",
                 files={"file": (f"room_{i}.jpg", io.BytesIO(b"img"), "image/jpeg")},
             )
 
-        # 3. Verify auto-transition to scan, then skip
+        # 3. Confirm photos -> scan, then skip scan
+        assert _mock_states[pid].step == "photos"
+        await client.post(f"/api/v1/projects/{pid}/photos/confirm")
         assert _mock_states[pid].step == "scan"
         await client.post(f"/api/v1/projects/{pid}/scan/skip")
 
@@ -2694,6 +2703,13 @@ class TestFullFlow:
             PhotoUploadResponse.model_validate(resp.json())
         body = (await client.get(f"/api/v1/projects/{pid}")).json()
         ws = WorkflowState.model_validate(body)
+        assert ws.step == "photos"
+
+        # Confirm photos → scan (validate ActionResponse)
+        resp = await client.post(f"/api/v1/projects/{pid}/photos/confirm")
+        ActionResponse.model_validate(resp.json())
+        body = (await client.get(f"/api/v1/projects/{pid}")).json()
+        ws = WorkflowState.model_validate(body)
         assert ws.step == "scan"
 
         # Skip scan → intake (validate ActionResponse)
@@ -2755,12 +2771,13 @@ class TestFullFlow:
         resp = await client.post("/api/v1/projects", json={"device_fingerprint": "test-premium"})
         pid = resp.json()["project_id"]
 
-        # 2. Upload 2 room photos (auto-transitions to scan)
+        # 2. Upload 2 room photos + confirm
         for i in range(2):
             await client.post(
                 f"/api/v1/projects/{pid}/photos",
                 files={"file": (f"room_{i}.jpg", io.BytesIO(b"img"), "image/jpeg")},
             )
+        await client.post(f"/api/v1/projects/{pid}/photos/confirm")
         assert _mock_states[pid].step == "scan"
 
         # 3. Upload inspiration photo with note DURING scan step (IMP-5)
@@ -2883,6 +2900,7 @@ class TestFullFlow:
                 f"/api/v1/projects/{pid}/photos",
                 files={"file": (f"room_{i}.jpg", io.BytesIO(b"img"), "image/jpeg")},
             )
+        await client.post(f"/api/v1/projects/{pid}/photos/confirm")
 
         # 2. Skip scan, confirm intake → generation
         await client.post(f"/api/v1/projects/{pid}/scan/skip")
@@ -2950,6 +2968,7 @@ class TestFullFlow:
                 f"/api/v1/projects/{pid}/photos",
                 files={"file": (f"room_{i}.jpg", io.BytesIO(b"img"), "image/jpeg")},
             )
+        await client.post(f"/api/v1/projects/{pid}/photos/confirm")
 
         # 2. First pass: scan → intake → confirm → select → iterate
         await client.post(f"/api/v1/projects/{pid}/scan/skip")
@@ -3024,6 +3043,7 @@ class TestFullFlow:
                 f"/api/v1/projects/{pid}/photos",
                 files={"file": (f"room_{i}.jpg", io.BytesIO(b"img"), "image/jpeg")},
             )
+        await client.post(f"/api/v1/projects/{pid}/photos/confirm")
         await client.post(f"/api/v1/projects/{pid}/scan/skip")
         await client.post(f"/api/v1/projects/{pid}/intake/start", json={"mode": "quick"})
         await client.post(
@@ -3724,16 +3744,17 @@ class TestEdgeCases:
     async def test_delete_room_photo_during_scan_keeps_step(self, _mock_val, client, project_id):
         """Deleting a room photo during scan keeps step at scan (forward-only).
 
-        User has 2 room photos → auto-transitions to scan → deletes 1 room photo
+        User has 2 room photos → confirms → scan → deletes 1 room photo
         → only 1 room photo remains → step stays at "scan" because the workflow
         state machine is forward-only (matches Temporal behavior).
         """
-        # Upload 2 room photos to get to scan
+        # Upload 2 room photos and confirm to get to scan
         for i in range(2):
             await client.post(
                 f"/api/v1/projects/{project_id}/photos",
                 files={"file": (f"room_{i}.jpg", io.BytesIO(b"img"), "image/jpeg")},
             )
+        await client.post(f"/api/v1/projects/{project_id}/photos/confirm")
         assert _mock_states[project_id].step == "scan"
         photo_ids = [p.photo_id for p in _mock_states[project_id].photos]
         assert len(photo_ids) == 2
@@ -3759,16 +3780,17 @@ class TestEdgeCases:
     ):
         """Deleting 1 of 2 room photos during scan keeps step at scan (forward-only).
 
-        Even though only 1 room photo remains (below the 2-photo auto-transition
+        Even though only 1 room photo remains (below the 2-photo confirmation
         threshold), the workflow state machine is forward-only — it never regresses.
         This matches Temporal behavior.
         """
-        # Upload 2 room photos
+        # Upload 2 room photos and confirm
         for i in range(2):
             await client.post(
                 f"/api/v1/projects/{project_id}/photos",
                 files={"file": (f"room_{i}.jpg", io.BytesIO(b"img"), "image/jpeg")},
             )
+        await client.post(f"/api/v1/projects/{project_id}/photos/confirm")
         assert _mock_states[project_id].step == "scan"
 
         # Add an inspiration photo during scan

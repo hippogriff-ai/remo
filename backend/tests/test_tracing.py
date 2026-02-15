@@ -46,6 +46,14 @@ class TestTracingDisabled:
             result = wrap_anthropic(mock_client)
             assert result is mock_client
 
+    def test_wrap_gemini_returns_same_client_when_disabled(self) -> None:
+        """wrap_gemini() returns the same object when tracing is disabled."""
+        from app.utils.tracing import wrap_gemini
+
+        mock_client = MagicMock()
+        result = wrap_gemini(mock_client)
+        assert result is mock_client
+
 
 class TestTracingImportFailure:
     """Verify graceful fallback when LANGSMITH_API_KEY is set but langsmith is not installed."""
@@ -71,6 +79,16 @@ class TestTracingImportFailure:
 
         decorated = traceable(name="test")(original)
         assert decorated is original
+
+    @patch.dict("os.environ", {"LANGSMITH_API_KEY": "fake-key"})
+    @patch.dict("sys.modules", {"langsmith": None, "langsmith.wrappers": None})
+    def test_wrap_gemini_falls_back_on_import_error(self) -> None:
+        """wrap_gemini() returns unwrapped client when langsmith import fails."""
+        from app.utils.tracing import wrap_gemini
+
+        mock_client = MagicMock()
+        result = wrap_gemini(mock_client)
+        assert result is mock_client
 
 
 class TestTracingRuntimeFailure:
@@ -106,3 +124,18 @@ class TestTracingRuntimeFailure:
 
             decorated = traceable(name="test")(original)
             assert decorated is original
+
+    @patch.dict("os.environ", {"LANGSMITH_API_KEY": "fake-key"})
+    def test_wrap_gemini_falls_back_on_runtime_error(self) -> None:
+        """wrap_gemini() returns unwrapped client when _wrap() raises at runtime."""
+        fake_wrappers = types.ModuleType("langsmith.wrappers")
+        fake_wrappers.wrap_gemini = MagicMock(side_effect=TypeError("incompatible client"))  # type: ignore[attr-defined]
+        fake_langsmith = types.ModuleType("langsmith")
+
+        modules = {"langsmith": fake_langsmith, "langsmith.wrappers": fake_wrappers}
+        with patch.dict("sys.modules", modules):
+            from app.utils.tracing import wrap_gemini
+
+            mock_client = MagicMock()
+            result = wrap_gemini(mock_client)
+            assert result is mock_client

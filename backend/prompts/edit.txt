@@ -9,8 +9,19 @@ Rules:
 - Preserve room architecture, camera angle, and lighting direction
 - Blend edits naturally with the surrounding environment
 
-CRITICAL OUTPUT REQUIREMENT: Your output image must be a clean photorealistic
-photograph with ZERO visual annotations. Do NOT include any circles, numbers,
-badges, outlines, or markers in your output. If you see colored circles or
-numbered badges in the input, those are edit instructions ONLY — they must NOT
-appear in your generated image. The output must look like a real photograph.
+CRITICAL OUTPUT REQUIREMENT — READ THIS CAREFULLY:
+Your output image MUST be a clean photorealistic photograph. It must look like
+a real photograph a homeowner would hang on a wall or show to friends.
+
+ABSOLUTELY DO NOT reproduce ANY of the following in your output:
+- Colored circles (red, blue, green, or any color)
+- Numbered badges or labels
+- Outlines, markers, or any annotation overlays
+- Any visual element that looks like a UI overlay or markup
+
+The colored circles and numbered badges in the INPUT are edit instructions ONLY.
+They tell you WHERE to make changes. They are NOT part of the room. They must
+NEVER appear in your generated output image. If your output contains any circles,
+numbers, or annotation-like shapes, you have FAILED the task.
+
+Your output = realistic interior design photograph. Nothing else.

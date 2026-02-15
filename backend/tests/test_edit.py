@@ -1259,3 +1259,78 @@ class TestContinueChatDirectly:
             pytest.raises(ApplicationError, match="No annotations or feedback"),
         ):
             await _continue_chat(inp, base_image)
+
+
+class TestCorruptR2History:
+    """Gap 1: Corrupt chat history JSON from R2 during continuation edit."""
+
+    @pytest.mark.asyncio
+    async def test_corrupt_r2_json_raises_non_retryable(self):
+        """When R2 returns invalid JSON for chat history, the edit activity
+        should raise a non-retryable ApplicationError instead of crashing
+        or retrying infinitely with the same corrupt data."""
+        from temporalio.exceptions import ApplicationError
+
+        from app.activities.edit import edit_design
+
+        inp = EditDesignInput(
+            project_id="proj-123",
+            base_image_url="https://r2.example.com/design.png",
+            room_photo_urls=["https://r2.example.com/room.jpg"],
+            feedback="Make the room brighter and more modern",
+            chat_history_key="projects/proj-123/gemini_chat_history.json",
+        )
+
+        with (
+            patch(
+                "app.activities.edit.download_image",
+                new_callable=AsyncMock,
+                return_value=_make_test_image(),
+            ),
+            patch("app.activities.edit.get_client"),
+            patch(
+                "app.activities.edit.restore_from_r2",
+                side_effect=ApplicationError(
+                    "Chat history corrupted: invalid JSON",
+                    non_retryable=True,
+                ),
+            ),
+        ):
+            with pytest.raises(ApplicationError, match="corrupted") as exc_info:
+                await edit_design(inp)
+            assert exc_info.value.non_retryable
+
+    @pytest.mark.asyncio
+    async def test_deserialization_failure_raises_non_retryable(self):
+        """When R2 returns valid JSON but with invalid data shape (e.g.
+        missing Content fields), restore_from_r2 raises non-retryable."""
+        from temporalio.exceptions import ApplicationError
+
+        from app.activities.edit import edit_design
+
+        inp = EditDesignInput(
+            project_id="proj-123",
+            base_image_url="https://r2.example.com/design.png",
+            room_photo_urls=["https://r2.example.com/room.jpg"],
+            feedback="Add more warm lighting throughout",
+            chat_history_key="projects/proj-123/gemini_chat_history.json",
+        )
+
+        with (
+            patch(
+                "app.activities.edit.download_image",
+                new_callable=AsyncMock,
+                return_value=_make_test_image(),
+            ),
+            patch("app.activities.edit.get_client"),
+            patch(
+                "app.activities.edit.restore_from_r2",
+                side_effect=ApplicationError(
+                    "Chat history deserialization failed",
+                    non_retryable=True,
+                ),
+            ),
+        ):
+            with pytest.raises(ApplicationError, match="deserialization") as exc_info:
+                await edit_design(inp)
+            assert exc_info.value.non_retryable
