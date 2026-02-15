@@ -75,7 +75,7 @@ def _make_room_image() -> Image.Image:
     return Image.fromarray(img)
 
 
-def _build_prompt(gen_version: str, room_pres_version: str) -> str:
+def _build_prompt(gen_version: str, room_pres_version: str, room_context: str = "") -> str:
     """Build the generation prompt using specific versions."""
     from app.activities.generate import _OPTION_VARIANTS
 
@@ -112,7 +112,7 @@ def _build_prompt(gen_version: str, room_pres_version: str) -> str:
     return gen_template.format(
         brief=brief_text.replace("{", "{{").replace("}", "}}"),
         keep_items="",
-        room_context="",
+        room_context=room_context.replace("{", "{{").replace("}", "}}"),
         room_preservation=room_pres,
         option_variant=_OPTION_VARIANTS[0],
     )
@@ -937,6 +937,187 @@ class TestPromptAB:
 
         print("\n" + "=" * 60)
         print("  DEEP EVAL ICS SUMMARY")
+        print("=" * 60)
+
+        if not b_totals or not c_totals:
+            print("  Insufficient data for comparison")
+            return
+
+        b_arr = np.array(b_totals, dtype=float)
+        c_arr = np.array(c_totals, dtype=float)
+        delta = c_arr.mean() - b_arr.mean()
+
+        print(f"  Baseline:  mean={b_arr.mean():.1f} std={b_arr.std():.1f} scores={b_totals}")
+        print(f"  Candidate: mean={c_arr.mean():.1f} std={c_arr.std():.1f} scores={c_totals}")
+        print(f"  Delta: {delta:+.1f}")
+
+        # Per-criterion comparison
+        criteria = [
+            "photorealism",
+            "style_adherence",
+            "color_palette",
+            "room_preservation",
+            "furniture_scale",
+            "lighting",
+            "design_coherence",
+            "brief_compliance",
+            "keep_items",
+        ]
+        print("\n  Per-criterion breakdown:")
+        for crit in criteria:
+            b_vals = [d.get(crit, 0) for d in baseline_deep if "total" in d]
+            c_vals = [d.get(crit, 0) for d in candidate_deep if "total" in d]
+            if b_vals and c_vals:
+                b_mean = np.mean(b_vals)
+                c_mean = np.mean(c_vals)
+                print(
+                    f"    {crit:25s}: baseline={b_mean:.1f}  candidate={c_mean:.1f}  delta={c_mean - b_mean:+.1f}"
+                )
+
+        # Bootstrap on totals
+        boot_diffs = []
+        for _ in range(10000):
+            b_sample = np.random.choice(b_arr, size=len(b_arr), replace=True)
+            c_sample = np.random.choice(c_arr, size=len(c_arr), replace=True)
+            boot_diffs.append(c_sample.mean() - b_sample.mean())
+        boot_diffs = np.array(boot_diffs)
+        ci_low = np.percentile(boot_diffs, 5)
+        ci_high = np.percentile(boot_diffs, 95)
+        p_better = np.mean(boot_diffs > 0)
+
+        if ci_low > 3:
+            verdict = "SHIP"
+        elif ci_low > 0:
+            verdict = "LIKELY_BETTER"
+        elif ci_high < 0:
+            verdict = "ROLLBACK"
+        else:
+            verdict = "INCONCLUSIVE"
+
+        print(f"\n  Bootstrap (90% CI): [{ci_low:+.1f}, {ci_high:+.1f}]")
+        print(f"  P(candidate better): {p_better:.3f}")
+        print(f"  Verdict: {verdict}")
+        print("=" * 60)
+
+    def test_scene_data_fast(self):
+        """Fast eval: gen_v5+room_v5 (structured scene data) vs gen_v5+room_v4 (baseline).
+
+        room_preservation_v5 adds DIMENSIONAL CONSTRAINTS section.
+        _format_room_context() now outputs structured sections (ROOM GEOMETRY,
+        WALLS with compass, FIXED OPENINGS, EXISTING FURNITURE with proportions).
+
+        Target: Room Preservation +0.5pt, Furniture Scale +0.5-1.0pt (deep eval).
+        """
+        room_image = _make_room_image()
+
+        # Structured room context (simulates LiDAR-measured room)
+        room_context = (
+            "ROOM GEOMETRY (LiDAR-measured, precise):\n"
+            "- Dimensions: 4.2m wide × 5.8m long, ceiling height 2.7m\n"
+            "- Floor area: 24.4 m²\n\n"
+            "WALLS (4 detected):\n"
+            "- wall_0: 4.2m wide, 2.7m tall, faces south (0°)\n"
+            "- wall_1: 5.8m wide, 2.7m tall, faces west (90°)\n"
+            "- wall_2: 4.2m wide, 2.7m tall, faces north (180°)\n"
+            "- wall_3: 5.8m wide, 2.7m tall, faces east (270°)\n\n"
+            "FIXED OPENINGS (do not relocate):\n"
+            "- door (0.9m × 2.1m)\n"
+            "- window (1.2m × 1.5m)\n\n"
+            "EXISTING FURNITURE (scale reference — respect these proportions):\n"
+            "- sofa: 2.1m × 0.9m footprint, 0.8m tall — spans ~50% of shorter wall\n"
+            "- coffee_table: 1.2m × 0.6m footprint, 0.5m tall\n"
+            "- bookshelf: 0.8m × 0.3m footprint, 1.8m tall\n"
+        )
+
+        baseline_prompt = _build_prompt("v5", "v4")
+        candidate_prompt = _build_prompt("v5", "v5", room_context=room_context)
+
+        baseline_all, candidate_all = _run_ab_comparison(
+            "gen_v5+room_v4 (baseline)",
+            "gen_v5+room_v5 (scene data)",
+            baseline_prompt,
+            candidate_prompt,
+            room_image,
+        )
+
+        print("\n" + "=" * 60)
+        print("  SCENE DATA FAST EVAL SUMMARY")
+        print("=" * 60)
+        _print_bootstrap_summary("v5+room_v4", "v5+room_v5", baseline_all, candidate_all)
+
+    @pytest.mark.asyncio
+    @pytest.mark.skipif(
+        not os.environ.get("ANTHROPIC_API_KEY"),
+        reason="ANTHROPIC_API_KEY not set (needed for deep eval)",
+    )
+    async def test_scene_data_deep(self):
+        """Deep eval: gen_v5+room_v5 (structured scene data) vs gen_v5+room_v4 (baseline).
+
+        Uses 100-point rubric. Specifically targets room_preservation (18/20, 2pt headroom)
+        and furniture_scale (9.2/10, 0.8pt headroom).
+        """
+        import numpy as np
+
+        room_image = _make_room_image()
+
+        room_context = (
+            "ROOM GEOMETRY (LiDAR-measured, precise):\n"
+            "- Dimensions: 4.2m wide × 5.8m long, ceiling height 2.7m\n"
+            "- Floor area: 24.4 m²\n\n"
+            "WALLS (4 detected):\n"
+            "- wall_0: 4.2m wide, 2.7m tall, faces south (0°)\n"
+            "- wall_1: 5.8m wide, 2.7m tall, faces west (90°)\n"
+            "- wall_2: 4.2m wide, 2.7m tall, faces north (180°)\n"
+            "- wall_3: 5.8m wide, 2.7m tall, faces east (270°)\n\n"
+            "FIXED OPENINGS (do not relocate):\n"
+            "- door (0.9m × 2.1m)\n"
+            "- window (1.2m × 1.5m)\n\n"
+            "EXISTING FURNITURE (scale reference — respect these proportions):\n"
+            "- sofa: 2.1m × 0.9m footprint, 0.8m tall — spans ~50% of shorter wall\n"
+            "- coffee_table: 1.2m × 0.6m footprint, 0.5m tall\n"
+            "- bookshelf: 0.8m × 0.3m footprint, 1.8m tall\n"
+        )
+
+        baseline_prompt = _build_prompt("v5", "v4")
+        candidate_prompt = _build_prompt("v5", "v5", room_context=room_context)
+
+        print("\n" + "=" * 60)
+        print(f"  DEEP EVAL SCENE DATA: v5+room_v4 vs v5+room_v5 ({NUM_RUNS} runs)")
+        print("=" * 60)
+
+        baseline_deep, candidate_deep = [], []
+
+        for i in range(NUM_RUNS):
+            print(f"\n--- Run {i + 1}/{NUM_RUNS} ---")
+
+            print("  Baseline (v5+room_v4)...", end=" ", flush=True)
+            b_img = await _generate_image(baseline_prompt, room_image)
+            print("generated...", end=" ", flush=True)
+            b_deep = await _run_deep_eval(b_img, room_image, brief=TEST_BRIEF)
+            baseline_deep.append(b_deep)
+            if "total" in b_deep:
+                print(f"total={b_deep['total']} tag={b_deep['tag']}")
+                _append_result("deep_scene_baseline_v5+room_v4", b_deep)
+            else:
+                print(f"SKIP: {b_deep}")
+
+            print("  Candidate (v5+room_v5)...", end=" ", flush=True)
+            c_img = await _generate_image(candidate_prompt, room_image)
+            print("generated...", end=" ", flush=True)
+            c_deep = await _run_deep_eval(c_img, room_image, brief=TEST_BRIEF)
+            candidate_deep.append(c_deep)
+            if "total" in c_deep:
+                print(f"total={c_deep['total']} tag={c_deep['tag']}")
+                _append_result("deep_scene_candidate_v5+room_v5", c_deep)
+            else:
+                print(f"SKIP: {c_deep}")
+
+        # Summary
+        b_totals = [d["total"] for d in baseline_deep if "total" in d]
+        c_totals = [d["total"] for d in candidate_deep if "total" in d]
+
+        print("\n" + "=" * 60)
+        print("  DEEP EVAL SCENE DATA SUMMARY")
         print("=" * 60)
 
         if not b_totals or not c_totals:

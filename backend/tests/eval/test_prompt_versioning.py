@@ -14,8 +14,8 @@ class TestGetActiveVersion:
     def test_generation_active_v5(self):
         assert get_active_version("generation") == "v5"
 
-    def test_room_preservation_active_v4(self):
-        assert get_active_version("room_preservation") == "v4"
+    def test_room_preservation_active_v5(self):
+        assert get_active_version("room_preservation") == "v5"
 
     def test_edit_active_v5(self):
         assert get_active_version("edit") == "v5"
@@ -27,6 +27,9 @@ class TestGetActiveVersion:
 class TestGetPreviousVersion:
     def test_generation_previous_v2(self):
         assert get_previous_version("generation") == "v2"
+
+    def test_room_preservation_previous_v4(self):
+        assert get_previous_version("room_preservation") == "v4"
 
     def test_edit_previous_v1(self):
         assert get_previous_version("edit") == "v1"
@@ -85,6 +88,7 @@ class TestListVersions:
         assert "v1" in versions
         assert "v2" in versions
         assert "v4" in versions
+        assert "v5" in versions
 
     def test_unknown_prompt_empty(self):
         versions = list_versions("nonexistent_prompt_xyz")

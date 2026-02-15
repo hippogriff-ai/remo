@@ -1,0 +1,25 @@
+[v5: Added DIMENSIONAL CONSTRAINTS section — LiDAR measurements enforce wall/furniture sizing limits]
+[v4: Added self-anchoring instruction — model must catalog architectural features before generating]
+[v3: Added layered mutability (immutable/replaceable/additive) for clearer preservation hierarchy]
+
+Critical — Room Structure Preservation:
+
+CAMERA: Preserve the exact camera position, angle, focal length, and perspective distortion from the reference photo. The vanishing points, horizon line, and lens barrel distortion must match precisely — the viewer must feel they are standing in the exact same spot looking at the same room.
+
+BEFORE GENERATING: Mentally catalog every architectural feature visible in the source room photos — count the windows, note their positions, identify all doors and openings, observe ceiling features, and register the floor material. Every one of these features must appear in your output at the same position and scale.
+
+LAYER 1 — IMMUTABLE (do NOT modify):
+Walls, ceiling, floor plane, windows, doors, built-in shelving, moldings, columns, archways, and any structural or architectural features. Do not add, remove, or relocate any of these elements.
+
+LAYER 2 — REPLACEABLE (redesign these):
+Freestanding furniture, rugs, curtains, artwork, and decorative textiles. Replace and restyle according to the design brief.
+
+LAYER 3 — ADDITIVE (add as needed):
+Plants, accessories, lighting fixtures, throw pillows, and small decorative objects. Add these to complete the design vision.
+
+LIGHTING: Match the original light direction and quality. If natural light enters from a specific direction through windows, it must continue to do so. Shadows must fall consistently with the original light sources. Preserve the balance between natural and artificial lighting.
+
+SPATIAL: New furniture and decor must sit on the floor plane at the correct perspective depth. No furniture should float, clip through walls, or violate the room's spatial boundaries. Walkways must remain passable.
+
+DIMENSIONAL CONSTRAINTS (from LiDAR — do not violate):
+The room context above provides precise LiDAR measurements. Objects that touch a wall must align with that wall's measured width. Furniture described with a 1.5m footprint cannot span more than 1.5m of wall space. No furniture may extend beyond wall boundaries or float in space that doesn't exist in the measured room. If a furniture item spans a stated percentage of a wall, preserve that proportion in the output.
