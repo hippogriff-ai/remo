@@ -215,19 +215,25 @@ Edge SSIM +0.047 is the largest single-metric improvement across all loops. Dire
 - Done: Merged test-1 branch (annotation circles → text coordinate descriptions). Gemini was reproducing circles in output despite anti-circle language. New approach: `_position_description()` converts normalized coords to text ("upper-left area, 30% from left, 50% from top"). `_bootstrap_chat` and `_continue_chat` now send clean base_image (no `draw_annotations`).
 - Done: Created `edit_v6.txt` for text-coordinate approach. v5 (anti-circle sandwich) obsolete since circles no longer drawn. v6 preserves INTERPRETATION RULES + PRESERVATION RULES from v5 but removes all circle-reference language.
 - Done: Edit eval with text-coordinate approach (5 runs). VLM total 61.6 mean but scores are misleading — generation rubric not suitable for edit evaluation (room_preservation 2.0/20 because it compares edited design to original room photo, not the base design). HoughCircles artifact detector shows false positives (61-273 per image from natural round objects). The text-coordinate approach eliminates the SOURCE of annotation artifacts — no circles are drawn, so none can leak into output.
-- Now: Active: gen_v5 + room_v4 + edit_v6. Eval pipeline is VLM-only. Edit eval needs its own rubric (not generation rubric).
-- Next: Phase B (T1+T0: export positions from iOS RoomPlan) or T2 code changes (#6 edit changelog, #9 room photo re-inclusion).
-- Blocked: #6 (edit changelog) and #9 (re-include room photo) need T2 code changes to `_continue_chat`/`_bootstrap_chat`
+- Done: Edit rubric language updated for text-coordinate approach (design_eval.py: "annotated regions" → "targeted areas", "unannotated" → "non-targeted").
+- Done: A/B edit test wired to edit rubric (50pt) via `_run_edit_vlm_eval()` — was incorrectly using generation rubric (100pt).
+- Done: Removed dead `_load_prompt()` and `PROMPTS_DIR` from edit.py (test-1 artifact, we use `load_versioned_prompt()`).
+- Done: Room photo re-anchoring in `_continue_chat()` — downloads room photos and prepends them as spatial anchors ("Reference room photos (preserve this architecture):") to every continuation turn. Prevents architectural drift across multi-turn edits.
+- Done: Cumulative edit changelog — `_build_changelog(history)` scans chat history for previous edit instructions and feedback, builds a summary. `edit_v7.txt` includes `{changelog}` placeholder. Prevents Gemini from forgetting earlier changes.
+- Now: Active: gen_v5 + room_v4 + edit_v7. All code improvements shipped. VLM-only eval pipeline with proper edit rubric.
+- Next: Run real edit eval with edit rubric to establish text-coordinate + changelog baseline scores. Phase B (export positions from iOS RoomPlan).
 
 ## Prompt Version Status
 | Prompt | Active | New versions | Status |
 |--------|--------|-------------|--------|
 | generation | **v5** | v3, v4, v6 (no effect), v7 (ICS, ROLLED BACK), v8 (lighting, ROLLED BACK) | Photorealism 13/15 = confirmed Gemini model ceiling |
 | room_preservation | **v4** | v3 (no effect), v5 (LiDAR scene data, **ROLLED BACK**) | v5 rolled back: fast eval false positive, real-photo VLM showed ROLLBACK -25.0. |
-| edit | **v6** | v2, v3 (not A/B testable), v4 (changelog placeholder, BLOCKED on T2), v5 (anti-artifact sandwich, SUPERSEDED), v6 (text coordinates) | v6 active — no circles drawn on image, text coordinate descriptions instead. v5 obsolete since `draw_annotations` removed. |
+| edit | **v7** | v2, v3 (not A/B testable), v4 (changelog placeholder, SUPERSEDED by v7), v5 (anti-artifact sandwich, SUPERSEDED), v6 (text coordinates), v7 (text coords + changelog) | v7 active — text coordinate descriptions + cumulative changelog. Room photos re-anchored every continuation turn. |
 
 ## Code Changes Shipped (apply to all prompt versions)
 - `_build_edit_instructions()` restructured → text-coordinate descriptions (merged test-1: `_position_description()` converts center_x/y/radius to "upper-left area, 30% from left..."). Replaces color circle references.
+- `CONTEXT_PROMPT` updated → removed all circle/badge/marker references, now describes "areas by position" not "numbered circles". Retry messages simplified similarly.
+- `draw_annotations` import removed from edit.py — images sent clean to Gemini.
 - `CONTEXT_PROMPT` improved → lists specific architectural features (Loop 9), strengthened anti-artifact with explicit color naming (Loop 14)
 - `TEXT_FEEDBACK_TEMPLATE` improved → explicit preservation categories (Loop 9)
 - `_format_color_palette()` added → 60-30-10 proportional color formatting (Loop 11)
@@ -261,32 +267,15 @@ Edge SSIM +0.047 is the largest single-metric improvement across all loops. Dire
 - [x] #19: Furniture style consistency in `_build_generation_prompt()` (Low, Low) — SKIPPED: design coherence at 9.6/10, 0.4pt headroom within judge noise
 - [x] Target 4 Phase A: LiDAR scene data — room_preservation_v5 + restructured `_format_room_context()` — **SHIPPED** (edge SSIM +0.047, deep eval neutral)
 
-### Blocked (needs T2 code changes) — T3 prompt work READY, awaiting T2 implementation
-
-#### #6: Cumulative changelog in edit prompts (High, Medium)
-**T3 status**: `edit_v4.txt` created with `{changelog}` placeholder. Ready to activate.
-**T2 must implement** in `_continue_chat()` (edit.py):
-1. Parse the chat history (restored from R2) to extract previous edit instructions
-2. Build a changelog summary: "Previous edits: 1) [region 1 instruction], 2) [region 2 instruction]..."
-3. Pass the changelog string when formatting the edit prompt template
-4. In `_build_edit_instructions()` or the template `.format()` call, add `changelog=changelog_text`
-5. When no previous edits exist (first edit = bootstrap), pass `changelog=""`
-**Why it matters**: Without edit history, Gemini forgets what was changed before, causing drift across iterations. Research §5.2: "cumulative changelog prevents regression to mean."
-
-#### #9: Re-include original room photo in every edit turn (High, Low)
-**T3 status**: No prompt file needed — purely a code change.
-**T2 must implement** in `_continue_chat()` (edit.py):
-1. Download room photos from `input.room_photo_urls` (same as in `_bootstrap_chat()`)
-2. Prepend them to `message_parts` before the annotated image and edit instructions
-3. Add a text prefix: "Reference room photos (preserve this architecture):"
-4. Respect the `MAX_INPUT_IMAGES` cap — room photos + annotated + any previous = must stay under 14
-**Why it matters**: After several edit turns, Gemini loses spatial reference for the original room. Re-including the room photos anchors the architecture. Research §5.4: "re-anchoring every turn prevents spatial drift."
+### Completed (formerly blocked on T2)
+- [x] #6: Cumulative changelog — `_build_changelog(history)` scans chat history, `edit_v7.txt` has `{changelog}` placeholder
+- [x] #9: Room photo re-anchoring — `_continue_chat()` downloads and prepends room photos every turn
 
 ## Open Questions
 - **Photorealism CONFIRMED at 13/15 ceiling** — v6, v7, v8 all scored 13.0. Not improvable by prompt changes.
 - **Lighting CONFIRMED at 9/10 ceiling** — v8's explicit directives had zero effect (9→9).
 - Room preservation (18/20) at Gemini's spatial accuracy ceiling (53% IoU per §3.1).
-- Remaining HIGH-impact items (#6, #9) require T2 code changes to `_continue_chat`/`_bootstrap_chat`.
+- HIGH-impact items #6 (changelog) and #9 (room photo re-anchoring) shipped in edit_v7.
 - Edit prompt improvements (v2, v3) not testable via current A/B framework.
 - Color palette 60-30-10 formatting shipped but its isolated effect is unmeasurable (bundled with prompt version).
 - Further quality gains beyond 91.8/100 likely require a model upgrade (Gemini 3 Pro → next gen) or multi-step generation.
@@ -299,7 +288,7 @@ Edge SSIM +0.047 is the largest single-metric improvement across all loops. Dire
 - `backend/prompts/generation_v8.txt` — Practical lighting, ROLLED BACK
 - `backend/prompts/edit_v4.txt` — Changelog placeholder, BLOCKED on T2 (ready to activate)
 - `backend/prompts/room_preservation_v5.txt` — LiDAR scene data + dimensional constraints, PENDING EVAL
-- `backend/prompts/prompt_versions.json` — active: gen=v5, room=v5, edit=v5
+- `backend/prompts/prompt_versions.json` — active: gen=v5, room=v4, edit=v7
 - `backend/app/activities/generate.py` — `_format_room_context()` restructured (Loop 15) + `_orientation_to_compass()` + `_format_color_palette()` (Loop 11)
 - `backend/tests/test_generate.py` — 116 tests (v5 assertion + color palette + compass + structured output + footprint/wide label + changelog stripping)
 - `backend/tests/eval/test_prompt_versioning.py` — Updated: v5+v5 active version assertions

@@ -205,20 +205,21 @@ _GENERATION_CRITERIA_MAX = {
 
 _EDIT_RUBRIC = """\
 Score this AI-edited room image against the rubric below. You are given:
-1. The original image (before edit)
+1. The original design image (before edit)
 2. The edited image (after edit)
-3. The edit instruction describing what should change
+3. The edit instruction describing what should change and where
 
 ## Rubric (50 points total):
 
-1. **Edit Fidelity** (0-15): 15: annotated regions changed exactly as instructed. \
+1. **Edit Fidelity** (0-15): 15: targeted areas changed exactly as instructed. \
 10: mostly correct changes. 5: partially correct. 0: wrong changes or no change.
 
-2. **Preservation Fidelity** (0-15): 15: unannotated regions completely unchanged. \
+2. **Preservation Fidelity** (0-15): 15: non-targeted areas completely unchanged. \
 10: minor unintended changes. 5: noticeable drift. 0: significant unwanted changes.
 
-3. **Artifact Cleanliness** (0-10): 10: no annotation markers visible in output. \
-7: barely visible traces. 3: clearly visible markers. 0: prominent annotation artifacts.
+3. **Artifact Cleanliness** (0-10): 10: clean photorealistic output with no visual \
+artifacts, overlays, or markers. 7: minor artifacts. 3: clearly visible artifacts \
+or non-photorealistic elements. 0: prominent artifacts or annotation-like shapes.
 
 4. **Seamless Blending** (0-5): 5: edited regions blend naturally with surroundings. \
 3: minor seam artifacts. 0: obvious cut-paste boundaries.

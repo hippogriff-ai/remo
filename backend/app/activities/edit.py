@@ -48,8 +48,6 @@ logger = structlog.get_logger()
 # Strong references to background eval tasks to prevent GC before completion
 _background_tasks: set[asyncio.Task] = set()  # type: ignore[type-arg]
 
-PROMPTS_DIR = Path(__file__).parent.parent.parent / "prompts"
-
 CONTEXT_PROMPT = (
     "Here is a room redesign. I will send you edits describing specific areas "
     "to change by their position in the image, or as text instructions. "
@@ -66,18 +64,6 @@ TEXT_FEEDBACK_TEMPLATE = (
     "camera angle, perspective, and overall composition unchanged. "
     "Return a clean photorealistic photograph with zero annotations or markers."
 )
-
-
-def _load_prompt(name: str) -> str:
-    """Load a prompt template file, raising non-retryable error if missing."""
-    path = PROMPTS_DIR / name
-    try:
-        return path.read_text()
-    except FileNotFoundError as exc:
-        raise ApplicationError(
-            f"Prompt template not found: {name}",
-            non_retryable=True,
-        ) from exc
 
 
 def _position_description(center_x: float, center_y: float, radius: float) -> str:
@@ -150,6 +136,53 @@ def _build_eval_instruction(input: EditDesignInput) -> str:
     if input.feedback:
         parts.append(input.feedback)
     return "\n".join(parts) if parts else "edit"
+
+
+def _build_changelog(history: list) -> str:
+    """Extract previous edit instructions from chat history into a changelog.
+
+    Scans user turns for text parts containing edit instructions (Region/ACTION
+    patterns) or feedback (TEXT_FEEDBACK_TEMPLATE markers). Returns a formatted
+    changelog string, or empty string if this is the first edit (bootstrap).
+    """
+    edits: list[str] = []
+    for content in history:
+        if content.role != "user":
+            continue
+        for part in content.parts:
+            if not hasattr(part, "text") or not part.text:
+                continue
+            text = part.text
+            # Skip context prompt (Turn 1 bootstrap)
+            if text == CONTEXT_PROMPT:
+                continue
+            # Detect region-based edits
+            if "Region " in text and "ACTION:" in text:
+                # Extract a compact summary per region
+                for line in text.split("\n"):
+                    line = line.strip()
+                    if line.startswith("Region "):
+                        edits.append(f"- {line}")
+                    elif line.startswith("INSTRUCTION:"):
+                        edits.append(f"  {line}")
+            # Detect text feedback
+            elif "modify this room design" in text.lower():
+                # Extract the user's feedback from TEXT_FEEDBACK_TEMPLATE
+                for line in text.split("\n"):
+                    line = line.strip()
+                    if (
+                        line
+                        and not line.startswith("Keep all")
+                        and not line.startswith("Return")
+                        and "modify this room design" not in line.lower()
+                    ):
+                        edits.append(f"- Feedback: {line}")
+
+    if not edits:
+        return ""
+
+    header = "PREVIOUS EDITS (preserve all these changes):"
+    return f"{header}\n" + "\n".join(edits)
 
 
 def _upload_image(image: Image.Image, project_id: str) -> str:
@@ -235,7 +268,8 @@ async def _bootstrap_chat(
         edit_template = load_versioned_prompt("edit")
         instructions = _build_edit_instructions(input.annotations)
         edit_prompt = edit_template.format(
-            edit_instructions=instructions.replace("{", "{{").replace("}", "}}")
+            edit_instructions=instructions.replace("{", "{{").replace("}", "}}"),
+            changelog="",  # No previous edits on bootstrap
         )
         edit_parts.extend([base_image, edit_prompt])
 
@@ -279,19 +313,46 @@ async def _continue_chat(
     """
     from google.genai import types as gtypes
 
+    if not input.annotations and not input.feedback:
+        raise ApplicationError(
+            "No annotations or feedback provided",
+            non_retryable=True,
+        )
+
     client = get_client()
     # Sync R2 download in thread pool
     history = await asyncio.to_thread(restore_from_r2, input.project_id)
 
+    # Re-anchor room photos so Gemini retains architectural context across edits.
+    # Without these, spatial drift accumulates after several edit turns.
+    room_images: list[Image.Image] = []
+    if input.room_photo_urls:
+        room_images = await download_images(input.room_photo_urls)
+
     # Build message parts (supports annotations, feedback, or both)
     message_parts: list = []
+
+    # Prepend room photos as spatial anchors (capped to leave room for edit images)
+    if room_images:
+        # Reserve slots: base_image (1 if annotations) + safety margin
+        reserved = 2 if input.annotations else 1
+        max_room = MAX_INPUT_IMAGES - reserved
+        if len(room_images) > max_room:
+            room_images = room_images[:max_room]
+        message_parts.append("Reference room photos (preserve this architecture):")
+        message_parts.extend(room_images)
+
+    # Build cumulative changelog from previous edit turns
+    changelog = _build_changelog(history)
+
     if input.annotations:
         assert base_image is not None  # guaranteed: caller downloads when annotations present
         # Send clean base image with text coordinates — no visual annotations
         edit_template = load_versioned_prompt("edit")
         instructions = _build_edit_instructions(input.annotations)
         edit_prompt = edit_template.format(
-            edit_instructions=instructions.replace("{", "{{").replace("}", "}}")
+            edit_instructions=instructions.replace("{", "{{").replace("}", "}}"),
+            changelog=changelog.replace("{", "{{").replace("}", "}}"),
         )
         message_parts.extend([base_image, edit_prompt])
 
@@ -299,16 +360,11 @@ async def _continue_chat(
         feedback_prompt = TEXT_FEEDBACK_TEMPLATE.format(
             feedback=input.feedback.replace("{", "{{").replace("}", "}}")
         )
-        if message_parts:
+        if input.annotations:
+            # Both annotations and feedback — append feedback as additional context
             message_parts.append(f"\nAdditional feedback: {input.feedback}")
         else:
             message_parts.append(feedback_prompt)
-
-    if not message_parts:
-        raise ApplicationError(
-            "No annotations or feedback provided",
-            non_retryable=True,
-        )
 
     # Sync Gemini call in thread pool
     response = await asyncio.to_thread(continue_chat, history, message_parts, client)

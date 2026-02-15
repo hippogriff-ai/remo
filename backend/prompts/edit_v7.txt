@@ -1,0 +1,31 @@
+[v7: Cumulative changelog — prevents edit drift across multi-turn sessions]
+[v7 builds on v6 (text coordinates) + adds {changelog} for previous edit history]
+[Target metric: preservation fidelity — Gemini retains changes from earlier rounds]
+[Research: §5.2 cumulative changelog prevents regression to mean]
+
+I want you to edit specific areas of this interior design image.
+The areas to change are described by their position in the image:
+
+{edit_instructions}
+
+{changelog}
+
+INTERPRETATION RULES:
+- When an AVOID list is provided, focus on what TO use instead. For example, "AVOID: brass, chrome" means use alternative finishes like matte black, brushed nickel, or wood.
+- When CONSTRAINTS are given, treat them as positive design parameters that guide material and style selection.
+
+PRESERVATION RULES (strictly enforced):
+- Apply ONLY the specified changes to the described areas
+- Every element outside the described regions must remain pixel-identical
+- Specifically preserve these unchanged:
+  * Wall colors, textures, and architectural features
+  * All furniture not targeted for editing
+  * Window treatments and natural light direction
+  * Floor material and any rugs not targeted
+  * Camera angle, perspective, and focal length
+  * Overall color temperature and white balance
+  * ALL changes from previous edit rounds (see changelog above)
+
+Your output image MUST be a clean photorealistic photograph — the kind a
+homeowner would show to friends or post online. No overlays, markers, text,
+circles, numbers, or any annotation-like shapes.

@@ -317,6 +317,95 @@ async def _run_vlm_eval(
         return {"error": str(e)}
 
 
+async def _run_edit_vlm_eval(
+    edited_image: Image.Image,
+    original_image: Image.Image,
+    edit_instruction: str,
+) -> dict:
+    """Run VLM eval using the edit rubric (50 points, 5 criteria) on PIL Images.
+
+    Unlike _run_vlm_eval (generation rubric), this compares the before/after
+    design images and judges whether the edit instruction was followed.
+    """
+    api_key = os.environ.get("ANTHROPIC_API_KEY")
+    if not api_key:
+        return {"skipped": True, "reason": "ANTHROPIC_API_KEY not set"}
+
+    try:
+        import base64
+        import io
+
+        import anthropic
+
+        from app.activities.design_eval import (
+            _EDIT_CRITERIA_MAX,
+            _EDIT_RESPONSE_FORMAT,
+            _EDIT_RUBRIC,
+            _edit_tag,
+            _parse_criteria,
+        )
+        from app.activities.shopping import _extract_json
+
+        def _pil_to_b64(img: Image.Image, max_bytes: int = 4_500_000) -> tuple[str, str]:
+            buf = io.BytesIO()
+            img_rgb = img.convert("RGB")
+            img_rgb.save(buf, format="JPEG", quality=85)
+            if buf.tell() <= max_bytes:
+                return base64.standard_b64encode(buf.getvalue()).decode("ascii"), "image/jpeg"
+            scale = (max_bytes / buf.tell()) ** 0.5
+            new_size = (int(img.width * scale), int(img.height * scale))
+            img_resized = img_rgb.resize(new_size, Image.LANCZOS)
+            buf = io.BytesIO()
+            img_resized.save(buf, format="JPEG", quality=80)
+            return base64.standard_b64encode(buf.getvalue()).decode("ascii"), "image/jpeg"
+
+        orig_b64, orig_mime = _pil_to_b64(original_image)
+        edit_b64, edit_mime = _pil_to_b64(edited_image)
+
+        prompt_text = (
+            f"{_EDIT_RUBRIC}\n\n## Edit instruction:\n{edit_instruction}\n\n{_EDIT_RESPONSE_FORMAT}"
+        )
+
+        content = [
+            {"type": "text", "text": "Original design image (before edit):"},
+            {
+                "type": "image",
+                "source": {"type": "base64", "media_type": orig_mime, "data": orig_b64},
+            },
+            {"type": "text", "text": "Edited image (after edit):"},
+            {
+                "type": "image",
+                "source": {"type": "base64", "media_type": edit_mime, "data": edit_b64},
+            },
+            {"type": "text", "text": prompt_text},
+        ]
+
+        async with anthropic.AsyncAnthropic(api_key=api_key) as client:
+            response = await client.messages.create(
+                model="claude-sonnet-4-5-20250929",
+                max_tokens=2048,
+                messages=[{"role": "user", "content": content}],
+            )
+
+        text = "".join(b.text for b in response.content if hasattr(b, "text"))
+        raw = _extract_json(text)
+        if not raw:
+            return {"error": f"Could not parse JSON: {text[:200]}"}
+
+        criteria = _parse_criteria(raw, _EDIT_CRITERIA_MAX)
+        total = sum(c.score for c in criteria)
+        tag = _edit_tag(total)
+
+        return {
+            "total": total,
+            "tag": tag,
+            **{c.name: c.score for c in criteria},
+            "notes": raw.get("notes", ""),
+        }
+    except Exception as e:
+        return {"error": str(e)}
+
+
 def _append_result(version: str, scores: dict) -> None:
     """Append eval result to history file."""
     entry = {
@@ -571,7 +660,8 @@ class TestPromptAB:
             edit_instructions = _build_edit_instructions(edit_annotations)
             edit_template = load_versioned_prompt("edit")
             edit_prompt = edit_template.format(
-                edit_instructions=edit_instructions.replace("{", "{{").replace("}", "}}")
+                edit_instructions=edit_instructions.replace("{", "{{").replace("}", "}}"),
+                changelog="",  # First edit in eval — no previous history
             )
 
             for run_idx in range(NUM_RUNS):
@@ -633,13 +723,13 @@ class TestPromptAB:
                 else:
                     print("clean.", end=" ", flush=True)
 
-                # VLM eval on the edit result
-                print("VLM eval...", end=" ", flush=True)
-                vlm_scores = await _run_vlm_eval(
-                    result_image,
-                    room_image,
-                    brief=TEST_BRIEF,
-                    generation_prompt=edit_prompt,
+                # VLM eval using the edit rubric (50 points)
+                # Compares base_design → result_image with the edit instruction
+                print("VLM eval (edit rubric)...", end=" ", flush=True)
+                vlm_scores = await _run_edit_vlm_eval(
+                    edited_image=result_image,
+                    original_image=base_design,
+                    edit_instruction=edit_instructions,
                 )
                 vlm_scores["artifact_check"] = artifact_info
 
@@ -668,8 +758,8 @@ class TestPromptAB:
             import numpy as np
 
             totals = np.array([r["total"] for r in valid], dtype=float)
-            print(f"  VLM total: mean={totals.mean():.1f} std={totals.std():.1f} min={totals.min():.0f} max={totals.max():.0f}")
-            for key in ["photorealism", "style_adherence", "room_preservation", "instruction_adherence"]:
+            print(f"  VLM total (0-50): mean={totals.mean():.1f} std={totals.std():.1f} min={totals.min():.0f} max={totals.max():.0f}")
+            for key in ["edit_fidelity", "preservation_fidelity", "artifact_cleanliness", "seamless_blending", "instruction_accuracy"]:
                 vals = np.array([r.get(key, 0) for r in valid], dtype=float)
                 print(f"  {key:25s}: mean={vals.mean():.1f}")
 

@@ -17,8 +17,8 @@ class TestGetActiveVersion:
     def test_room_preservation_active_v4(self):
         assert get_active_version("room_preservation") == "v4"
 
-    def test_edit_active_v6(self):
-        assert get_active_version("edit") == "v6"
+    def test_edit_active_v7(self):
+        assert get_active_version("edit") == "v7"
 
     def test_unknown_prompt_defaults_v1(self):
         assert get_active_version("nonexistent") == "v1"
@@ -31,8 +31,8 @@ class TestGetPreviousVersion:
     def test_room_preservation_previous_v5(self):
         assert get_previous_version("room_preservation") == "v5"
 
-    def test_edit_previous_v5(self):
-        assert get_previous_version("edit") == "v5"
+    def test_edit_previous_v6(self):
+        assert get_previous_version("edit") == "v6"
 
     def test_unknown_no_previous(self):
         assert get_previous_version("nonexistent") is None
@@ -81,8 +81,8 @@ class TestListVersions:
     def test_edit_has_multiple_versions(self):
         versions = list_versions("edit")
         assert "v1" in versions
-        assert "v5" in versions
         assert "v6" in versions
+        assert "v7" in versions
 
     def test_room_preservation_has_multiple_versions(self):
         versions = list_versions("room_preservation")
