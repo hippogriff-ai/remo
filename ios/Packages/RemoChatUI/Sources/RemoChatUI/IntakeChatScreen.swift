@@ -260,6 +260,14 @@ public struct IntakeChatScreen: View {
             projectState.chatMessages.append(ChatMessage(role: "assistant", content: output.agentMessage))
             projectState.currentIntakeOutput = output
         } catch {
+            // Roll back optimistic message so chat isn't polluted with unsent text
+            if let lastIndex = projectState.chatMessages.indices.last,
+               projectState.chatMessages[lastIndex].role == "user",
+               projectState.chatMessages[lastIndex].content == trimmed {
+                projectState.chatMessages.removeLast()
+            }
+            inputText = trimmed
+            selectedQuickReply = nil
             errorMessage = error.localizedDescription
         }
     }
