@@ -18,6 +18,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 
+from app.activities import skill_loader
 from app.activities.intake import (
     INTAKE_TOOLS,
     MAX_TURNS,
@@ -79,11 +80,62 @@ class TestLoadSystemPrompt:
         assert "0 turns remaining" in prompt
 
     def test_translation_table_present(self):
-        """P1 #1 success metric: translation table encoded in prompt."""
+        """Updated: compact skill summary replaces the old full translation table."""
         prompt = load_system_prompt("quick", 1)
-        assert "Cozy" in prompt
-        assert "amber, terracotta" in prompt
-        assert "2200" in prompt  # Kelvin temperature
+        # Compact table has skill_id, Name, Triggers columns
+        assert "STYLE SKILL SYSTEM" in prompt
+        assert "skill_id" in prompt
+        assert "| cozy |" in prompt
+        assert "Cozy & Warm" in prompt
+
+    def test_skill_summary_table_present(self):
+        """Prompt contains compact table with all 10 skill IDs."""
+        prompt = load_system_prompt("quick", 1)
+        expected_ids = [
+            "cozy",
+            "modern",
+            "bright_airy",
+            "calm",
+            "luxurious",
+            "rustic",
+            "minimalist",
+            "bohemian",
+            "scandinavian",
+            "more_space",
+        ]
+        for skill_id in expected_ids:
+            assert f"| {skill_id} |" in prompt, f"Missing skill_id: {skill_id}"
+
+    def test_translation_table_removed(self):
+        """Full translation table no longer in base prompt."""
+        prompt = load_system_prompt("quick", 1)
+        # These were in the old monolithic table, not in the compact summary
+        assert "TRANSLATION ENGINE" not in prompt
+        assert "| Client says | Design parameters |" not in prompt
+        assert "amber, terracotta, warm wood tones" not in prompt
+
+    def test_loaded_skills_placeholder_replaced_empty(self):
+        """Without skills, shows placeholder message."""
+        prompt = load_system_prompt("quick", 1)
+        assert "{loaded_skills_section}" not in prompt
+        assert "No style guides loaded yet" in prompt
+
+    def test_loaded_skills_injected(self):
+        """With loaded_skill_ids=['cozy'], prompt contains cozy.md content."""
+        prompt = load_system_prompt("quick", 1, loaded_skill_ids=["cozy"])
+        # cozy.md has these sections
+        assert "Core Parameters" in prompt
+        assert "Room-Type Adaptations" in prompt
+        assert "No style guides loaded yet" not in prompt
+
+    def test_loaded_skills_multiple(self):
+        """With 2 skills, both contents present in prompt."""
+        prompt = load_system_prompt("quick", 1, loaded_skill_ids=["cozy", "modern"])
+        # Both skill contents should be present
+        cozy_content = skill_loader.load_skill_content("cozy")
+        modern_content = skill_loader.load_skill_content("modern")
+        assert cozy_content and cozy_content in prompt
+        assert modern_content and modern_content in prompt
 
     def test_diagnose_pipeline_present(self):
         """P1 #1 success metric: DIAGNOSE pipeline encoded in prompt."""
@@ -762,6 +814,16 @@ class TestToolDefinitions:
         assert "renovation_willingness" in props
         assert "room_analysis_hypothesis" in props
 
+    def test_interview_tool_has_requested_skills(self):
+        """interview_client has requested_skills field — optional array of strings."""
+        tool = next(t for t in INTAKE_TOOLS if t["name"] == "interview_client")
+        props = tool["input_schema"]["properties"]
+        assert "requested_skills" in props
+        assert props["requested_skills"]["type"] == "array"
+        assert props["requested_skills"]["items"]["type"] == "string"
+        # Not required — agent may or may not request skills
+        assert "requested_skills" not in tool["input_schema"].get("required", [])
+
 
 # === Turn Counting Tests ===
 
@@ -1378,6 +1440,222 @@ class TestRunIntakeCoreMocked:
         assert result.partial_brief is not None
         assert result.partial_brief.room_type == "bedroom"
 
+    @patch.dict("os.environ", {"ANTHROPIC_API_KEY": "test-key"})
+    @patch("app.activities.intake.anthropic.AsyncAnthropic")
+    def test_requested_skills_extracted(self, mock_client_cls):
+        """interview_client with requested_skills: ["cozy"] -> output has it."""
+        mock_resp = self._mock_skill_response(
+            "interview_client",
+            {
+                "message": "I love the cozy direction!",
+                "requested_skills": ["cozy"],
+            },
+        )
+        mock_instance = MagicMock()
+        mock_instance.messages = MagicMock()
+        mock_instance.messages.create = AsyncMock(return_value=mock_resp)
+        mock_client_cls.return_value = mock_instance
+
+        result = asyncio.run(_run_intake_core(self._make_input()))
+
+        assert result.requested_skills == ["cozy"]
+
+    @patch.dict("os.environ", {"ANTHROPIC_API_KEY": "test-key"})
+    @patch("app.activities.intake.anthropic.AsyncAnthropic")
+    def test_requested_skills_capped_at_two(self, mock_client_cls):
+        """3 skills -> only first 2 in output."""
+        mock_resp = self._mock_skill_response(
+            "interview_client",
+            {
+                "message": "Interesting mix!",
+                "requested_skills": ["cozy", "modern", "minimalist"],
+            },
+        )
+        mock_instance = MagicMock()
+        mock_instance.messages = MagicMock()
+        mock_instance.messages.create = AsyncMock(return_value=mock_resp)
+        mock_client_cls.return_value = mock_instance
+
+        result = asyncio.run(_run_intake_core(self._make_input()))
+
+        assert len(result.requested_skills) == 2
+        assert result.requested_skills == ["cozy", "modern"]
+
+    @patch.dict("os.environ", {"ANTHROPIC_API_KEY": "test-key"})
+    @patch("app.activities.intake.anthropic.AsyncAnthropic")
+    def test_more_space_orthogonal_to_style_cap(self, mock_client_cls):
+        """more_space doesn't count toward 2-style cap — all 3 survive."""
+        mock_resp = self._mock_skill_response(
+            "interview_client",
+            {
+                "message": "Cozy modern and needs space!",
+                "requested_skills": ["cozy", "modern", "more_space"],
+            },
+        )
+        mock_instance = MagicMock()
+        mock_instance.messages = MagicMock()
+        mock_instance.messages.create = AsyncMock(return_value=mock_resp)
+        mock_client_cls.return_value = mock_instance
+
+        result = asyncio.run(_run_intake_core(self._make_input()))
+
+        assert result.requested_skills == ["cozy", "modern", "more_space"]
+
+    @patch.dict("os.environ", {"ANTHROPIC_API_KEY": "test-key"})
+    @patch("app.activities.intake.anthropic.AsyncAnthropic")
+    def test_requested_skills_validated_against_manifest(self, mock_client_cls):
+        """Invalid skill ID filtered out."""
+        mock_resp = self._mock_skill_response(
+            "interview_client",
+            {
+                "message": "Style detected!",
+                "requested_skills": ["cozy", "nonexistent_style"],
+            },
+        )
+        mock_instance = MagicMock()
+        mock_instance.messages = MagicMock()
+        mock_instance.messages.create = AsyncMock(return_value=mock_resp)
+        mock_client_cls.return_value = mock_instance
+
+        result = asyncio.run(_run_intake_core(self._make_input()))
+
+        assert result.requested_skills == ["cozy"]
+
+    @patch.dict("os.environ", {"ANTHROPIC_API_KEY": "test-key"})
+    @patch("app.activities.intake.anthropic.AsyncAnthropic")
+    def test_requested_skills_invalid_logs_warning(self, mock_client_cls):
+        """Invalid skill IDs trigger a warning log."""
+        mock_resp = self._mock_skill_response(
+            "interview_client",
+            {
+                "message": "Style detected!",
+                "requested_skills": ["cozy", "nonexistent_style"],
+            },
+        )
+        mock_instance = MagicMock()
+        mock_instance.messages = MagicMock()
+        mock_instance.messages.create = AsyncMock(return_value=mock_resp)
+        mock_client_cls.return_value = mock_instance
+
+        with patch("app.activities.intake.log") as mock_log:
+            asyncio.run(_run_intake_core(self._make_input()))
+            # Find the warning call for invalid skills
+            invalid_calls = [
+                c
+                for c in mock_log.warning.call_args_list
+                if c[0][0] == "intake_requested_skills_invalid"
+            ]
+            assert len(invalid_calls) == 1
+            assert invalid_calls[0][1]["invalid"] == ["nonexistent_style"]
+            assert invalid_calls[0][1]["valid"] == ["cozy"]
+
+    @patch.dict("os.environ", {"ANTHROPIC_API_KEY": "test-key"})
+    @patch("app.activities.intake.anthropic.AsyncAnthropic")
+    def test_draft_skill_no_requested_skills(self, mock_client_cls):
+        """draft_design_brief doesn't produce requested_skills."""
+        mock_resp = self._mock_skill_response(
+            "draft_design_brief",
+            {
+                "message": "Here's your design summary!",
+                "design_brief": {
+                    "room_type": "kitchen",
+                    "style_profile": {"mood": "bright"},
+                    "domains_covered": list(range(8)),
+                },
+            },
+        )
+        mock_instance = MagicMock()
+        mock_instance.messages = MagicMock()
+        mock_instance.messages.create = AsyncMock(return_value=mock_resp)
+        mock_client_cls.return_value = mock_instance
+
+        result = asyncio.run(_run_intake_core(self._make_input()))
+
+        assert result.requested_skills == []
+
+    @patch.dict("os.environ", {"ANTHROPIC_API_KEY": "test-key"})
+    @patch("app.activities.intake.anthropic.AsyncAnthropic")
+    def test_style_skills_used_in_brief(self, mock_client_cls):
+        """Brief has style_skills_used populated from loaded_skill_ids in context."""
+        mock_resp = self._mock_skill_response(
+            "draft_design_brief",
+            {
+                "message": "Here's your cozy design summary!",
+                "design_brief": {
+                    "room_type": "living room",
+                    "style_profile": {"mood": "cozy retreat"},
+                    "domains_covered": list(range(8)),
+                },
+            },
+        )
+        mock_instance = MagicMock()
+        mock_instance.messages = MagicMock()
+        mock_instance.messages.create = AsyncMock(return_value=mock_resp)
+        mock_client_cls.return_value = mock_instance
+
+        inp = IntakeChatInput(
+            mode="quick",
+            project_context={"room_photos": [], "loaded_skill_ids": ["cozy", "modern"]},
+            conversation_history=[],
+            user_message="summarize",
+        )
+        result = asyncio.run(_run_intake_core(inp))
+
+        assert result.partial_brief is not None
+        assert result.partial_brief.style_skills_used == ["cozy", "modern"]
+
+    @patch.dict("os.environ", {"ANTHROPIC_API_KEY": "test-key"})
+    @patch("app.activities.intake.anthropic.AsyncAnthropic")
+    def test_style_skills_used_empty_without_loaded(self, mock_client_cls):
+        """Brief has empty style_skills_used when no loaded_skill_ids."""
+        mock_resp = self._mock_skill_response(
+            "draft_design_brief",
+            {
+                "message": "Here's your design summary!",
+                "design_brief": {
+                    "room_type": "kitchen",
+                    "style_profile": {"mood": "bright"},
+                    "domains_covered": list(range(8)),
+                },
+            },
+        )
+        mock_instance = MagicMock()
+        mock_instance.messages = MagicMock()
+        mock_instance.messages.create = AsyncMock(return_value=mock_resp)
+        mock_client_cls.return_value = mock_instance
+
+        result = asyncio.run(_run_intake_core(self._make_input()))
+
+        assert result.partial_brief is not None
+        assert result.partial_brief.style_skills_used == []
+
+    @patch.dict("os.environ", {"ANTHROPIC_API_KEY": "test-key"})
+    @patch("app.activities.intake.anthropic.AsyncAnthropic")
+    def test_loaded_skills_passed_to_system_prompt(self, mock_client_cls):
+        """loaded_skill_ids from project_context reaches load_system_prompt."""
+        mock_resp = self._mock_skill_response(
+            "interview_client",
+            {"message": "Tell me more about the cozy vibe!"},
+        )
+        mock_instance = MagicMock()
+        mock_instance.messages = MagicMock()
+        mock_instance.messages.create = AsyncMock(return_value=mock_resp)
+        mock_client_cls.return_value = mock_instance
+
+        inp = IntakeChatInput(
+            mode="quick",
+            project_context={"room_photos": [], "loaded_skill_ids": ["cozy"]},
+            conversation_history=[],
+            user_message="I like cozy",
+        )
+        asyncio.run(_run_intake_core(inp))
+
+        # Verify the system prompt passed to Claude contains cozy skill content
+        create_call = mock_instance.messages.create
+        call_kwargs = create_call.call_args
+        system_prompt = call_kwargs.kwargs.get("system") or call_kwargs[1].get("system")
+        assert "Cozy & Warm" in system_prompt
+
 
 # === Error Handler Tests ===
 
@@ -1513,3 +1791,219 @@ class TestRunIntakeChatWrapper:
 
         mock_core.assert_called_once_with(input_data)
         assert result is mock_output
+
+
+# === Skill Loader Tests ===
+
+
+class TestSkillLoader:
+    """Tests for the skill_loader module (Phase 1 infrastructure)."""
+
+    def setup_method(self):
+        """Clear caches before each test for isolation."""
+        from app.activities.skill_loader import clear_caches
+
+        clear_caches()
+
+    def test_load_manifest_returns_skills(self):
+        """Manifest loads with 10 skills."""
+        from app.activities.skill_loader import load_manifest
+
+        manifest = load_manifest()
+        assert len(manifest.skills) == 10
+        skill_ids = [s.skill_id for s in manifest.skills]
+        assert "cozy" in skill_ids
+        assert "modern" in skill_ids
+        assert "bright_airy" in skill_ids
+        assert "calm" in skill_ids
+        assert "luxurious" in skill_ids
+        assert "rustic" in skill_ids
+        assert "minimalist" in skill_ids
+        assert "bohemian" in skill_ids
+        assert "scandinavian" in skill_ids
+        assert "more_space" in skill_ids
+
+    def test_load_manifest_has_trigger_phrases(self):
+        """Each skill in the manifest has trigger_phrases populated."""
+        from app.activities.skill_loader import load_manifest
+
+        manifest = load_manifest()
+        for skill in manifest.skills:
+            assert len(skill.trigger_phrases) > 0, f"Skill {skill.skill_id} missing trigger_phrases"
+
+    def test_load_manifest_caching(self):
+        """Second call returns the same cached object."""
+        from app.activities.skill_loader import load_manifest
+
+        first = load_manifest()
+        second = load_manifest()
+        assert first is second
+
+    def test_load_skill_content_returns_markdown(self):
+        """Loads cozy.md content as a string."""
+        from app.activities.skill_loader import load_skill_content
+
+        content = load_skill_content("cozy")
+        assert content is not None
+        assert "Cozy & Warm" in content
+        assert "Core Parameters" in content
+        assert "Room-Type Adaptations" in content
+
+    def test_load_skill_content_unknown_returns_none(self):
+        """Unknown skill ID returns None (no crash)."""
+        from app.activities.skill_loader import load_skill_content
+
+        result = load_skill_content("nonexistent_style_999")
+        assert result is None
+
+    def test_load_skill_content_caching(self):
+        """Second call for same skill returns cached content."""
+        from app.activities.skill_loader import load_skill_content
+
+        first = load_skill_content("modern")
+        second = load_skill_content("modern")
+        assert first is second
+
+    def test_build_skill_summary_block(self):
+        """Compact table has all 10 skill IDs."""
+        from app.activities.skill_loader import build_skill_summary_block, load_manifest
+
+        manifest = load_manifest()
+        block = build_skill_summary_block(manifest)
+        for skill in manifest.skills:
+            assert skill.skill_id in block
+            assert skill.name in block
+
+    def test_build_skill_summary_block_format(self):
+        """Summary block is pipe-delimited table rows."""
+        from app.activities.skill_loader import build_skill_summary_block, load_manifest
+
+        manifest = load_manifest()
+        block = build_skill_summary_block(manifest)
+        lines = block.strip().split("\n")
+        assert len(lines) == 10
+        for line in lines:
+            assert line.startswith("|")
+            assert line.endswith("|")
+
+    def test_build_loaded_skills_block_single(self):
+        """One skill's content is injected."""
+        from app.activities.skill_loader import build_loaded_skills_block
+
+        block = build_loaded_skills_block(["cozy"])
+        assert "Cozy & Warm" in block
+        assert "Core Parameters" in block
+
+    def test_build_loaded_skills_block_multiple(self):
+        """Two skills' content is concatenated with separator."""
+        from app.activities.skill_loader import build_loaded_skills_block
+
+        block = build_loaded_skills_block(["cozy", "modern"])
+        assert "Cozy & Warm" in block
+        assert "Modern & Clean" in block
+        assert "---" in block  # separator between skills
+
+    def test_build_loaded_skills_block_empty(self):
+        """Empty list returns placeholder message."""
+        from app.activities.skill_loader import build_loaded_skills_block
+
+        block = build_loaded_skills_block([])
+        assert "No style guides loaded yet" in block
+        assert "requested_skills" in block
+
+    def test_build_loaded_skills_block_invalid_ids(self):
+        """Invalid skill IDs are silently skipped; returns placeholder if all invalid."""
+        from app.activities.skill_loader import build_loaded_skills_block
+
+        block = build_loaded_skills_block(["nonexistent_1", "nonexistent_2"])
+        assert "No style guides loaded yet" in block
+
+    def test_all_skill_files_exist(self):
+        """Every skill in manifest.json has a corresponding .md file."""
+        from app.activities.skill_loader import SKILLS_DIR, load_manifest
+
+        manifest = load_manifest()
+        for skill in manifest.skills:
+            md_path = SKILLS_DIR / f"{skill.skill_id}.md"
+            assert md_path.exists(), f"Missing skill file: {md_path}"
+
+    def test_all_skill_files_have_sections(self):
+        """Each .md file has the required sections."""
+        from app.activities.skill_loader import load_manifest, load_skill_content
+
+        manifest = load_manifest()
+        required_sections = [
+            "Core Parameters",
+            "Room-Type Adaptations",
+            "Furniture Recommendations",
+            "Do's and Don'ts",
+            "Common Blends",
+            "Example Partial Brief",
+        ]
+        for skill in manifest.skills:
+            content = load_skill_content(skill.skill_id)
+            assert content is not None, f"Could not load {skill.skill_id}.md"
+            for section in required_sections:
+                assert section in content, f"Skill {skill.skill_id}.md missing section: {section}"
+
+    def test_cap_skills_style_only(self):
+        """3 style skills -> capped to 2."""
+        from app.activities.skill_loader import cap_skills
+
+        result = cap_skills(["cozy", "modern", "minimalist"])
+        assert result == ["cozy", "modern"]
+
+    def test_cap_skills_with_more_space(self):
+        """2 styles + more_space -> all 3 kept (more_space is orthogonal)."""
+        from app.activities.skill_loader import cap_skills
+
+        result = cap_skills(["cozy", "modern", "more_space"])
+        assert result == ["cozy", "modern", "more_space"]
+
+    def test_cap_skills_three_styles_plus_more_space(self):
+        """3 styles + more_space -> 2 styles + more_space."""
+        from app.activities.skill_loader import cap_skills
+
+        result = cap_skills(["cozy", "modern", "minimalist", "more_space"])
+        assert result == ["cozy", "modern", "more_space"]
+
+    def test_cap_skills_only_more_space(self):
+        """more_space alone passes through."""
+        from app.activities.skill_loader import cap_skills
+
+        result = cap_skills(["more_space"])
+        assert result == ["more_space"]
+
+    def test_cap_skills_empty(self):
+        """Empty list returns empty."""
+        from app.activities.skill_loader import cap_skills
+
+        result = cap_skills([])
+        assert result == []
+
+    def test_cap_skills_within_limit(self):
+        """2 styles without more_space -> unchanged."""
+        from app.activities.skill_loader import cap_skills
+
+        result = cap_skills(["cozy", "modern"])
+        assert result == ["cozy", "modern"]
+
+    def test_cap_skills_deduplicates(self):
+        """Duplicate skill IDs are removed, preserving order."""
+        from app.activities.skill_loader import cap_skills
+
+        result = cap_skills(["cozy", "modern", "cozy", "more_space", "more_space"])
+        assert result == ["cozy", "modern", "more_space"]
+
+    def test_cap_skills_logs_on_overflow(self):
+        """Capping logs a warning with kept/dropped details."""
+        from unittest.mock import patch
+
+        from app.activities.skill_loader import cap_skills
+
+        with patch("app.activities.skill_loader.log") as mock_log:
+            cap_skills(["cozy", "modern", "scandinavian"])
+            mock_log.warning.assert_called_once()
+            call_args = mock_log.warning.call_args
+            assert call_args[0][0] == "skills_capped"
+            assert call_args[1]["dropped"] == ["scandinavian"]

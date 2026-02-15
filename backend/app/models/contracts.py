@@ -38,6 +38,7 @@ class SkillSummary(BaseModel):
     name: str
     description: str
     style_tags: list[str] = []
+    trigger_phrases: list[str] = []
 
 
 class StyleSkillPack(BaseModel):
@@ -347,6 +348,7 @@ class IntakeChatOutput(BaseModel):
     progress: str | None = None
     is_summary: bool = False
     partial_brief: DesignBrief | None = None
+    requested_skills: list[str] = []  # skill IDs agent wants loaded next turn
 
 
 class LoadSkillInput(BaseModel):

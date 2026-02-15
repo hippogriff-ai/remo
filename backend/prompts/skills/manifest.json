@@ -1,0 +1,74 @@
+{
+  "skills": [
+    {
+      "skill_id": "cozy",
+      "name": "Cozy & Warm",
+      "description": "Warm palettes, layered textiles, intimate furniture. Select when user wants warmth, comfort, reading nooks, or a nurturing retreat feel.",
+      "style_tags": ["warm", "cozy", "intimate", "layered"],
+      "trigger_phrases": ["cozy", "warm", "snug", "comfortable", "inviting"]
+    },
+    {
+      "skill_id": "modern",
+      "name": "Modern & Clean",
+      "description": "Neutral base, geometric lines, sleek furniture, architectural lighting. Select when user wants a polished contemporary look. Unlike minimalist, modern allows curated display objects and color accents.",
+      "style_tags": ["modern", "clean", "sleek", "geometric"],
+      "trigger_phrases": ["modern", "contemporary", "sleek", "clean lines", "minimalist modern"]
+    },
+    {
+      "skill_id": "bright_airy",
+      "name": "Bright & Airy",
+      "description": "Light palettes, sheer curtains, natural light, transparent materials. Select when user wants to maximize luminosity and openness. Unlike more_space, this is an aesthetic (light as decor), not a spatial technique.",
+      "style_tags": ["bright", "airy", "light", "open"],
+      "trigger_phrases": ["bright", "airy", "light", "open", "spacious feeling"]
+    },
+    {
+      "skill_id": "calm",
+      "name": "Calm & Serene",
+      "description": "Cool muted tones, minimal pattern, sound-absorbing materials, biophilic elements. Select when user wants a retreat or spa-like feel, stress reduction, or sensory quiet. Unlike scandinavian, calm uses cool tones and avoids warm wood.",
+      "style_tags": ["calm", "serene", "peaceful", "zen"],
+      "trigger_phrases": ["calm", "serene", "peaceful", "zen", "tranquil", "relaxing"]
+    },
+    {
+      "skill_id": "luxurious",
+      "name": "Luxurious & Refined",
+      "description": "Rich fabrics, marble and brass, statement pieces, dramatic lighting. Select when user wants an upscale, hotel-suite, or jewel-box atmosphere.",
+      "style_tags": ["luxurious", "elegant", "refined", "opulent"],
+      "trigger_phrases": ["luxurious", "luxury", "elegant", "refined", "opulent", "high-end", "premium"]
+    },
+    {
+      "skill_id": "rustic",
+      "name": "Rustic & Natural",
+      "description": "Reclaimed wood, wrought iron, natural stone, earth tones, artisanal objects. Select when user wants countryside warmth, organic textures, or cabin/farmhouse character.",
+      "style_tags": ["rustic", "natural", "farmhouse", "country"],
+      "trigger_phrases": ["rustic", "farmhouse", "country", "natural wood", "cabin"]
+    },
+    {
+      "skill_id": "minimalist",
+      "name": "Minimalist & Intentional",
+      "description": "Monochromatic palette, architectural furniture, hidden storage, negative space. Select when user wants extreme reduction — 'less is more' taken to the max. Unlike modern, minimalist hides everything and forbids decorative display.",
+      "style_tags": ["minimalist", "simple", "intentional", "spare"],
+      "trigger_phrases": ["minimalist", "minimal", "simple", "less is more", "uncluttered"]
+    },
+    {
+      "skill_id": "bohemian",
+      "name": "Bohemian & Eclectic",
+      "description": "Saturated colors, mixed global patterns, layered textiles, abundant plants. Select when user wants personality, collected-over-time character, or travel-inspired warmth.",
+      "style_tags": ["bohemian", "boho", "eclectic", "global"],
+      "trigger_phrases": ["bohemian", "boho", "eclectic", "free-spirited", "collected"]
+    },
+    {
+      "skill_id": "scandinavian",
+      "name": "Scandinavian & Hygge",
+      "description": "Pale neutrals, hygge textiles, functional furniture, plants, natural light. Select when user wants cozy-functional Nordic aesthetic with warm blonde wood. Unlike calm, scandinavian is warm-toned and embraces textural layering.",
+      "style_tags": ["scandinavian", "nordic", "hygge", "functional"],
+      "trigger_phrases": ["scandinavian", "scandi", "nordic", "hygge", "swedish"]
+    },
+    {
+      "skill_id": "more_space",
+      "name": "More Space & Openness",
+      "description": "Visual expansion techniques, multi-functional furniture, mirrors, traffic-path optimization. Select when user mentions the room feeling small, cramped, or tight. Orthogonal — stacks with any style skill.",
+      "style_tags": ["spacious", "open", "multi-functional", "compact"],
+      "trigger_phrases": ["more space", "bigger", "cramped", "small room", "open up", "feels tight"]
+    }
+  ]
+}
