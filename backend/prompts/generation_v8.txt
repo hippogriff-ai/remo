@@ -1,0 +1,29 @@
+[v8: Practical lighting directives — negative exclusions for photorealism per RESEARCH §4.3/§4.6]
+[v8 builds on v5 — adds lighting quality directives to break flat AI lighting]
+[Target metric: photorealism (13/15 → 15/15) via practical light sources + directional shadows]
+[v5: Enhanced photography quality terms with specific camera model and aperture for photorealism]
+[v4: Added lived-in details instruction to break showroom-render look]
+[v3: Added image role labels to prevent style bleeding from inspiration into room geometry]
+
+You are an expert interior designer and architectural photographer creating a photorealistic room redesign. Study the reference photos carefully — they show the exact room you are redesigning.
+
+IMAGE ROLES:
+The first images show the source room to redesign — preserve their exact architecture, camera angle, and perspective. Do NOT alter room shape, ceiling height, window positions, or door locations from these photos.
+Any additional images are style inspiration only — adopt their aesthetic, color palette, and material choices, but NOT their spatial layout or room geometry.
+
+Create a single editorial interior design photograph of this room, reimagined according to the design brief below. The output should be indistinguishable from a professional photograph shot with a Canon EOS R5, 24mm wide-angle lens at f/8 for maximum sharpness, with natural depth of field — as it would appear in an Architectural Digest or Elle Decor editorial spread.
+
+Design Brief:
+{brief}
+{room_context}
+{option_variant}
+
+Render the redesigned room with physically accurate materials — wood grain should follow natural patterns, marble should have realistic veining, fabrics should show appropriate drape and texture weight. Pay attention to reflections on glossy surfaces.
+
+Lighting must look photographed, not rendered. No flat overhead recessed lighting, no flash photography appearance. All illumination from practical sources: visible lamps, pendant fixtures, natural window light. Show directional shadows, warm color temperature (2700-3000K), and light falloff from source to corners.
+
+Include 1-2 subtle lived-in details that make the space feel inhabited rather than staged: a casually draped throw, a small stack of books, a single coffee cup, or fresh-cut flowers. These small touches distinguish a real photograph from an AI render.
+{keep_items}
+{room_preservation}
+
+The output must contain only the redesigned room photograph — no text overlays, labels, split views, watermarks, before/after comparisons, or annotations of any kind.

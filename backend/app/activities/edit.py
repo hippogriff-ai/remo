@@ -43,6 +43,7 @@ from app.utils.gemini_chat import (
 )
 from app.utils.http import download_image, download_images
 from app.utils.image import draw_annotations
+from app.utils.prompt_versioning import load_versioned_prompt
 
 logger = structlog.get_logger()
 
@@ -54,15 +55,21 @@ PROMPTS_DIR = Path(__file__).parent.parent.parent / "prompts"
 CONTEXT_PROMPT = (
     "Here is a room redesign. I will send you edits as annotated images "
     "with numbered circles marking areas to change, or as text instructions. "
-    "Always preserve the room architecture, camera angle, and lighting. "
-    "Never include annotations, circles, or markers in your output images."
+    "The colored circles (red, blue, green outlines with numbered badges) are "
+    "for demonstration purposes only — they are NOT part of the room and must "
+    "never appear in your output. "
+    "Preserve the exact camera angle, perspective, and all architectural features "
+    "(walls, windows, doors, ceiling, floor). Only modify the specific elements "
+    "requested in each edit instruction. Your output must always be a clean "
+    "photorealistic photograph with zero circles, badges, outlines, or markers."
 )
 
 TEXT_FEEDBACK_TEMPLATE = (
     "Please modify this room design based on the following feedback:\n"
     "{feedback}\n\n"
-    "Keep the room architecture, camera angle, and overall composition. "
-    "Return a clean photorealistic image reflecting these changes."
+    "Keep all architectural features (walls, windows, doors, ceiling, floor), "
+    "camera angle, perspective, and overall composition unchanged. "
+    "Return a clean photorealistic photograph with zero annotations or markers."
 )
 
 
@@ -79,25 +86,25 @@ def _load_prompt(name: str) -> str:
 
 
 def _build_edit_instructions(annotations: list[AnnotationRegion]) -> str:
-    """Build edit instruction text from annotation regions.
+    """Build structured edit instruction text from annotation regions.
 
-    Includes action, avoid, and constraints when present to give Gemini
-    full context about the intended edit.
+    Uses a multi-line format per region so Gemini can clearly parse each
+    field: action, instruction, avoid, and constraints.
     """
     color_names = {1: "red", 2: "blue", 3: "green"}
-    lines = []
+    blocks = []
     for ann in annotations:
         color = color_names.get(ann.region_id, "red")
-        parts = [f"{ann.region_id} ({color} circle)"]
+        lines = [f"Region #{ann.region_id} ({color} circle):"]
         if ann.action:
-            parts.append(f"Action: {ann.action}.")
-        parts.append(ann.instruction)
+            lines.append(f"  ACTION: {ann.action}")
+        lines.append(f"  INSTRUCTION: {ann.instruction}")
         if ann.avoid:
-            parts.append(f"Avoid: {', '.join(ann.avoid)}.")
+            lines.append(f"  AVOID: {', '.join(ann.avoid)}")
         if ann.constraints:
-            parts.append(f"Constraints: {', '.join(ann.constraints)}.")
-        lines.append(" — ".join(parts))
-    return "\n".join(lines)
+            lines.append(f"  CONSTRAINTS: {', '.join(ann.constraints)}")
+        blocks.append("\n".join(lines))
+    return "\n\n".join(blocks)
 
 
 def _build_eval_instruction(input: EditDesignInput) -> str:
@@ -183,7 +190,7 @@ async def _bootstrap_chat(
 
     if input.annotations:
         annotated = draw_annotations(base_image, input.annotations)
-        edit_template = _load_prompt("edit.txt")
+        edit_template = load_versioned_prompt("edit")
         instructions = _build_edit_instructions(input.annotations)
         # Escape curly braces in user-provided text to prevent str.format() KeyError
         edit_prompt = edit_template.format(
@@ -211,10 +218,12 @@ async def _bootstrap_chat(
     result_image = extract_image(response2)
 
     if result_image is None:
-        response2 = await asyncio.to_thread(
-            chat.send_message,
-            "Please generate the edited room image now. Remove ALL annotation circles and markers.",
+        retry_msg = (
+            "Please generate the edited room image now. Remove ALL colored circles "
+            "(red, blue, green), numbered badges, and any annotation markers. "
+            "Output only a clean photograph."
         )
+        response2 = await asyncio.to_thread(chat.send_message, retry_msg)
         result_image = extract_image(response2)
 
     return chat, result_image
@@ -239,7 +248,7 @@ async def _continue_chat(
     if input.annotations:
         assert base_image is not None  # guaranteed: caller downloads when annotations present
         annotated = draw_annotations(base_image, input.annotations)
-        edit_template = _load_prompt("edit.txt")
+        edit_template = load_versioned_prompt("edit")
         instructions = _build_edit_instructions(input.annotations)
         edit_prompt = edit_template.format(
             edit_instructions=instructions.replace("{", "{{").replace("}", "}}")
@@ -296,16 +305,20 @@ async def _continue_chat(
 
     if result_image is None:
         # Retry with explicit request
+        retry_text = (
+            "Please generate the edited room image now. Remove ALL colored circles "
+            "(red, blue, green), numbered badges, and any annotation markers. "
+            "Output only a clean photograph."
+        )
         response = await asyncio.to_thread(
             continue_chat,
             updated_history,
-            ["Please generate the edited room image now. Remove all annotations."],
+            [retry_text],
             client,
         )
         result_image = extract_image(response)
 
         # Add retry turns to history
-        retry_text = "Please generate the edited room image now. Remove all annotations."
         updated_history.append(gtypes.Content(role="user", parts=[gtypes.Part(text=retry_text)]))
         retry_content = response_to_content(response)
         if retry_content:

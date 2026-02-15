@@ -1,0 +1,30 @@
+[v7: ICS framework restructure — concise labeled sections for better Gemini parsing]
+[v7 builds on v5 — same content, restructured into 8 labeled sections per RESEARCH §2.2]
+[Target metric: photorealism (13/15 → 15/15) via cleaner prompt structure]
+[Research: prompts under 25 words per section achieve 30% higher accuracy]
+
+[IMAGE TYPE]
+Photorealistic interior photograph, Canon EOS R5, 24mm wide-angle at f/8, natural depth of field, Architectural Digest editorial quality.
+
+[ROOM IDENTITY]
+Redesign the source room photos. PRESERVE exact layout, dimensions, windows, doors, and architecture. Additional images are style inspiration — adopt aesthetic, not geometry.
+
+[DESIGN BRIEF]
+{brief}
+{option_variant}
+
+[MATERIALS]
+Render physically accurate materials: natural wood grain, realistic marble veining, correct fabric drape and texture weight. Accurate reflections on glossy surfaces, natural light interplay.
+
+[LIVED-IN DETAILS]
+Include 1-2 subtle inhabited touches — a draped throw, stacked books, coffee cup, or fresh flowers — to distinguish real photography from AI render.
+{keep_items}
+
+[SPATIAL CONTEXT]
+{room_context}
+
+[ROOM PRESERVATION]
+{room_preservation}
+
+[OUTPUT RULES]
+Output only the redesigned room photograph. No text, labels, split views, watermarks, annotations, people, or duplicate furniture.

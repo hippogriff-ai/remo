@@ -193,6 +193,31 @@ _OPTION_VARIANTS: tuple[str, str] = (
 )
 
 
+def _format_color_palette(colors: list[str]) -> str:
+    """Format colors with 60-30-10 proportional hierarchy for Gemini.
+
+    Research shows proportional color descriptions with application guidance
+    produce more cohesive palettes than flat comma-separated lists.
+    """
+    if len(colors) == 1:
+        return f"Color palette: {colors[0]} (dominant throughout)"
+    if len(colors) == 2:
+        return (
+            f"Color palette (70/30): {colors[0]} (70% — walls, large surfaces), "
+            f"{colors[1]} (30% — furniture, textiles)"
+        )
+    # 3+ colors: 60-30-10 rule
+    parts = [
+        f"Color palette (60/30/10): {colors[0]} (60% — walls, large surfaces), "
+        f"{colors[1]} (30% — furniture, textiles), "
+        f"{colors[2]} (10% — accent pillows, art, accessories)"
+    ]
+    if len(colors) > 3:
+        extras = ", ".join(colors[3:])
+        parts.append(f"Additional accents: {extras}")
+    return "\n".join(parts)
+
+
 def _build_generation_prompt(
     brief: DesignBrief | None,
     inspiration_notes: list[InspirationNote],
@@ -217,7 +242,7 @@ def _build_generation_prompt(
             if sp.mood:
                 parts.append(f"Mood: {sp.mood}")
             if sp.colors:
-                parts.append(f"Colors: {', '.join(sp.colors)}")
+                parts.append(_format_color_palette(sp.colors))
             if sp.textures:
                 parts.append(f"Textures: {', '.join(sp.textures)}")
             if sp.lighting:

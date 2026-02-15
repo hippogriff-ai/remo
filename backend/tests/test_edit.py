@@ -225,7 +225,7 @@ class TestEditInstructions:
             ),
         ]
         result = _build_edit_instructions(annotations)
-        assert "Action: Replace" in result
+        assert "ACTION: Replace" in result
         assert "modern pendant light" in result
 
     def test_build_instructions_with_avoid(self):
@@ -242,7 +242,7 @@ class TestEditInstructions:
             ),
         ]
         result = _build_edit_instructions(annotations)
-        assert "Avoid: chrome, brass" in result
+        assert "AVOID: chrome, brass" in result
 
     def test_build_instructions_with_constraints(self):
         from app.activities.edit import _build_edit_instructions
@@ -258,7 +258,7 @@ class TestEditInstructions:
             ),
         ]
         result = _build_edit_instructions(annotations)
-        assert "Constraints: budget-friendly, kid-friendly" in result
+        assert "CONSTRAINTS: budget-friendly, kid-friendly" in result
 
     def test_build_instructions_with_all_fields(self):
         from app.activities.edit import _build_edit_instructions
@@ -277,10 +277,10 @@ class TestEditInstructions:
         ]
         result = _build_edit_instructions(annotations)
         assert "2 (blue circle)" in result
-        assert "Action: Remove" in result
+        assert "ACTION: Remove" in result
         assert "old armchair" in result
-        assert "Avoid: leaving empty space" in result
-        assert "Constraints: minimal style" in result
+        assert "AVOID: leaving empty space" in result
+        assert "CONSTRAINTS: minimal style" in result
 
     def test_build_instructions_without_optional_fields(self):
         """Instruction-only annotations should not include Action/Avoid/Constraints labels."""
@@ -296,9 +296,9 @@ class TestEditInstructions:
             ),
         ]
         result = _build_edit_instructions(annotations)
-        assert "Action:" not in result
-        assert "Avoid:" not in result
-        assert "Constraints:" not in result
+        assert "ACTION:" not in result
+        assert "AVOID:" not in result
+        assert "CONSTRAINTS:" not in result
         assert "lighter color" in result
 
     def test_build_instructions_empty_avoid_and_constraints(self):
@@ -317,8 +317,8 @@ class TestEditInstructions:
             ),
         ]
         result = _build_edit_instructions(annotations)
-        assert "Avoid:" not in result
-        assert "Constraints:" not in result
+        assert "AVOID:" not in result
+        assert "CONSTRAINTS:" not in result
 
     def test_build_instructions_all_three_colors(self):
         """Verify all three region IDs map to correct colors."""
@@ -355,9 +355,9 @@ class TestEditInstructions:
             ),
         ]
         result = _build_edit_instructions(annotations)
-        assert "Action: Remove" in result
-        assert "Avoid: leaving marks" in result
-        assert "Constraints:" not in result
+        assert "ACTION: Remove" in result
+        assert "AVOID: leaving marks" in result
+        assert "CONSTRAINTS:" not in result
 
 
 def _make_test_image(w: int = 100, h: int = 100) -> Image.Image:

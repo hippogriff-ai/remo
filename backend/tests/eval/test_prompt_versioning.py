@@ -11,25 +11,25 @@ from app.utils.prompt_versioning import (
 
 
 class TestGetActiveVersion:
-    def test_generation_active_v2(self):
-        assert get_active_version("generation") == "v2"
+    def test_generation_active_v5(self):
+        assert get_active_version("generation") == "v5"
 
-    def test_room_preservation_active_v2(self):
-        assert get_active_version("room_preservation") == "v2"
+    def test_room_preservation_active_v4(self):
+        assert get_active_version("room_preservation") == "v4"
 
-    def test_edit_active_v1(self):
-        assert get_active_version("edit") == "v1"
+    def test_edit_active_v5(self):
+        assert get_active_version("edit") == "v5"
 
     def test_unknown_prompt_defaults_v1(self):
         assert get_active_version("nonexistent") == "v1"
 
 
 class TestGetPreviousVersion:
-    def test_generation_previous_v1(self):
-        assert get_previous_version("generation") == "v1"
+    def test_generation_previous_v2(self):
+        assert get_previous_version("generation") == "v2"
 
-    def test_edit_no_previous(self):
-        assert get_previous_version("edit") is None
+    def test_edit_previous_v1(self):
+        assert get_previous_version("edit") == "v1"
 
     def test_unknown_no_previous(self):
         assert get_previous_version("nonexistent") is None
@@ -69,19 +69,22 @@ class TestLoadVersionedPrompt:
 
 
 class TestListVersions:
-    def test_generation_has_two_versions(self):
+    def test_generation_has_multiple_versions(self):
         versions = list_versions("generation")
         assert "v1" in versions
         assert "v2" in versions
+        assert "v5" in versions
 
-    def test_edit_has_one_version(self):
+    def test_edit_has_multiple_versions(self):
         versions = list_versions("edit")
         assert "v1" in versions
+        assert "v5" in versions
 
-    def test_room_preservation_has_two_versions(self):
+    def test_room_preservation_has_multiple_versions(self):
         versions = list_versions("room_preservation")
         assert "v1" in versions
         assert "v2" in versions
+        assert "v4" in versions
 
     def test_unknown_prompt_empty(self):
         versions = list_versions("nonexistent_prompt_xyz")

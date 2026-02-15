@@ -249,9 +249,57 @@ class TestPromptBuilding:
         from app.activities.generate import _build_generation_prompt
 
         prompt = _build_generation_prompt(None, [])
-        assert "editorial interior design photograph" in prompt
-        assert "full-frame camera" in prompt
+        # v5+: uses specific camera model instead of generic "full-frame camera"
+        assert "Canon EOS R5" in prompt or "full-frame camera" in prompt
         assert "physically accurate materials" in prompt
+
+
+class TestColorPaletteFormatting:
+    """Tests for _format_color_palette 60-30-10 proportional hierarchy."""
+
+    def test_single_color(self):
+        from app.activities.generate import _format_color_palette
+
+        result = _format_color_palette(["warm ivory"])
+        assert "warm ivory" in result
+        assert "dominant" in result
+
+    def test_two_colors(self):
+        from app.activities.generate import _format_color_palette
+
+        result = _format_color_palette(["warm ivory", "walnut brown"])
+        assert "70%" in result
+        assert "30%" in result
+
+    def test_three_colors_uses_60_30_10(self):
+        from app.activities.generate import _format_color_palette
+
+        result = _format_color_palette(["warm ivory", "walnut brown", "olive green"])
+        assert "60%" in result
+        assert "30%" in result
+        assert "10%" in result
+        assert "warm ivory" in result
+        assert "walnut brown" in result
+        assert "olive green" in result
+
+    def test_four_colors_has_extras(self):
+        from app.activities.generate import _format_color_palette
+
+        result = _format_color_palette(["a", "b", "c", "terracotta"])
+        assert "Additional accents: terracotta" in result
+
+    def test_color_palette_in_full_prompt(self):
+        from app.activities.generate import _build_generation_prompt
+
+        brief = DesignBrief(
+            room_type="living room",
+            style_profile=StyleProfile(
+                colors=["warm ivory", "walnut brown", "olive green"],
+            ),
+        )
+        prompt = _build_generation_prompt(brief, [])
+        assert "Color palette (60/30/10)" in prompt
+        assert "warm ivory (60%" in prompt
 
 
 class TestRoomContextFormatting:
