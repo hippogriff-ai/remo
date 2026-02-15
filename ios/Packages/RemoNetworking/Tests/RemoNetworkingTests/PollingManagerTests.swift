@@ -13,12 +13,13 @@ final class PollingManagerTests: XCTestCase {
         // Start polling in a task, then change the step
         let poller = PollingManager(client: client, interval: .milliseconds(50))
 
-        // Upload 2 photos to trigger step change from "photos" -> "scan"
+        // Upload photos then skip scan to trigger step change from "photos" -> "intake"
         _ = try await client.uploadPhoto(projectId: projectId, imageData: Data(), photoType: "room")
         _ = try await client.uploadPhoto(projectId: projectId, imageData: Data(), photoType: "room")
+        try await client.skipScan(projectId: projectId)
 
         let newState = try await poller.pollUntilStepChanges(projectId: projectId, currentStep: "photos")
-        XCTAssertEqual(newState.step, "scan")
+        XCTAssertEqual(newState.step, "intake")
     }
 
     func testPollReturnsOnErrorState() async throws {
@@ -202,6 +203,7 @@ private actor FlakyClient: WorkflowClientProtocol {
     func deleteProject(projectId: String) async throws {}
     func deletePhoto(projectId: String, photoId: String) async throws {}
     func updatePhotoNote(projectId: String, photoId: String, note: String?) async throws {}
+    func confirmPhotos(projectId: String) async throws {}
     func uploadPhoto(projectId: String, imageData: Data, photoType: String) async throws -> PhotoUploadResponse {
         PhotoUploadResponse(photoId: "", validation: ValidatePhotoOutput(passed: true, failures: [], messages: []))
     }
@@ -249,6 +251,7 @@ private actor IncrementingClient: WorkflowClientProtocol {
     func deleteProject(projectId: String) async throws {}
     func deletePhoto(projectId: String, photoId: String) async throws {}
     func updatePhotoNote(projectId: String, photoId: String, note: String?) async throws {}
+    func confirmPhotos(projectId: String) async throws {}
     func uploadPhoto(projectId: String, imageData: Data, photoType: String) async throws -> PhotoUploadResponse {
         PhotoUploadResponse(photoId: "", validation: ValidatePhotoOutput(passed: true, failures: [], messages: []))
     }
@@ -289,6 +292,7 @@ private actor FlakyConditionClient: WorkflowClientProtocol {
     func deleteProject(projectId: String) async throws {}
     func deletePhoto(projectId: String, photoId: String) async throws {}
     func updatePhotoNote(projectId: String, photoId: String, note: String?) async throws {}
+    func confirmPhotos(projectId: String) async throws {}
     func uploadPhoto(projectId: String, imageData: Data, photoType: String) async throws -> PhotoUploadResponse {
         PhotoUploadResponse(photoId: "", validation: ValidatePhotoOutput(passed: true, failures: [], messages: []))
     }

@@ -10,9 +10,24 @@ struct ProjectFlowScreen: View {
     @Bindable var projectState: ProjectState
     let client: any WorkflowClientProtocol
 
+    private var isMockMode: Bool {
+        client is MockWorkflowClient
+    }
+
     var body: some View {
         ProjectRouter(step: projectState.step, projectState: projectState, client: client)
             .animation(.default, value: projectState.step)
+            .safeAreaInset(edge: .bottom) {
+                if isMockMode {
+                    Text("Demo Mode — no real AI calls")
+                        .font(.caption2.bold())
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 4)
+                        .background(.orange.gradient, in: Capsule())
+                        .padding(.bottom, 4)
+                }
+            }
             .overlay {
             if let error = projectState.error {
                 ErrorOverlay(error: error) {

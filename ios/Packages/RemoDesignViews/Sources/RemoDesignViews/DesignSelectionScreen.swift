@@ -8,6 +8,7 @@ public struct DesignSelectionScreen: View {
     let client: any WorkflowClientProtocol
 
     @State private var selectedIndex: Int?
+    @State private var userHasSelected = false
     @AppStorage("remo_show_side_by_side") private var showSideBySide = false
     @State private var isSelecting = false
     @State private var errorMessage: String?
@@ -48,7 +49,7 @@ public struct DesignSelectionScreen: View {
                 .frame(maxWidth: .infinity)
             }
             .buttonStyle(.borderedProminent)
-            .disabled(selectedIndex == nil || isSelecting)
+            .disabled(!userHasSelected || selectedIndex == nil || isSelecting)
             .padding(.horizontal)
             .accessibilityLabel(isSelecting ? "Selecting design" : "Choose this design")
             .accessibilityIdentifier("selection_choose")
@@ -85,8 +86,9 @@ public struct DesignSelectionScreen: View {
     private var swipeView: some View {
         TabView(selection: $selectedIndex) {
             ForEach(Array(projectState.generatedOptions.enumerated()), id: \.offset) { index, option in
-                DesignCard(option: option, isSelected: selectedIndex == index) {
+                DesignCard(option: option, isSelected: userHasSelected && selectedIndex == index) {
                     selectedIndex = index
+                    userHasSelected = true
                 }
                 .tag(Optional(index))
             }
@@ -100,8 +102,9 @@ public struct DesignSelectionScreen: View {
     private var sideBySideView: some View {
         HStack(spacing: 8) {
             ForEach(Array(projectState.generatedOptions.enumerated()), id: \.offset) { index, option in
-                DesignCard(option: option, isSelected: selectedIndex == index) {
+                DesignCard(option: option, isSelected: userHasSelected && selectedIndex == index) {
                     selectedIndex = index
+                    userHasSelected = true
                 }
             }
         }

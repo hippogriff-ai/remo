@@ -73,6 +73,10 @@ public final class RealWorkflowClient: WorkflowClientProtocol, @unchecked Sendab
         )
     }
 
+    public func confirmPhotos(projectId: String) async throws {
+        let _: ActionResponse = try await post("/api/v1/projects/\(projectId)/photos/confirm")
+    }
+
     // MARK: - Scan
 
     public func uploadScan(projectId: String, scanData: [String: Any]) async throws {
