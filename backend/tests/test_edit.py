@@ -796,7 +796,7 @@ class TestEditDesignActivity:
             # Verify retry message requests image generation
             retry_msg = mock_chat.send_message.call_args_list[2][0][0]
             assert "generate" in retry_msg.lower()
-            assert "annotation" in retry_msg.lower()
+            assert "photograph" in retry_msg.lower()
 
     @pytest.mark.asyncio
     async def test_bootstrap_fails_when_no_image_after_retry(self):
@@ -1006,7 +1006,7 @@ class TestEditDesignActivity:
             assert mock_continue.call_count == 2
             # Verify retry message content
             retry_call_parts = mock_continue.call_args_list[1][0][1]
-            assert any("annotation" in str(p).lower() for p in retry_call_parts)
+            assert any("photograph" in str(p).lower() for p in retry_call_parts)
             # History: 2 original + user + model + retry user + retry model = 6
             call_args = mock_serialize.call_args[0]
             updated_history = call_args[0]

@@ -1,8 +1,8 @@
-"""edit_design activity — multi-turn annotation-based image editing.
+"""edit_design activity — multi-turn image editing via text coordinates.
 
-Handles annotation-based edits (numbered circles on image), text-only
-feedback, or both combined in a single call. Uses a persistent Gemini
-chat session serialized to R2 between Temporal activity calls.
+Handles region-based edits (described by text position coordinates),
+text-only feedback, or both combined in a single call. Uses a persistent
+Gemini chat session serialized to R2 between Temporal activity calls.
 
 First call: bootstraps a new chat with reference images + selected design.
 Subsequent calls: restores chat history from R2, continues the conversation.
@@ -51,15 +51,12 @@ _background_tasks: set[asyncio.Task] = set()  # type: ignore[type-arg]
 PROMPTS_DIR = Path(__file__).parent.parent.parent / "prompts"
 
 CONTEXT_PROMPT = (
-    "Here is a room redesign. I will send you edits as annotated images "
-    "with numbered circles marking areas to change, or as text instructions. "
-    "The colored circles (red, blue, green outlines with numbered badges) are "
-    "for demonstration purposes only — they are NOT part of the room and must "
-    "never appear in your output. "
+    "Here is a room redesign. I will send you edits describing specific areas "
+    "to change by their position in the image, or as text instructions. "
     "Preserve the exact camera angle, perspective, and all architectural features "
     "(walls, windows, doors, ceiling, floor). Only modify the specific elements "
     "requested in each edit instruction. Your output must always be a clean "
-    "photorealistic photograph with zero circles, badges, outlines, or markers."
+    "photorealistic photograph with no overlays, markers, or annotation-like shapes."
 )
 
 TEXT_FEEDBACK_TEMPLATE = (
@@ -192,10 +189,10 @@ async def _bootstrap_chat(
     )
 
     # Safety cap: product allows 2 room + 3 inspiration = 5 refs, plus
-    # base_image (always) and annotated image (when annotations present) =
+    # base_image (always, sent twice when annotations present: context + edit) =
     # 7 images max in bootstrap. Well under the model's 14-image ceiling.
     # This guard only fires if upstream validation is bypassed.
-    reserved = 2 if input.annotations else 1  # base_image + annotated
+    reserved = 2 if input.annotations else 1  # base_image in context + edit turns
     max_ref_images = MAX_INPUT_IMAGES - reserved
     total_ref = len(room_images) + len(inspiration_images)
     if total_ref > max_ref_images:
@@ -263,9 +260,8 @@ async def _bootstrap_chat(
 
     if result_image is None:
         retry_msg = (
-            "Please generate the edited room image now. Remove ALL colored circles "
-            "(red, blue, green), numbered badges, and any annotation markers. "
-            "Output only a clean photograph."
+            "Please generate the edited room image now. "
+            "Output only a clean photorealistic photograph with no overlays or markers."
         )
         response2 = await asyncio.to_thread(chat.send_message, retry_msg)
         result_image = extract_image(response2)
@@ -350,9 +346,8 @@ async def _continue_chat(
     if result_image is None:
         # Retry with explicit request
         retry_text = (
-            "Please generate the edited room image now. Remove ALL colored circles "
-            "(red, blue, green), numbered badges, and any annotation markers. "
-            "Output only a clean photograph."
+            "Please generate the edited room image now. "
+            "Output only a clean photorealistic photograph with no overlays or markers."
         )
         response = await asyncio.to_thread(
             continue_chat,
