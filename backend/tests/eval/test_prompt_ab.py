@@ -47,6 +47,23 @@ TEST_BRIEF = DesignBrief(
     emotional_drivers=["calm", "welcoming"],
 )
 
+# Test brief matching the real bathroom fixture photos
+BATHROOM_BRIEF = DesignBrief(
+    room_type="bathroom",
+    occupants="couple",
+    lifestyle="urban professional",
+    style_profile=StyleProfile(
+        mood="spa-like and serene",
+        colors=["warm white", "walnut", "brass"],
+        textures=["natural stone", "wood", "glass"],
+        lighting="soft warm ambient with accent lighting",
+        clutter_level="minimal",
+    ),
+    pain_points=["cluttered countertop", "dated hardware"],
+    constraints=["keep existing tub and vanity layout"],
+    emotional_drivers=["relaxation", "clean"],
+)
+
 pytestmark = [
     pytest.mark.integration,
     pytest.mark.skipif(
@@ -56,7 +73,9 @@ pytestmark = [
 ]
 
 
-REAL_ROOM_PHOTO = Path(__file__).parent.parent / "fixtures" / "room_photo.jpg"
+FIXTURES_DIR = Path(__file__).parent.parent / "fixtures"
+REAL_ROOM_PHOTO = FIXTURES_DIR / "room_photo.jpg"
+REAL_ROOM_PHOTO_2 = FIXTURES_DIR / "room_photo_2.jpg"
 
 
 def _make_room_image() -> Image.Image:
@@ -73,6 +92,17 @@ def _make_room_image() -> Image.Image:
     img[512:, :, :] = [140, 110, 80]
     img[100:400, 400:624, :] = [180, 210, 240]
     return Image.fromarray(img)
+
+
+def _make_room_images() -> list[Image.Image]:
+    """Load all available real room photos for multi-image eval."""
+    images = []
+    for path in [REAL_ROOM_PHOTO, REAL_ROOM_PHOTO_2]:
+        if path.exists():
+            images.append(Image.open(path).convert("RGB"))
+    if not images:
+        images.append(_make_room_image())
+    return images
 
 
 def _build_prompt(gen_version: str, room_pres_version: str, room_context: str = "") -> str:
@@ -1006,44 +1036,54 @@ class TestPromptAB:
         _format_room_context() now outputs structured sections (ROOM GEOMETRY,
         WALLS with compass, FIXED OPENINGS, EXISTING FURNITURE with proportions).
 
+        Uses real bathroom photos. Runs each photo through the A/B comparison
+        for stronger signal across different angles/compositions.
+
         Target: Room Preservation +0.5pt, Furniture Scale +0.5-1.0pt (deep eval).
         """
-        room_image = _make_room_image()
+        room_images = _make_room_images()
 
-        # Structured room context (simulates LiDAR-measured room)
+        # Structured room context matching the real bathroom fixture photos
         room_context = (
             "ROOM GEOMETRY (LiDAR-measured, precise):\n"
-            "- Dimensions: 4.2m wide × 5.8m long, ceiling height 2.7m\n"
-            "- Floor area: 24.4 m²\n\n"
+            "- Dimensions: 1.8m wide × 2.5m long, ceiling height 2.4m\n"
+            "- Floor area: 4.5 m²\n\n"
             "WALLS (4 detected):\n"
-            "- wall_0: 4.2m wide, 2.7m tall, faces south (0°)\n"
-            "- wall_1: 5.8m wide, 2.7m tall, faces west (90°)\n"
-            "- wall_2: 4.2m wide, 2.7m tall, faces north (180°)\n"
-            "- wall_3: 5.8m wide, 2.7m tall, faces east (270°)\n\n"
+            "- wall_0: 1.8m wide, 2.4m tall, faces south (0°)\n"
+            "- wall_1: 2.5m wide, 2.4m tall, faces west (90°)\n"
+            "- wall_2: 1.8m wide, 2.4m tall, faces north (180°)\n"
+            "- wall_3: 2.5m wide, 2.4m tall, faces east (270°)\n\n"
             "FIXED OPENINGS (do not relocate):\n"
-            "- door (0.9m × 2.1m)\n"
-            "- window (1.2m × 1.5m)\n\n"
+            "- door (0.7m × 2.1m)\n\n"
             "EXISTING FURNITURE (scale reference — respect these proportions):\n"
-            "- sofa: 2.1m × 0.9m footprint, 0.8m tall — spans ~50% of shorter wall\n"
-            "- coffee_table: 1.2m × 0.6m footprint, 0.5m tall\n"
-            "- bookshelf: 0.8m × 0.3m footprint, 1.8m tall\n"
+            "- bathtub: 1.5m × 0.7m footprint, 0.6m tall — spans ~83% of shorter wall\n"
+            "- vanity: 0.6m × 0.5m footprint, 0.9m tall\n"
+            "- toilet: 0.4m × 0.7m footprint, 0.4m tall\n"
         )
 
         baseline_prompt = _build_prompt("v5", "v4")
         candidate_prompt = _build_prompt("v5", "v5", room_context=room_context)
 
-        baseline_all, candidate_all = _run_ab_comparison(
-            "gen_v5+room_v4 (baseline)",
-            "gen_v5+room_v5 (scene data)",
-            baseline_prompt,
-            candidate_prompt,
-            room_image,
-        )
+        all_baseline, all_candidate = [], []
+        for idx, room_image in enumerate(room_images):
+            print(f"\n{'='*60}")
+            print(f"  PHOTO {idx + 1}/{len(room_images)}")
+            print(f"{'='*60}")
+
+            baseline_all, candidate_all = _run_ab_comparison(
+                "gen_v5+room_v4 (baseline)",
+                "gen_v5+room_v5 (scene data)",
+                baseline_prompt,
+                candidate_prompt,
+                room_image,
+            )
+            all_baseline.extend(baseline_all)
+            all_candidate.extend(candidate_all)
 
         print("\n" + "=" * 60)
-        print("  SCENE DATA FAST EVAL SUMMARY")
+        print(f"  SCENE DATA FAST EVAL SUMMARY ({len(room_images)} photos × {NUM_RUNS} runs)")
         print("=" * 60)
-        _print_bootstrap_summary("v5+room_v4", "v5+room_v5", baseline_all, candidate_all)
+        _print_bootstrap_summary("v5+room_v4", "v5+room_v5", all_baseline, all_candidate)
 
     @pytest.mark.asyncio
     @pytest.mark.skipif(
@@ -1053,64 +1093,66 @@ class TestPromptAB:
     async def test_scene_data_deep(self):
         """Deep eval: gen_v5+room_v5 (structured scene data) vs gen_v5+room_v4 (baseline).
 
-        Uses 100-point rubric. Specifically targets room_preservation (18/20, 2pt headroom)
-        and furniture_scale (9.2/10, 0.8pt headroom).
+        Uses 100-point rubric with real bathroom photos. Specifically targets
+        room_preservation and furniture_scale in a tight bathroom where spatial
+        accuracy matters most.
         """
         import numpy as np
 
-        room_image = _make_room_image()
+        room_images = _make_room_images()
 
         room_context = (
             "ROOM GEOMETRY (LiDAR-measured, precise):\n"
-            "- Dimensions: 4.2m wide × 5.8m long, ceiling height 2.7m\n"
-            "- Floor area: 24.4 m²\n\n"
+            "- Dimensions: 1.8m wide × 2.5m long, ceiling height 2.4m\n"
+            "- Floor area: 4.5 m²\n\n"
             "WALLS (4 detected):\n"
-            "- wall_0: 4.2m wide, 2.7m tall, faces south (0°)\n"
-            "- wall_1: 5.8m wide, 2.7m tall, faces west (90°)\n"
-            "- wall_2: 4.2m wide, 2.7m tall, faces north (180°)\n"
-            "- wall_3: 5.8m wide, 2.7m tall, faces east (270°)\n\n"
+            "- wall_0: 1.8m wide, 2.4m tall, faces south (0°)\n"
+            "- wall_1: 2.5m wide, 2.4m tall, faces west (90°)\n"
+            "- wall_2: 1.8m wide, 2.4m tall, faces north (180°)\n"
+            "- wall_3: 2.5m wide, 2.4m tall, faces east (270°)\n\n"
             "FIXED OPENINGS (do not relocate):\n"
-            "- door (0.9m × 2.1m)\n"
-            "- window (1.2m × 1.5m)\n\n"
+            "- door (0.7m × 2.1m)\n\n"
             "EXISTING FURNITURE (scale reference — respect these proportions):\n"
-            "- sofa: 2.1m × 0.9m footprint, 0.8m tall — spans ~50% of shorter wall\n"
-            "- coffee_table: 1.2m × 0.6m footprint, 0.5m tall\n"
-            "- bookshelf: 0.8m × 0.3m footprint, 1.8m tall\n"
+            "- bathtub: 1.5m × 0.7m footprint, 0.6m tall — spans ~83% of shorter wall\n"
+            "- vanity: 0.6m × 0.5m footprint, 0.9m tall\n"
+            "- toilet: 0.4m × 0.7m footprint, 0.4m tall\n"
         )
 
         baseline_prompt = _build_prompt("v5", "v4")
         candidate_prompt = _build_prompt("v5", "v5", room_context=room_context)
 
-        print("\n" + "=" * 60)
-        print(f"  DEEP EVAL SCENE DATA: v5+room_v4 vs v5+room_v5 ({NUM_RUNS} runs)")
-        print("=" * 60)
-
         baseline_deep, candidate_deep = [], []
 
-        for i in range(NUM_RUNS):
-            print(f"\n--- Run {i + 1}/{NUM_RUNS} ---")
+        for photo_idx, room_image in enumerate(room_images):
+            print(f"\n{'='*60}")
+            print(f"  DEEP EVAL SCENE DATA: photo {photo_idx + 1}/{len(room_images)}, "
+                  f"v5+room_v4 vs v5+room_v5 ({NUM_RUNS} runs)")
+            print("=" * 60)
 
-            print("  Baseline (v5+room_v4)...", end=" ", flush=True)
-            b_img = await _generate_image(baseline_prompt, room_image)
-            print("generated...", end=" ", flush=True)
-            b_deep = await _run_deep_eval(b_img, room_image, brief=TEST_BRIEF)
-            baseline_deep.append(b_deep)
-            if "total" in b_deep:
-                print(f"total={b_deep['total']} tag={b_deep['tag']}")
-                _append_result("deep_scene_baseline_v5+room_v4", b_deep)
-            else:
-                print(f"SKIP: {b_deep}")
+            for i in range(NUM_RUNS):
+                print(f"\n--- Photo {photo_idx + 1}, Run {i + 1}/{NUM_RUNS} ---")
 
-            print("  Candidate (v5+room_v5)...", end=" ", flush=True)
-            c_img = await _generate_image(candidate_prompt, room_image)
-            print("generated...", end=" ", flush=True)
-            c_deep = await _run_deep_eval(c_img, room_image, brief=TEST_BRIEF)
-            candidate_deep.append(c_deep)
-            if "total" in c_deep:
-                print(f"total={c_deep['total']} tag={c_deep['tag']}")
-                _append_result("deep_scene_candidate_v5+room_v5", c_deep)
-            else:
-                print(f"SKIP: {c_deep}")
+                print("  Baseline (v5+room_v4)...", end=" ", flush=True)
+                b_img = await _generate_image(baseline_prompt, room_image)
+                print("generated...", end=" ", flush=True)
+                b_deep = await _run_deep_eval(b_img, room_image, brief=BATHROOM_BRIEF)
+                baseline_deep.append(b_deep)
+                if "total" in b_deep:
+                    print(f"total={b_deep['total']} tag={b_deep['tag']}")
+                    _append_result("deep_scene_baseline_v5+room_v4", b_deep)
+                else:
+                    print(f"SKIP: {b_deep}")
+
+                print("  Candidate (v5+room_v5)...", end=" ", flush=True)
+                c_img = await _generate_image(candidate_prompt, room_image)
+                print("generated...", end=" ", flush=True)
+                c_deep = await _run_deep_eval(c_img, room_image, brief=BATHROOM_BRIEF)
+                candidate_deep.append(c_deep)
+                if "total" in c_deep:
+                    print(f"total={c_deep['total']} tag={c_deep['tag']}")
+                    _append_result("deep_scene_candidate_v5+room_v5", c_deep)
+                else:
+                    print(f"SKIP: {c_deep}")
 
         # Summary
         b_totals = [d["total"] for d in baseline_deep if "total" in d]
