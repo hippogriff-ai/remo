@@ -14,6 +14,7 @@ public struct IntakeChatScreen: View {
     @State private var showSkipConfirmation = false
     @State private var errorMessage: String?
     @State private var selectedQuickReply: Int?
+    @FocusState private var isInputFocused: Bool
 
     public init(projectState: ProjectState, client: any WorkflowClientProtocol) {
         self.projectState = projectState
@@ -144,8 +145,9 @@ public struct IntakeChatScreen: View {
                                 .id(index)
                         }
 
-                        // Quick reply chips
-                        if let options = projectState.currentIntakeOutput?.options, !options.isEmpty {
+                        // Quick reply chips — hidden once user selects one (choice shown as chat bubble)
+                        if let options = projectState.currentIntakeOutput?.options, !options.isEmpty,
+                           selectedQuickReply == nil {
                             QuickReplyChips(
                                 options: options,
                                 selectedId: selectedQuickReply,
@@ -178,6 +180,7 @@ public struct IntakeChatScreen: View {
                     }
                     .padding()
                 }
+                .textSelection(.enabled)
                 .onChange(of: projectState.chatMessages.count) { _, _ in
                     withAnimation {
                         proxy.scrollTo(projectState.chatMessages.count - 1, anchor: .bottom)
@@ -202,6 +205,7 @@ public struct IntakeChatScreen: View {
                     TextField("Type your message...", text: $inputText, axis: .vertical)
                         .textFieldStyle(.roundedBorder)
                         .lineLimit(1...4)
+                        .focused($isInputFocused)
                         .accessibilityIdentifier("chat_input")
 
                     Button {
@@ -253,6 +257,7 @@ public struct IntakeChatScreen: View {
         defer { isSending = false }
 
         projectState.chatMessages.append(ChatMessage(role: "user", content: trimmed))
+        isInputFocused = false
         inputText = ""
 
         do {

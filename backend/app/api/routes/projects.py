@@ -14,7 +14,7 @@ from dataclasses import dataclass, field
 from typing import Literal
 
 import structlog
-from fastapi import APIRouter, Request, UploadFile
+from fastapi import APIRouter, Form, Request, UploadFile
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
@@ -337,8 +337,8 @@ async def upload_photo(
     project_id: str,
     file: UploadFile,
     request: Request,
-    photo_type: Literal["room", "inspiration"] = "room",
-    note: str | None = None,
+    photo_type: Literal["room", "inspiration"] = Form("room"),
+    note: str | None = Form(None),
 ):
     """Upload photo -> validate -> store (R2 in Temporal mode) -> add to state."""
     state = await _resolve_state(request, project_id)
@@ -832,8 +832,11 @@ async def _real_intake_message(
         user_message=message,
     )
 
+    from app.utils.tracing import trace_thread
+
     try:
-        result = await _run_intake_core(intake_input)
+        with trace_thread(project_id, "intake"):
+            result = await _run_intake_core(intake_input)
     except Exception:
         logger.exception("intake_agent_error", project_id=project_id)
         return _error(

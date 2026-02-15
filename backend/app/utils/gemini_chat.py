@@ -53,6 +53,8 @@ def get_client() -> genai.Client:
     """Create a Gemini client using the configured API key."""
     from app.utils.tracing import wrap_gemini
 
+    if not settings.google_ai_api_key:
+        raise ApplicationError("GOOGLE_AI_API_KEY not configured", non_retryable=True)
     client = genai.Client(api_key=settings.google_ai_api_key)
     return wrap_gemini(client)  # type: ignore[no-any-return]
 

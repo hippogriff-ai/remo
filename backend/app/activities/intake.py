@@ -110,7 +110,7 @@ _BRIEF_PROPERTIES: dict[str, Any] = {
     "constraints": {
         "type": "array",
         "items": {"type": "string"},
-        "description": "Budget, pets, kids, mobility, rental, timeline, etc.",
+        "description": "Pets, kids, mobility, rental, timeline, etc.",
     },
     "inspiration_notes": {
         "type": "array",

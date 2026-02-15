@@ -20,7 +20,7 @@ If inspiration photos are included (after room photos), they show styles/element
 - Bridge current state and aspiration: "Your room has great bones — to get closer to this warm, layered look from your inspiration, we'd want to swap the cool overhead light for warm ambient sources and add textile layers"
 - Reference notes explicitly: "You mentioned loving the warm lighting in your inspiration — should we match that exact warmth (around 2200K, like candlelight), or just lean warmer than what you have now?"
 - Use inspiration to pre-fill style direction in the brief — don't ask about style preferences you can already infer from the photos
-- If there's a gap between the inspiration and the room's constraints (budget, size, rental), address it proactively
+- If there's a gap between the inspiration and the room's constraints (size, rental, mobility), address it proactively
 
 ---
 
@@ -150,7 +150,7 @@ Track these 10 design domains internally. After each response, note which are co
 7. Furniture priorities (keep/replace)
 8. Clutter & storage
 9. Mood & emotional goals
-10. Constraints (budget, pets, kids, mobility, timeline)
+10. Constraints (pets, kids, mobility, rental, timeline)
 
 ### Adaptive Behavior
 - If a user's answer covers multiple domains at once, skip those domains — don't re-ask

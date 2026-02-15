@@ -233,12 +233,12 @@ class TestPhotoUpload:
     @pytest.mark.asyncio
     @patch("app.api.routes.projects.validate_photo", return_value=_VALID)
     async def test_photo_type_parameter(self, mock_val, client, project_id):
-        """photo_type query param is forwarded to validation."""
+        """photo_type form field is forwarded to validation."""
         fake_file = io.BytesIO(b"data")
         await client.post(
             f"/api/v1/projects/{project_id}/photos",
             files={"file": ("inspo.jpg", fake_file, "image/jpeg")},
-            params={"photo_type": "inspiration"},
+            data={"photo_type": "inspiration"},
         )
         # Verify validation was called with correct photo_type
         call_input = mock_val.call_args[0][0]
@@ -312,7 +312,7 @@ class TestPhotoUpload:
         resp = await client.post(
             f"/api/v1/projects/{project_id}/photos",
             files={"file": ("inspo4.jpg", io.BytesIO(b"img"), "image/jpeg")},
-            params={"photo_type": "inspiration"},
+            data={"photo_type": "inspiration"},
         )
         assert resp.status_code == 422
         assert resp.json()["error"] == "too_many_inspiration_photos"
@@ -336,7 +336,7 @@ class TestPhotoUpload:
         resp = await client.post(
             f"/api/v1/projects/{project_id}/photos",
             files={"file": ("room.jpg", io.BytesIO(b"img"), "image/jpeg")},
-            params={"photo_type": "room"},
+            data={"photo_type": "room"},
         )
         assert resp.status_code == 200
 
@@ -349,7 +349,7 @@ class TestPhotoUpload:
         resp = await client.post(
             f"/api/v1/projects/{project_id}/photos",
             files={"file": ("inspo.jpg", io.BytesIO(b"img"), "image/jpeg")},
-            params={"photo_type": "inspiration", "note": "Love the warm lighting"},
+            data={"photo_type": "inspiration", "note": "Love the warm lighting"},
         )
         assert resp.status_code == 200
         state = (await client.get(f"/api/v1/projects/{project_id}")).json()
@@ -363,7 +363,7 @@ class TestPhotoUpload:
         resp = await client.post(
             f"/api/v1/projects/{project_id}/photos",
             files={"file": ("room.jpg", io.BytesIO(b"img"), "image/jpeg")},
-            params={"photo_type": "room", "note": "some note"},
+            data={"photo_type": "room", "note": "some note"},
         )
         assert resp.status_code == 422
         assert resp.json()["error"] == "note_not_allowed"
@@ -374,7 +374,7 @@ class TestPhotoUpload:
         resp = await client.post(
             f"/api/v1/projects/{project_id}/photos",
             files={"file": ("inspo.jpg", io.BytesIO(b"img"), "image/jpeg")},
-            params={"photo_type": "inspiration", "note": "x" * 201},
+            data={"photo_type": "inspiration", "note": "x" * 201},
         )
         assert resp.status_code == 422
         assert resp.json()["error"] == "note_too_long"
@@ -386,7 +386,7 @@ class TestPhotoUpload:
         resp = await client.post(
             f"/api/v1/projects/{project_id}/photos",
             files={"file": ("inspo.jpg", io.BytesIO(b"img"), "image/jpeg")},
-            params={"photo_type": "inspiration"},
+            data={"photo_type": "inspiration"},
         )
         assert resp.status_code == 200
         state = (await client.get(f"/api/v1/projects/{project_id}")).json()
@@ -403,7 +403,7 @@ class TestPhotoUpload:
         resp = await client.post(
             f"/api/v1/projects/{project_id}/photos",
             files={"file": ("inspo.jpg", io.BytesIO(b"img"), "image/jpeg")},
-            params={"photo_type": "inspiration"},
+            data={"photo_type": "inspiration"},
         )
         assert resp.status_code == 200
         # Step stays scan (auto-transition only fires from "photos")
@@ -2784,7 +2784,7 @@ class TestFullFlow:
         resp = await client.post(
             f"/api/v1/projects/{pid}/photos",
             files={"file": ("inspo.jpg", io.BytesIO(b"img"), "image/jpeg")},
-            params={"photo_type": "inspiration", "note": "Love the warm lighting"},
+            data={"photo_type": "inspiration", "note": "Love the warm lighting"},
         )
         assert resp.status_code == 200
         assert _mock_states[pid].step == "scan"  # still in scan
@@ -3797,7 +3797,7 @@ class TestEdgeCases:
         await client.post(
             f"/api/v1/projects/{project_id}/photos",
             files={"file": ("inspo.jpg", io.BytesIO(b"img"), "image/jpeg")},
-            params={"photo_type": "inspiration"},
+            data={"photo_type": "inspiration"},
         )
         assert _mock_states[project_id].step == "scan"  # still in scan
 

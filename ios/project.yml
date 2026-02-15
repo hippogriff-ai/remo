@@ -70,6 +70,7 @@ targets:
           - "_http._tcp"
         NSCameraUsageDescription: "Remo needs camera access to photograph your room."
         NSPhotoLibraryUsageDescription: "Remo needs photo library access to select room and inspiration photos."
+        BackendURL: "$(BACKEND_URL)"
 
 schemes:
   Remo:

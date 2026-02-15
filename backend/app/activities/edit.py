@@ -385,6 +385,7 @@ async def edit_design(input: EditDesignInput) -> EditDesignOutput:
 
     # Resolve R2 storage keys to presigned URLs (pass through existing URLs)
     from app.utils.r2 import resolve_url, resolve_urls
+    from app.utils.tracing import trace_thread
 
     resolved_input = input.model_copy(
         update={
@@ -402,7 +403,8 @@ async def edit_design(input: EditDesignInput) -> EditDesignOutput:
             # First call: bootstrap — always needs the base image
             base_image = await download_image(resolved_input.base_image_url)
             original_image = base_image
-            chat, result_image = await _bootstrap_chat(resolved_input, base_image)
+            with trace_thread(input.project_id, "edit"):
+                chat, result_image = await _bootstrap_chat(resolved_input, base_image)
 
             if result_image is None:
                 raise ApplicationError(
@@ -425,7 +427,8 @@ async def edit_design(input: EditDesignInput) -> EditDesignOutput:
                 else None
             )
             original_image = cont_base
-            result_image, updated_history = await _continue_chat(resolved_input, cont_base)
+            with trace_thread(input.project_id, "edit"):
+                result_image, updated_history = await _continue_chat(resolved_input, cont_base)
 
             if result_image is None:
                 raise ApplicationError(

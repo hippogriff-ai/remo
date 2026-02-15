@@ -116,3 +116,35 @@ return DesignBrief(
 ```
 
 Then update `generate.py` to read `brief.lifestyle` when available.
+
+---
+
+## 4. Budget-Aware Shopping List
+
+**Priority**: Medium (meaningful product feature, but non-trivial)
+**Effort**: Large
+**Source**: Device testing feedback
+
+### Problem
+
+Users may have a total budget for their room redesign (e.g., "$2,000"). Currently the intake agent doesn't ask about budget, and the shopping phase returns products without price constraints. Adding budget-awareness requires solving a hard allocation problem.
+
+### Why It's Not a Quick Win
+
+1. **Budget allocation**: A $2,000 total budget must be split across 8-15 items. A sofa gets more than a lamp, but the right ratios depend on room type, style, and what the user is keeping vs. replacing.
+2. **No price filtering in search**: Exa (product search API) doesn't support price range queries. You'd need to search, check prices, and filter post-hoc.
+3. **Iterative rebalancing**: If the sofa costs $800 instead of the allocated $600, every other allocation shifts. This requires multiple search rounds.
+4. **Price availability**: Many product listings don't expose prices in metadata. You'd need to scrape or use a commerce-specific API.
+
+### Proposed Approach (When Prioritized)
+
+1. Add `budget` field to `DesignBrief` (optional, user-provided total)
+2. In intake: ask about budget as domain #10 (restore `budget` to constraints)
+3. Pre-shopping: allocate budget per product category using a heuristic table (e.g., seating 30-40%, lighting 10-15%, decor 10-15%, textiles 10-15%)
+4. Shopping activity: pass per-item budget hint to Exa queries as keywords (e.g., "modern sofa under $600")
+5. Post-shopping: sum prices, flag if over budget, suggest alternatives for most expensive items
+6. UI: show total cost vs. budget in shopping list screen
+
+### Current State
+
+Budget removed from intake domains (not asked). Constraints field still collects pets, kids, mobility, rental, timeline — these affect design choices and are used in generation/edit prompts.

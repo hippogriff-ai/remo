@@ -3,12 +3,19 @@
 Evaluation is lazy: the env var and import are checked on first call, not at
 import time.  If langsmith is requested (key is set) but not installed, we
 fall back to no-ops with a warning rather than crashing the pipeline.
+
+Threading: use trace_thread(project_id, "activity_name") as a context manager
+to group all LLM calls within the same project into a single LangSmith thread.
 """
 
 from __future__ import annotations
 
 import os
-from typing import Any
+from contextlib import contextmanager
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from collections.abc import Generator
 
 import structlog
 
@@ -100,3 +107,32 @@ def traceable(**kwargs: Any) -> Any:
             return fn
 
         return _noop
+
+
+@contextmanager
+def trace_thread(project_id: str, name: str) -> Generator[None, None, None]:
+    """Group LLM calls under a LangSmith thread keyed by project_id.
+
+    Usage::
+
+        with trace_thread(project_id, "intake"):
+            response = await client.messages.create(...)
+
+    No-op without LANGSMITH_API_KEY or if langsmith is not installed.
+    """
+    if not os.environ.get("LANGSMITH_API_KEY", "").strip():
+        yield
+        return
+    try:
+        import langsmith
+
+        with langsmith.trace(
+            name=name,
+            metadata={"thread_id": project_id, "project_id": project_id},
+        ):
+            yield
+    except (ImportError, ModuleNotFoundError):
+        yield
+    except Exception as exc:
+        _log.warning("langsmith_trace_thread_failed", error=str(exc))
+        yield
