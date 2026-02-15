@@ -1,6 +1,6 @@
 # Eval Pipeline
 
-Quality evaluation infrastructure for generation and edit outputs. Two layers: a fast local layer ($0, <100ms) and a deep Claude Vision judge layer (~$0.02/eval). Eval never blocks the workflow.
+Quality evaluation infrastructure for generation and edit outputs. Single-layer VLM (Claude Vision judge) architecture with local artifact detection. Eval never blocks the workflow.
 
 ## Quick Start
 
@@ -8,24 +8,23 @@ Quality evaluation infrastructure for generation and edit outputs. Two layers: a
 
 ```bash
 # In .env or environment variables:
-EVAL_MODE=off    # Default. No eval runs, zero overhead.
-EVAL_MODE=fast   # Runs CLIP/SSIM/artifact detection locally. $0 cost, <100ms.
-EVAL_MODE=full   # Fast layer + Claude Vision judge on flagged results. ~$0.02/eval.
+EVAL_MODE=off   # Default. No eval runs, zero overhead.
+EVAL_MODE=on    # Runs artifact detection + Claude Vision judge. ~$0.02/eval.
 ```
 
-### 2. Install eval dependencies (for `fast` or `full` mode)
+### 2. Install eval dependencies (for artifact detection)
 
 ```bash
 cd backend
 pip install -e ".[eval]"
 ```
 
-This installs `open-clip-torch`, `torch`, and `scikit-image`. These are gated behind `try/except` — if missing, the fast layer returns neutral scores (0.5) instead of crashing.
+This installs `opencv-python-headless` for annotation artifact detection. If missing, artifact detection is skipped (returns clean).
 
-### 3. Set API keys (for `full` mode only)
+### 3. Set API keys
 
 ```bash
-ANTHROPIC_API_KEY=sk-ant-...   # Required for deep eval (Claude Sonnet judge)
+ANTHROPIC_API_KEY=sk-ant-...   # Required for VLM eval (Claude Sonnet judge)
 ```
 
 That's it. The pipeline runs automatically on every `generate_designs` and `edit_design` activity call.
@@ -36,28 +35,27 @@ That's it. The pipeline runs automatically on every `generate_designs` and `edit
 generate_designs() / edit_design()
   └── _maybe_run_eval() / _maybe_run_edit_eval()
         ├── if EVAL_MODE == "off" → return immediately
-        ├── if EVAL_MODE == "fast" or "full":
-        │     └── run_fast_eval() → FastEvalResult
-        │           ├── CLIP text-image alignment (does image match the brief?)
-        │           ├── CLIP image-image similarity (is it the same room?)
-        │           ├── Edge-SSIM (are walls/windows/doors preserved?)
-        │           └── Annotation artifact detection (edit mode only)
-        ├── if EVAL_MODE == "full" AND (flagged OR 20% random sample):
-        │     └── evaluate_generation() / evaluate_edit() → deep eval
+        ├── if EVAL_MODE == "on":
+        │     ├── run_artifact_check() → ArtifactCheckResult
+        │     │     └── OpenCV HoughCircles (red/blue/green annotation markers)
+        │     └── evaluate_generation() / evaluate_edit() → VLM eval
         │           └── Claude Sonnet scores against rubric (100pts / 50pts)
+        │           └── Diagnostic scores (instruction_adherence, spatial_accuracy)
         └── append_score() → eval_history.jsonl
 ```
 
 ### Generation eval
 
-Runs on each generated option (typically 2). Fast layer scores all options; deep layer only fires when:
-- Any fast metric is below threshold (flagged), OR
-- 20% random sample (catches issues the fast layer misses)
-- A `DesignBrief` is available (deep eval needs it for rubric scoring)
+Runs on each generated option (typically 2). For each option:
+1. **Artifact check**: OpenCV detects leaked annotation markers (red/blue/green circles)
+2. **VLM eval**: Claude Sonnet scores against 100-point rubric + 2 diagnostic scores
+3. **Score tracking**: Results appended to JSONL history
+
+The VLM receives the original photo, generated image, design brief, generation prompt, and room context (LiDAR data) for comprehensive evaluation.
 
 ### Edit eval
 
-Runs on each edit result. Same fast+deep pattern, plus annotation artifact detection (checks for leaked red/blue/green circle markers in the output).
+Runs on each edit result. Same artifact check + VLM pattern, scored against a 50-point rubric.
 
 ### Error handling
 
@@ -69,20 +67,27 @@ Every eval run appends a JSONL record to `eval_history.jsonl`:
 
 ```json
 {
-  "timestamp": "2026-02-14T12:00:00+00:00",
+  "timestamp": "2026-02-15T12:00:00+00:00",
   "scenario": "generation_option_0",
-  "prompt_version": "v2",
-  "fast_eval": {
-    "clip_text_score": 0.28,
-    "clip_image_score": 0.85,
-    "edge_ssim_score": 0.42,
-    "composite_score": 0.52,
-    "has_artifacts": false,
-    "needs_deep_eval": false
+  "prompt_version": "v5",
+  "vlm_eval": {
+    "total": 87,
+    "tag": "EXCELLENT",
+    "photorealism": 13,
+    "style_adherence": 14,
+    "color_palette": 9,
+    "room_preservation": 18,
+    "furniture_scale": 9,
+    "lighting": 9,
+    "design_coherence": 9,
+    "brief_compliance": 5,
+    "keep_items": 4,
+    "instruction_adherence": 8,
+    "spatial_accuracy": 4
   },
-  "deep_eval": {
-    "total": 78,
-    "tag": "GOOD"
+  "artifact_check": {
+    "has_artifacts": false,
+    "artifact_count": 0
   },
   "model": "gemini-3-pro-image-preview"
 }
@@ -104,6 +109,8 @@ result = detect_regression(
 # result = {"is_regression": True, "rolling_avg": 78.4, "delta": -13.4, "window_size": 5}
 ```
 
+Regression detection reads from `vlm_eval.total`, falling back to `deep_eval.total` for backward compatibility with older records.
+
 ### Viewing history
 
 ```python
@@ -115,7 +122,7 @@ records = load_history(Path("eval_history.jsonl"), scenario="generation_option_0
 
 ## Prompt Versioning
 
-Generation and room preservation prompts are versioned for A/B testing.
+Generation, room preservation, and edit prompts are versioned for A/B testing.
 
 ### Current versions
 
@@ -123,48 +130,46 @@ Manifest at `backend/prompts/prompt_versions.json`:
 
 ```json
 {
-  "generation": {"active": "v2", "previous": "v1"},
-  "room_preservation": {"active": "v2", "previous": "v1"},
-  "edit": {"active": "v1"}
+  "generation": {"active": "v5", "previous": "v2"},
+  "room_preservation": {"active": "v4", "previous": "v5"},
+  "edit": {"active": "v5", "previous": "v1"}
 }
 ```
 
 ### How it works
 
 `generate_designs` calls `load_versioned_prompt("generation")` which:
-1. Reads the manifest to find active version (`v2`)
-2. Loads `prompts/generation_v2.txt`
+1. Reads the manifest to find active version (`v5`)
+2. Loads `prompts/generation_v5.txt`
 3. Falls back to `prompts/generation.txt` if versioned file missing
 
 ### Creating a new prompt version
 
-1. Copy the current prompt: `cp prompts/generation_v2.txt prompts/generation_v3.txt`
-2. Edit `generation_v3.txt` with your changes
+1. Copy the current prompt: `cp prompts/generation_v5.txt prompts/generation_v6.txt`
+2. Edit `generation_v6.txt` with your changes
 3. Update `prompt_versions.json`:
    ```json
-   {"generation": {"active": "v3", "previous": "v2"}}
+   {"generation": {"active": "v6", "previous": "v5"}}
    ```
-4. Run with `EVAL_MODE=full` and compare scores between v2 and v3 in `eval_history.jsonl`
+4. Run with `EVAL_MODE=on` and compare scores between v5 and v6 in `eval_history.jsonl`
 
 ### Rollback
 
 Set `"active"` back to the previous version in `prompt_versions.json`. No code changes needed.
 
-## Fast Eval Metrics
+## Artifact Detection
 
-| Metric | Range | Threshold | What it measures |
-|--------|-------|-----------|------------------|
-| CLIP text-image | 0-1 | 0.20 | Does the image match the design brief? |
-| CLIP image-image | 0-1 | 0.70 | Is it still the same room? |
-| Edge-SSIM | 0-1 | 0.30 | Are walls/windows/doors preserved? |
-| Composite | 0-1 | 0.40 | Weighted average (35%/35%/30%) |
-| Artifacts | bool | any | Annotation markers leaked into output? |
+Local OpenCV-based detection of annotation markers that leak into generated/edited images.
 
-If any metric falls below its threshold, `needs_deep_eval` is set to `True`.
+| Marker | HSV Range | What it detects |
+|--------|-----------|-----------------|
+| Red circles | H:0-10/160-180, S>100, V>100 | Red annotation circles |
+| Blue circles | H:100-130, S>100, V>100 | Blue annotation circles |
+| Green circles | H:35-85, S>100, V>100 | Green annotation circles |
 
-When dependencies are missing, all scores return 0.5 (neutral) instead of failing.
+Detection uses HoughCircles with configurable min/max radius. When OpenCV or NumPy are unavailable, artifact detection is skipped (returns clean).
 
-## Deep Eval Rubrics
+## VLM Eval Rubrics
 
 ### Generation (100 points, 9 criteria)
 
@@ -182,6 +187,13 @@ When dependencies are missing, all scores return 0.5 (neutral) instead of failin
 
 Tags: EXCELLENT (85+), GOOD (70+), ACCEPTABLE (55+), WEAK (40+), FAIL (<40)
 
+### Generation diagnostics (reported separately, not in 100-point total)
+
+| Diagnostic | Max | What it scores |
+|------------|-----|----------------|
+| Instruction Adherence | 10 | Generation prompt directives followed |
+| Spatial Accuracy | 5 | Furniture sizes and room proportions match room context |
+
 ### Edit (50 points, 5 criteria)
 
 | Criterion | Max | What it scores |
@@ -196,18 +208,14 @@ Tags: EXCELLENT (42+), GOOD (35+), ACCEPTABLE (27+), WEAK (20+), FAIL (<20)
 
 ## Standalone Usage
 
-You can run eval outside the activity pipeline:
-
 ```python
 from PIL import Image
-from app.utils.image_eval import run_fast_eval
+from app.utils.image_eval import run_artifact_check
 
-original = Image.open("room_photo.jpg")
 generated = Image.open("redesign.png")
-
-result = run_fast_eval(generated, original)
-print(f"Composite: {result.composite_score}")
-print(f"Needs deep eval: {result.needs_deep_eval}")
+result = run_artifact_check(generated)
+print(f"Has artifacts: {result.has_artifacts}")
+print(f"Artifact count: {result.artifact_count}")
 ```
 
 ```python
@@ -218,18 +226,29 @@ result = asyncio.run(evaluate_generation(
     original_photo_url="https://...",
     generated_image_url="https://...",
     brief=my_design_brief,
+    generation_prompt="...",
+    room_context="...",
 ))
 print(f"Score: {result.total}/100 ({result.tag})")
 for c in result.criteria:
     print(f"  {c.name}: {c.score}/{c.max_score}")
+print(f"Instruction adherence: {result.diagnostics.get('instruction_adherence')}")
+print(f"Spatial accuracy: {result.diagnostics.get('spatial_accuracy')}")
 ```
+
+## Cost
+
+- Artifact detection: $0 (local OpenCV)
+- VLM eval: ~$0.02/eval (Claude Sonnet, 2 images + rubric)
+- Per project (4 options): ~$0.08
+- Per A/B session (10 runs): ~$0.40
 
 ## File Map
 
 | File | Purpose |
 |------|---------|
-| `app/utils/image_eval.py` | Fast eval layer (CLIP, SSIM, artifacts) |
-| `app/activities/design_eval.py` | Deep eval layer (Claude Vision judge) |
+| `app/utils/image_eval.py` | Artifact detection (OpenCV HoughCircles) |
+| `app/activities/design_eval.py` | VLM eval layer (Claude Vision judge) |
 | `app/utils/score_tracking.py` | JSONL score history + regression detection |
 | `app/utils/prompt_versioning.py` | Versioned prompt loading |
 | `app/config.py` | `eval_mode` setting |

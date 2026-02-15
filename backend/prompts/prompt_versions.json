@@ -1,5 +1,5 @@
 {
   "generation": {"active": "v5", "previous": "v2"},
-  "room_preservation": {"active": "v5", "previous": "v4"},
+  "room_preservation": {"active": "v4", "previous": "v5"},
   "edit": {"active": "v5", "previous": "v1"}
 }

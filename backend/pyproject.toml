@@ -31,9 +31,6 @@ dev = [
     "langsmith>=0.2,<1",
 ]
 eval = [
-    "open-clip-torch>=2.26,<3",
-    "torch>=2.2,<3",
-    "scikit-image>=0.24,<1",
     "opencv-python-headless>=4.10,<5",
 ]
 

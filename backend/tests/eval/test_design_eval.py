@@ -1,4 +1,4 @@
-"""Unit tests for the deep eval layer (design_eval.py).
+"""Unit tests for the VLM eval layer (design_eval.py).
 
 Tests rubric structure, tag assignment, criteria parsing, result dataclasses,
 and evaluator functions with mocked API calls.
@@ -179,7 +179,20 @@ class TestResultDataclasses:
         )
         assert result.total == 80
         assert result.tag == "GOOD"
-        assert result.fast_eval == {}
+        assert result.diagnostics == {}
+        assert result.artifact_check == {}
+
+    def test_generation_result_with_diagnostics(self):
+        result = GenerationEvalResult(
+            criteria=[CriterionScore("test", 10, 15)],
+            total=85,
+            tag="EXCELLENT",
+            diagnostics={"instruction_adherence": 8, "spatial_accuracy": 4},
+            artifact_check={"has_artifacts": False, "artifact_count": 0},
+        )
+        assert result.diagnostics["instruction_adherence"] == 8
+        assert result.diagnostics["spatial_accuracy"] == 4
+        assert result.artifact_check["has_artifacts"] is False
 
     def test_edit_result(self):
         result = EditEvalResult(
@@ -188,7 +201,16 @@ class TestResultDataclasses:
             tag="GOOD",
         )
         assert result.total == 40
-        assert result.fast_eval == {}
+        assert result.artifact_check == {}
+
+    def test_edit_result_with_artifact_check(self):
+        result = EditEvalResult(
+            criteria=[CriterionScore("test", 10, 15)],
+            total=40,
+            tag="GOOD",
+            artifact_check={"has_artifacts": True, "artifact_count": 2},
+        )
+        assert result.artifact_check["has_artifacts"] is True
 
     def test_shopping_result(self):
         result = ShoppingVisualEvalResult(
@@ -220,6 +242,8 @@ _MOCK_GENERATION_RESPONSE = {
     "brief_compliance": 4,
     "keep_items": 4,
     "total": 85,
+    "instruction_adherence": 8,
+    "spatial_accuracy": 4,
     "notes": "Strong redesign with good style adherence.",
 }
 
@@ -270,7 +294,7 @@ class TestEvaluateGeneration:
         assert len(result.criteria) == 9
 
     @pytest.mark.asyncio
-    async def test_with_fast_eval(self):
+    async def test_with_diagnostics(self):
         import json
 
         mock_block = MagicMock()
@@ -281,10 +305,6 @@ class TestEvaluateGeneration:
         mock_client = AsyncMock()
         mock_client.messages.create = AsyncMock(return_value=mock_response)
         mock_client.__aenter__ = AsyncMock(return_value=mock_client)
-
-        from types import SimpleNamespace
-
-        fast_eval = SimpleNamespace(clip_text_score=0.3, composite_score=0.5)
 
         with (
             patch("app.activities.design_eval.os.environ.get", return_value="test-key"),
@@ -299,10 +319,51 @@ class TestEvaluateGeneration:
                 "https://example.com/original.jpg",
                 "https://example.com/generated.jpg",
                 _make_brief(),
-                fast_eval=fast_eval,
+                generation_prompt="Test prompt",
+                room_context="Test room context",
+                artifact_check={"has_artifacts": False, "artifact_count": 0},
             )
 
-        assert result.fast_eval == {"clip_text_score": 0.3, "composite_score": 0.5}
+        assert result.diagnostics["instruction_adherence"] == 8
+        assert result.diagnostics["spatial_accuracy"] == 4
+        assert result.artifact_check == {"has_artifacts": False, "artifact_count": 0}
+
+    @pytest.mark.asyncio
+    async def test_diagnostics_not_in_total(self):
+        """Diagnostic scores should NOT be included in the 100-point total."""
+        import json
+
+        mock_block = MagicMock()
+        mock_block.text = json.dumps(_MOCK_GENERATION_RESPONSE)
+        mock_response = MagicMock()
+        mock_response.content = [mock_block]
+
+        mock_client = AsyncMock()
+        mock_client.messages.create = AsyncMock(return_value=mock_response)
+        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+
+        with (
+            patch("app.activities.design_eval.os.environ.get", return_value="test-key"),
+            patch("app.activities.design_eval.anthropic.AsyncAnthropic", return_value=mock_client),
+            patch(
+                "app.activities.design_eval._load_image_base64",
+                new_callable=AsyncMock,
+                return_value=("fake_b64", "image/jpeg"),
+            ),
+        ):
+            result = await evaluate_generation(
+                "https://example.com/original.jpg",
+                "https://example.com/generated.jpg",
+                _make_brief(),
+            )
+
+        # Total should be sum of 9 criteria only, not include diagnostics
+        criteria_sum = sum(c.score for c in result.criteria)
+        assert result.total == criteria_sum
+        assert result.total == 85
+        # Diagnostics are separate
+        assert "instruction_adherence" in result.diagnostics
+        assert "spatial_accuracy" in result.diagnostics
 
 
 # ---------------------------------------------------------------------------
@@ -353,6 +414,37 @@ class TestEvaluateEdit:
         assert result.total == 42
         assert result.tag == "EXCELLENT"
         assert len(result.criteria) == 5
+
+    @pytest.mark.asyncio
+    async def test_with_artifact_check(self):
+        import json
+
+        mock_block = MagicMock()
+        mock_block.text = json.dumps(_MOCK_EDIT_RESPONSE)
+        mock_response = MagicMock()
+        mock_response.content = [mock_block]
+
+        mock_client = AsyncMock()
+        mock_client.messages.create = AsyncMock(return_value=mock_response)
+        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+
+        with (
+            patch("app.activities.design_eval.os.environ.get", return_value="test-key"),
+            patch("app.activities.design_eval.anthropic.AsyncAnthropic", return_value=mock_client),
+            patch(
+                "app.activities.design_eval._load_image_base64",
+                new_callable=AsyncMock,
+                return_value=("fake_b64", "image/jpeg"),
+            ),
+        ):
+            result = await evaluate_edit(
+                "https://example.com/original.jpg",
+                "https://example.com/edited.jpg",
+                "Change the sofa to navy blue",
+                artifact_check={"has_artifacts": True, "artifact_count": 3},
+            )
+
+        assert result.artifact_check == {"has_artifacts": True, "artifact_count": 3}
 
 
 # ---------------------------------------------------------------------------

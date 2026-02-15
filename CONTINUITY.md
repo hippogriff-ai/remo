@@ -22,7 +22,8 @@ Iteratively optimize image generation prompts for the Remo project via eval-driv
 - **SHIPPED: gen_v5+room_v4** — deep eval LIKELY_BETTER (P=0.989, +0.8 total, +0.6 design coherence). CLIP text "regression" proven to be measurement artifact (brief compliance 5/5 both). No hard thresholds violated.
 - **ROLLED BACK: gen_v7 (ICS restructure)** — 10-run deep eval INCONCLUSIVE (delta -0.2, CI [-1.0,+0.5], P=0.295). Photorealism target missed (13→13). v5 remains active.
 - **ROLLED BACK: gen_v8 (practical lighting)** — 5-run deep eval INCONCLUSIVE (delta +0.2, CI [-0.4,+0.6], P=0.634). Photorealism 13→13, lighting 9→9, zero effect. v5 remains active.
-- **SHIPPED: room_v5 (LiDAR scene data)** — fast eval 3/4 LIKELY_BETTER (P>0.98): edge SSIM +0.047, composite +0.021, CLIP image +0.017. Deep eval INCONCLUSIVE after 10 runs (+0.2, CI [-0.2,+0.6]). Shipped on fast eval signal + zero regressions + Phase B infrastructure need. Changelog noise stripping also shipped.
+- **SHIPPED then ROLLED BACK: room_v5 (LiDAR scene data)** — fast eval (CLIP/SSIM) showed 3/4 LIKELY_BETTER, but real-photo VLM eval showed ROLLBACK -25.0. This false positive was the catalyst for the VLM-only migration. room_preservation rolled back to v4.
+- **VLM-ONLY MIGRATION**: Removed CLIP/SSIM fast eval layer entirely. VLM (Claude Vision) is now the single eval signal. Removed ~2GB deps (open-clip-torch, torch, scikit-image). Kept OpenCV artifact detection. Added 2 diagnostic scores (instruction_adherence 0-10, spatial_accuracy 0-5) to VLM rubric. EVAL_MODE simplified to "off"/"on". Generation prompt + room context now passed to VLM for comprehensive evaluation.
 
 ## Eval Results (Comprehensive)
 
@@ -166,18 +167,14 @@ Edge SSIM +0.047 is the largest single-metric improvement across all loops. Dire
 **Bootstrap (10 runs)**: CI [-0.2, +0.6], P(better)=0.714 → **INCONCLUSIVE**
 **Decision**: **SHIP** — deep eval INCONCLUSIVE but fast eval strongly favors candidate (3/4 LIKELY_BETTER, P>0.98). Edge SSIM +0.047 proves structural improvement below judge detection threshold. Zero regressions. Code change needed for Phase B infrastructure regardless.
 
-### Current Baseline Scores (v5+v5, real room photo)
+### Current Baseline Scores (v5+v4, real room photo)
 | Metric | Mean | Notes |
 |--------|------|-------|
-| Deep eval total | 91.7 | 10 runs, std=0.6 |
-| Photorealism | 13.0/15 | 2pt headroom |
+| VLM eval total | 91.8 | 10 runs, std=1.2 |
+| Photorealism | 13.0/15 | 2pt headroom (confirmed Gemini ceiling) |
 | Style Adherence | 14.0/15 | 1pt headroom |
-| Room Preservation | 18.0/20 | 2pt headroom (but near Gemini's 53% spatial IoU ceiling) |
-| Design Coherence | 9.6/10 | near ceiling |
-| Fast composite | ~0.586 | 5 runs v5+v5 (up from ~0.558 with v5+v4) |
-| CLIP image | ~0.950 | 5 runs v5+v5 (up from ~0.914) |
-| Edge SSIM | ~0.512 | 5 runs v5+v5 (up from ~0.465) |
-| CLIP text | ~0.286 | stable, above 0.20 threshold |
+| Room Preservation | 18.0/20 | 2pt headroom (near Gemini's 53% spatial IoU ceiling) |
+| Design Coherence | 9.3/10 | near ceiling |
 
 ### Key Insights
 1. Baseline (v5+v5) is EXCELLENT quality (91.7/100) — limited headroom
@@ -189,7 +186,7 @@ Edge SSIM +0.047 is the largest single-metric improvement across all loops. Dire
 7. **Lighting at 9/10 is also at ceiling** — v8's explicit lighting directives had zero effect (9→9).
 8. All prompt-only generation improvements have been exhausted. Further quality gains require model improvements (Gemini upgrades), code-level changes (T2: #6 edit changelog, #9 room photo re-inclusion), or switching to a different generation model.
 9. **LiDAR scene data improves structural preservation** — edge SSIM +0.047 (LIKELY_BETTER, P=0.981) is the largest single-metric gain across all loops. The Claude Vision judge can't detect this improvement (18/20 → 18/20) because it's below the 1pt detection threshold, but automated metrics prove it.
-10. **Fast eval and deep eval measure different things** — fast eval detects structural/geometric improvements; deep eval detects aesthetic/qualitative ones. Both are needed for complete evaluation.
+10. **CLIP/SSIM fast eval was unreliable** — gave false positives on room_v5 (LIKELY_BETTER P>0.98 on synthetic, but ROLLBACK -25.0 on real photos). VLM is now the single authoritative eval signal. Fast eval layer removed entirely; only artifact detection (OpenCV) retained.
 
 ## State
 - Done: Loops 1-9 — All immediate improvements created and evaluated
@@ -212,8 +209,10 @@ Edge SSIM +0.047 is the largest single-metric improvement across all loops. Dire
   - Added `_strip_changelog_lines()` — removes developer changelog comments (`[v5: ...]`) from prompts before sending to Gemini (was wasting ~6 lines of tokens per prompt)
   - Added trailing newline separator after room_context to visually separate scene data from Design Direction
   - 7 new tests: 2 footprint/wide tests, 5 changelog stripping tests (116 total in test_generate.py, 135 total with versioning)
-- Done: A/B eval for room_pres_v5: fast eval 3/4 LIKELY_BETTER (P>0.98), deep eval INCONCLUSIVE after 10 runs (+0.2, CI [-0.2, +0.6]). **SHIPPED** based on strong fast eval signal + zero regressions + infrastructure need.
-- Now: v5+v5 is the new baseline (gen_v5 + room_v5). All prompt-only improvements exhausted.
+- Done: A/B eval for room_pres_v5: fast eval 3/4 LIKELY_BETTER (P>0.98), deep eval INCONCLUSIVE after 10 runs (+0.2, CI [-0.2, +0.6]). Originally shipped, then rolled back after real-photo VLM eval showed ROLLBACK.
+- Done: VLM-only migration — removed CLIP/SSIM fast eval, kept artifact detection, VLM is single eval signal. Removed ~2GB deps. Added diagnostic scores. Updated all tests, docs, score tracking.
+- Done: room_preservation rolled back to v4 (real-photo eval disproved fast-eval signal).
+- Now: v5+v4 is the active baseline (gen_v5 + room_v4). All prompt-only improvements exhausted. Eval pipeline is VLM-only.
 - Next: Phase B (T1+T0: export positions from iOS RoomPlan) or T2 code changes (#6 edit changelog, #9 room photo re-inclusion).
 - Blocked: #6 (edit changelog) and #9 (re-include room photo) need T2 code changes to `_continue_chat`/`_bootstrap_chat`
 
@@ -221,7 +220,7 @@ Edge SSIM +0.047 is the largest single-metric improvement across all loops. Dire
 | Prompt | Active | New versions | Status |
 |--------|--------|-------------|--------|
 | generation | **v5** | v3, v4, v6 (no effect), v7 (ICS, ROLLED BACK), v8 (lighting, ROLLED BACK) | Photorealism 13/15 = confirmed Gemini model ceiling |
-| room_preservation | **v5** | v3 (no effect), v5 (LiDAR scene data, **SHIPPED**) | v5 adds structured scene data + dimensional constraints. Edge SSIM +0.047. |
+| room_preservation | **v4** | v3 (no effect), v5 (LiDAR scene data, **ROLLED BACK**) | v5 rolled back: fast eval false positive, real-photo VLM showed ROLLBACK -25.0. |
 | edit | **v5** | v2, v3 (not A/B testable), v4 (changelog placeholder, BLOCKED on T2), v5 (anti-artifact sandwich) | v5 active — fixes circle leakage. v4 ready for T2 changelog. |
 
 ## Code Changes Shipped (apply to all prompt versions)

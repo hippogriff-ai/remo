@@ -13,7 +13,6 @@ from __future__ import annotations
 import asyncio
 import io
 import os
-import random
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -334,37 +333,39 @@ async def _maybe_run_edit_eval(
     revised_url: str,
     instruction: str,
 ) -> None:
-    """Run eval pipeline on edit result if EVAL_MODE is set. Never raises."""
+    """Run VLM eval pipeline on edit result if EVAL_MODE is set. Never raises."""
     eval_mode = os.environ.get("EVAL_MODE", "off").lower()
     if eval_mode == "off":
         return
 
     try:
-        from app.utils.image_eval import run_fast_eval
+        from app.utils.image_eval import run_artifact_check
 
-        fast = run_fast_eval(result_image, original_image, brief=None, is_edit=True)
-        logger.info(
-            "eval_edit_fast_result",
-            composite=fast.composite_score,
-            has_artifacts=fast.has_artifacts,
-            needs_deep=fast.needs_deep_eval,
+        artifact = run_artifact_check(result_image)
+        if artifact.has_artifacts:
+            logger.warning(
+                "eval_edit_artifacts_detected",
+                count=artifact.artifact_count,
+            )
+
+        artifact_dict = {
+            "has_artifacts": artifact.has_artifacts,
+            "artifact_count": artifact.artifact_count,
+        }
+
+        from app.activities.design_eval import evaluate_edit
+
+        vlm_result = await evaluate_edit(
+            original_image_url=original_url,
+            edited_image_url=revised_url,
+            edit_instruction=instruction,
+            artifact_check=artifact_dict,
         )
-
-        deep_result = None
-        if eval_mode == "full" and (fast.needs_deep_eval or random.random() < 0.2):
-            from app.activities.design_eval import evaluate_edit
-
-            deep_result = await evaluate_edit(
-                original_image_url=original_url,
-                edited_image_url=revised_url,
-                edit_instruction=instruction,
-                fast_eval=fast,
-            )
-            logger.info(
-                "eval_edit_deep_result",
-                total=deep_result.total,
-                tag=deep_result.tag,
-            )
+        logger.info(
+            "eval_edit_vlm_result",
+            total=vlm_result.total,
+            tag=vlm_result.tag,
+        )
 
         from app.utils.score_tracking import append_score
 
@@ -372,8 +373,8 @@ async def _maybe_run_edit_eval(
             history_path=Path("eval_history.jsonl"),
             scenario="edit",
             prompt_version="v1",
-            fast_eval=fast.__dict__,
-            deep_eval=({"total": deep_result.total, "tag": deep_result.tag} if deep_result else {}),
+            vlm_eval={"total": vlm_result.total, "tag": vlm_result.tag},
+            artifact_check=artifact_dict,
         )
     except Exception:
         logger.warning("eval_edit_failed", exc_info=True)

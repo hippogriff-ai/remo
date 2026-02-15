@@ -21,6 +21,9 @@ def append_score(
     history_path: Path,
     scenario: str,
     prompt_version: str,
+    vlm_eval: dict[str, Any] | None = None,
+    artifact_check: dict[str, Any] | None = None,
+    # Backward compat: accept old-format params (ignored if vlm_eval is set)
     fast_eval: dict[str, Any] | None = None,
     deep_eval: dict[str, Any] | None = None,
     model: str = "gemini-3-pro-image-preview",
@@ -30,15 +33,25 @@ def append_score(
 
     Returns the record that was appended.
     """
-    record = {
+    record: dict[str, Any] = {
         "timestamp": datetime.now(tz=UTC).isoformat(),
         "scenario": scenario,
         "prompt_version": prompt_version,
-        "fast_eval": fast_eval or {},
-        "deep_eval": deep_eval or {},
         "model": model,
         "duration_ms": duration_ms,
     }
+
+    if vlm_eval is not None:
+        record["vlm_eval"] = vlm_eval
+    if artifact_check is not None:
+        record["artifact_check"] = artifact_check
+
+    # Backward compat: write old-format fields when passed directly
+    if fast_eval is not None:
+        record["fast_eval"] = fast_eval
+    if deep_eval is not None:
+        record["deep_eval"] = deep_eval
+
     history_path.parent.mkdir(parents=True, exist_ok=True)
     with open(history_path, "a") as f:
         f.write(json.dumps(record) + "\n")
@@ -80,7 +93,7 @@ def detect_regression(
     Args:
         history_path: Path to score_history.jsonl.
         scenario: Scenario name to filter history.
-        latest_total: The latest deep eval total score.
+        latest_total: The latest VLM eval total score.
         window: Number of recent runs to average (default 5).
         threshold: Points drop that triggers a regression alert (default 10).
 
@@ -92,11 +105,15 @@ def detect_regression(
         - window_size: int (actual number of runs used)
     """
     records = load_history(history_path, scenario=scenario)
-    # Get deep eval totals from recent records
+    # Get VLM eval totals, falling back to deep_eval for backward compat
     totals = []
     for r in records:
-        deep = r.get("deep_eval", {})
-        total = deep.get("total")
+        vlm = r.get("vlm_eval", {})
+        total = vlm.get("total")
+        if total is None:
+            # Backward compat: read from old deep_eval format
+            deep = r.get("deep_eval", {})
+            total = deep.get("total")
         if isinstance(total, (int, float)):
             totals.append(total)
 
