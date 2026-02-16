@@ -249,9 +249,57 @@ class TestPromptBuilding:
         from app.activities.generate import _build_generation_prompt
 
         prompt = _build_generation_prompt(None, [])
-        assert "editorial interior design photograph" in prompt
-        assert "full-frame camera" in prompt
+        # v5+: uses specific camera model instead of generic "full-frame camera"
+        assert "Canon EOS R5" in prompt or "full-frame camera" in prompt
         assert "physically accurate materials" in prompt
+
+
+class TestColorPaletteFormatting:
+    """Tests for _format_color_palette 60-30-10 proportional hierarchy."""
+
+    def test_single_color(self):
+        from app.activities.generate import _format_color_palette
+
+        result = _format_color_palette(["warm ivory"])
+        assert "warm ivory" in result
+        assert "dominant" in result
+
+    def test_two_colors(self):
+        from app.activities.generate import _format_color_palette
+
+        result = _format_color_palette(["warm ivory", "walnut brown"])
+        assert "70%" in result
+        assert "30%" in result
+
+    def test_three_colors_uses_60_30_10(self):
+        from app.activities.generate import _format_color_palette
+
+        result = _format_color_palette(["warm ivory", "walnut brown", "olive green"])
+        assert "60%" in result
+        assert "30%" in result
+        assert "10%" in result
+        assert "warm ivory" in result
+        assert "walnut brown" in result
+        assert "olive green" in result
+
+    def test_four_colors_has_extras(self):
+        from app.activities.generate import _format_color_palette
+
+        result = _format_color_palette(["a", "b", "c", "terracotta"])
+        assert "Additional accents: terracotta" in result
+
+    def test_color_palette_in_full_prompt(self):
+        from app.activities.generate import _build_generation_prompt
+
+        brief = DesignBrief(
+            room_type="living room",
+            style_profile=StyleProfile(
+                colors=["warm ivory", "walnut brown", "olive green"],
+            ),
+        )
+        prompt = _build_generation_prompt(brief, [])
+        assert "Color palette (60/30/10)" in prompt
+        assert "warm ivory (60%" in prompt
 
 
 class TestRoomContextFormatting:
@@ -322,7 +370,7 @@ class TestRoomContextFormatting:
         assert "hardwood" in result
 
     def test_format_empty_arrays_omit_sections(self):
-        """Explicit empty arrays should not produce Openings/furniture/Surfaces lines."""
+        """Explicit empty arrays should not produce OPENINGS/FURNITURE/SURFACES sections."""
         from app.activities.generate import _format_room_context
         from app.models.contracts import RoomDimensions
 
@@ -335,9 +383,9 @@ class TestRoomContextFormatting:
             surfaces=[],
         )
         result = _format_room_context(dims)
-        assert "Openings:" not in result
-        assert "furniture" not in result
-        assert "Surfaces:" not in result
+        assert "FIXED OPENINGS" not in result
+        assert "EXISTING FURNITURE" not in result
+        assert "SURFACES" not in result
         assert "4.0m" in result
 
     def test_format_missing_keys_uses_fallback(self):
@@ -393,6 +441,7 @@ class TestRoomContextFormatting:
             width_m=3.0,
             length_m=4.0,
             height_m=2.5,
+            walls=[],
             openings=[{"type": "door"}, "bad-string", 42],
             furniture=[None, {"type": "chair"}, True],
             surfaces=[{"type": "wall", "material": "paint"}, 3.14],
@@ -421,8 +470,11 @@ class TestRoomContextFormatting:
             ],
         )
         result = _format_room_context(dims)
-        assert "sofa (2.1m × 0.9m × h0.8m)" in result
-        assert "table (1.2m)" in result
+        assert "sofa" in result
+        assert "2.1m" in result
+        assert "0.9m" in result
+        assert "table" in result
+        assert "1.2m" in result
         assert "chair" in result
 
     def test_format_openings_with_dimensions(self):
@@ -460,8 +512,11 @@ class TestRoomContextFormatting:
             ],
         )
         result = _format_room_context(dims)
-        assert "lamp (h1.5m)" in result
-        assert "rug (2.0m × 3.0m)" in result
+        assert "lamp" in result
+        assert "1.5m" in result
+        assert "rug" in result
+        assert "2.0m" in result
+        assert "3.0m" in result
 
     def test_format_non_numeric_dimensions_degrade_gracefully(self):
         """Review fix: Non-numeric dimension values don't crash _format_room_context."""
@@ -485,8 +540,9 @@ class TestRoomContextFormatting:
         assert "door" in result
         assert "window" in result
         assert "sofa" in result
-        # The :.1f formatting should NOT appear for malformed entries
-        assert "wide" not in result
+        # The raw malformed values should NOT appear in opening/furniture descriptions
+        # ("wide" appears in "4.0m wide" geometry header, but not as a door dimension)
+        assert '"wide"' not in result
         assert "tall" not in result
         assert "big" not in result
 
@@ -516,7 +572,7 @@ class TestRoomContextFormatting:
             openings=[{"type": None, "width": 0.9, "height": 2.1}],
         )
         result = _format_room_context(dims)
-        assert "Openings:" in result
+        assert "FIXED OPENINGS" in result
         assert "opening (0.9m" in result
         assert "None" not in result
 
@@ -532,8 +588,8 @@ class TestRoomContextFormatting:
             furniture=[{"type": None, "width": 2.0, "depth": 0.9, "height": 0.8}],
         )
         result = _format_room_context(dims)
-        assert "Existing furniture:" in result
-        assert "item (2.0m" in result
+        assert "item" in result
+        assert "2.0m" in result
         assert "None" not in result
 
     def test_format_surface_none_type_uses_fallback(self):
@@ -642,7 +698,8 @@ class TestRoomContextFormatting:
             furniture=[{"type": "sofa", "width": 100.0, "depth": 0.9, "height": 0.8}],
         )
         result = _format_room_context(dims)
-        assert "sofa (100.0m × 0.9m × h0.8m)" in result
+        assert "sofa" in result
+        assert "100.0m" in result
 
     def test_format_mixed_valid_invalid_entries_in_list(self):
         """A list with both valid and invalid entries should format valid ones.
@@ -674,7 +731,8 @@ class TestRoomContextFormatting:
         result = _format_room_context(dims)
         assert "door (0.9m × 2.1m)" in result
         assert "window" in result  # type preserved, dims dropped
-        assert "sofa (2.1m × 0.9m × h0.8m)" in result
+        assert "sofa" in result
+        assert "2.1m" in result
 
     def test_build_prompt_with_dimensions(self):
         from app.activities.generate import _build_generation_prompt
@@ -1288,11 +1346,11 @@ class TestGenerateSingleOptionWithInspiration:
                 "test prompt", room_images, inspiration_images, 0
             )
             assert isinstance(result, Image.Image)
-            # Verify content includes both room + inspiration images
+            # Verify content includes both room + inspiration images with labels
             call_args = mock_client.models.generate_content.call_args
             contents = call_args[1]["contents"]
-            # Should be: room image + inspiration image + text prompt = 3 items
-            assert len(contents) == 3
+            # room label + room img + insp label + insp img + prompt = 5
+            assert len(contents) == 5
 
 
 class TestImageCountTruncation:
@@ -1338,3 +1396,269 @@ class TestImageCountTruncation:
             call_args = mock_gen.call_args_list[0]
             inspiration_received = call_args[0][2]  # third positional arg
             assert len(inspiration_received) <= 14
+
+
+class TestOrientationToCompass:
+    """Tests for _orientation_to_compass — degrees to compass direction."""
+
+    def test_cardinal_south(self):
+        from app.activities.generate import _orientation_to_compass
+
+        assert _orientation_to_compass(0) == "south"
+
+    def test_cardinal_west(self):
+        from app.activities.generate import _orientation_to_compass
+
+        assert _orientation_to_compass(90) == "west"
+
+    def test_cardinal_north(self):
+        from app.activities.generate import _orientation_to_compass
+
+        assert _orientation_to_compass(180) == "north"
+
+    def test_cardinal_east(self):
+        from app.activities.generate import _orientation_to_compass
+
+        assert _orientation_to_compass(270) == "east"
+
+    def test_intercardinal_southwest(self):
+        from app.activities.generate import _orientation_to_compass
+
+        assert _orientation_to_compass(45) == "southwest"
+
+    def test_intercardinal_northwest(self):
+        from app.activities.generate import _orientation_to_compass
+
+        assert _orientation_to_compass(135) == "northwest"
+
+    def test_intercardinal_northeast(self):
+        from app.activities.generate import _orientation_to_compass
+
+        assert _orientation_to_compass(225) == "northeast"
+
+    def test_intercardinal_southeast(self):
+        from app.activities.generate import _orientation_to_compass
+
+        assert _orientation_to_compass(315) == "southeast"
+
+    def test_360_wraps_to_south(self):
+        from app.activities.generate import _orientation_to_compass
+
+        assert _orientation_to_compass(360) == "south"
+
+    def test_negative_wraps(self):
+        from app.activities.generate import _orientation_to_compass
+
+        assert _orientation_to_compass(-90) == "east"
+
+
+class TestStructuredRoomContext:
+    """Tests for structured output format with section headers."""
+
+    def test_has_room_geometry_header(self):
+        from app.activities.generate import _format_room_context
+        from app.models.contracts import RoomDimensions
+
+        dims = RoomDimensions(width_m=4.2, length_m=5.8, height_m=2.7)
+        result = _format_room_context(dims)
+        assert "ROOM GEOMETRY (LiDAR-measured, precise):" in result
+
+    def test_has_walls_section_with_compass(self):
+        from app.activities.generate import _format_room_context
+        from app.models.contracts import RoomDimensions
+
+        dims = RoomDimensions(
+            width_m=4.2,
+            length_m=5.8,
+            height_m=2.7,
+            walls=[
+                {"id": "wall_0", "width": 4.2, "height": 2.7, "orientation": 0},
+                {"id": "wall_1", "width": 5.8, "height": 2.7, "orientation": 90},
+            ],
+        )
+        result = _format_room_context(dims)
+        assert "WALLS (2 detected):" in result
+        assert "faces south (0°)" in result
+        assert "faces west (90°)" in result
+
+    def test_has_fixed_openings_header(self):
+        from app.activities.generate import _format_room_context
+        from app.models.contracts import RoomDimensions
+
+        dims = RoomDimensions(
+            width_m=4.0,
+            length_m=5.0,
+            height_m=2.5,
+            openings=[{"type": "door", "width": 0.9, "height": 2.1}],
+        )
+        result = _format_room_context(dims)
+        assert "FIXED OPENINGS (do not relocate):" in result
+
+    def test_has_furniture_header(self):
+        from app.activities.generate import _format_room_context
+        from app.models.contracts import RoomDimensions
+
+        dims = RoomDimensions(
+            width_m=4.0,
+            length_m=5.0,
+            height_m=2.5,
+            furniture=[{"type": "sofa", "width": 2.0}],
+        )
+        result = _format_room_context(dims)
+        assert "EXISTING FURNITURE (scale reference" in result
+
+    def test_relative_proportions_for_large_furniture(self):
+        """Large furniture (>= 20% of shorter wall) gets relative proportion."""
+        from app.activities.generate import _format_room_context
+        from app.models.contracts import RoomDimensions
+
+        dims = RoomDimensions(
+            width_m=4.2,
+            length_m=5.8,
+            height_m=2.7,
+            furniture=[
+                {"type": "bathtub", "width": 1.5, "depth": 0.7, "height": 0.6},
+            ],
+        )
+        result = _format_room_context(dims)
+        # 1.5 / 4.2 = 35.7% → "spans ~36% of shorter wall"
+        assert "spans ~36% of shorter wall" in result
+
+    def test_small_furniture_no_proportion(self):
+        """Small furniture (< 20% of shorter wall) gets no proportion label."""
+        from app.activities.generate import _format_room_context
+        from app.models.contracts import RoomDimensions
+
+        dims = RoomDimensions(
+            width_m=4.2,
+            length_m=5.8,
+            height_m=2.7,
+            furniture=[
+                {"type": "lamp", "width": 0.3, "height": 1.5},
+            ],
+        )
+        result = _format_room_context(dims)
+        assert "spans" not in result
+
+    def test_skips_small_furniture(self):
+        """Items where all measured dimensions < 0.3m are skipped as noise."""
+        from app.activities.generate import _format_room_context
+        from app.models.contracts import RoomDimensions
+
+        dims = RoomDimensions(
+            width_m=4.0,
+            length_m=5.0,
+            height_m=2.5,
+            furniture=[
+                {"type": "tiny_object", "width": 0.1, "depth": 0.1, "height": 0.2},
+                {"type": "sofa", "width": 2.0, "depth": 0.9, "height": 0.8},
+            ],
+        )
+        result = _format_room_context(dims)
+        assert "tiny_object" not in result
+        assert "sofa" in result
+
+    def test_non_numeric_wall_dimensions_degrade_gracefully(self):
+        """Non-numeric wall width/height values don't crash _format_room_context."""
+        from app.activities.generate import _format_room_context
+        from app.models.contracts import RoomDimensions
+
+        dims = RoomDimensions(
+            width_m=4.0,
+            length_m=5.0,
+            height_m=2.5,
+            walls=[
+                {"id": "wall_0", "width": "bad", "height": 2.7, "orientation": 0},
+                {"id": "wall_1", "width": 5.0, "height": "bad", "orientation": 90},
+            ],
+        )
+        result = _format_room_context(dims)
+        # Wall IDs should appear but malformed dimensions are omitted
+        assert "wall_0" in result
+        assert "wall_1" in result
+        assert "bad" not in result
+
+    def test_caps_furniture_at_15_items(self):
+        """Furniture list capped at 15 items to reduce noise."""
+        from app.activities.generate import _format_room_context
+        from app.models.contracts import RoomDimensions
+
+        furniture = [{"type": f"item_{i}", "width": 1.0} for i in range(20)]
+        dims = RoomDimensions(
+            width_m=4.0,
+            length_m=5.0,
+            height_m=2.5,
+            furniture=furniture,
+        )
+        result = _format_room_context(dims)
+        assert "item_14" in result
+        assert "item_15" not in result
+
+    def test_single_dimension_uses_wide_not_footprint(self):
+        """Furniture with only width uses 'wide' label, not 'footprint'."""
+        from app.activities.generate import _format_room_context
+        from app.models.contracts import RoomDimensions
+
+        dims = RoomDimensions(
+            width_m=4.0,
+            length_m=5.0,
+            height_m=2.5,
+            furniture=[{"type": "shelf", "width": 0.8}],
+        )
+        result = _format_room_context(dims)
+        assert "0.8m wide" in result
+        assert "footprint" not in result
+
+    def test_two_dimensions_uses_footprint(self):
+        """Furniture with width + depth uses 'footprint' label."""
+        from app.activities.generate import _format_room_context
+        from app.models.contracts import RoomDimensions
+
+        dims = RoomDimensions(
+            width_m=4.0,
+            length_m=5.0,
+            height_m=2.5,
+            furniture=[{"type": "table", "width": 1.2, "depth": 0.6}],
+        )
+        result = _format_room_context(dims)
+        assert "1.2m × 0.6m footprint" in result
+
+
+class TestStripChangelogLines:
+    """Tests for strip_changelog_lines helper (in prompt_versioning)."""
+
+    def test_strips_versioned_changelog(self):
+        from app.utils.prompt_versioning import strip_changelog_lines
+
+        text = "[v5: Enhanced quality]\n[v4: Added details]\n\nActual prompt text."
+        result = strip_changelog_lines(text)
+        assert "[v5:" not in result
+        assert "[v4:" not in result
+        assert "Actual prompt text." in result
+
+    def test_preserves_non_changelog_brackets(self):
+        from app.utils.prompt_versioning import strip_changelog_lines
+
+        text = "[v5: changelog]\n\nKeep this [note] in the prompt."
+        result = strip_changelog_lines(text)
+        assert "[note]" in result
+        assert "[v5:" not in result
+
+    def test_no_leading_blank_lines(self):
+        from app.utils.prompt_versioning import strip_changelog_lines
+
+        text = "[v5: changelog]\n[v4: changelog]\n\nFirst real line."
+        result = strip_changelog_lines(text)
+        assert result.startswith("\n") is False
+        assert "First real line." in result
+
+    def test_empty_string_passthrough(self):
+        from app.utils.prompt_versioning import strip_changelog_lines
+
+        assert strip_changelog_lines("") == ""
+
+    def test_no_changelogs_passthrough(self):
+        from app.utils.prompt_versioning import strip_changelog_lines
+
+        text = "Just a regular prompt.\nWith multiple lines."
+        assert strip_changelog_lines(text) == text

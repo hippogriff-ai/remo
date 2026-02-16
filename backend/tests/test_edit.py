@@ -229,7 +229,7 @@ class TestEditInstructions:
             ),
         ]
         result = _build_edit_instructions(annotations)
-        assert "Action: Replace" in result
+        assert "ACTION: Replace" in result
         assert "modern pendant light" in result
 
     def test_build_instructions_with_avoid(self):
@@ -246,7 +246,7 @@ class TestEditInstructions:
             ),
         ]
         result = _build_edit_instructions(annotations)
-        assert "Avoid: chrome, brass" in result
+        assert "AVOID: chrome, brass" in result
 
     def test_build_instructions_with_constraints(self):
         from app.activities.edit import _build_edit_instructions
@@ -262,7 +262,7 @@ class TestEditInstructions:
             ),
         ]
         result = _build_edit_instructions(annotations)
-        assert "Constraints: budget-friendly, kid-friendly" in result
+        assert "CONSTRAINTS: budget-friendly, kid-friendly" in result
 
     def test_build_instructions_with_all_fields(self):
         from app.activities.edit import _build_edit_instructions
@@ -282,10 +282,10 @@ class TestEditInstructions:
         result = _build_edit_instructions(annotations)
         assert "Region 2:" in result
         assert "center of the image" in result
-        assert "Action: Remove" in result
+        assert "ACTION: Remove" in result
         assert "old armchair" in result
-        assert "Avoid: leaving empty space" in result
-        assert "Constraints: minimal style" in result
+        assert "AVOID: leaving empty space" in result
+        assert "CONSTRAINTS: minimal style" in result
 
     def test_build_instructions_without_optional_fields(self):
         """Instruction-only annotations should not include Action/Avoid/Constraints labels."""
@@ -301,9 +301,9 @@ class TestEditInstructions:
             ),
         ]
         result = _build_edit_instructions(annotations)
-        assert "Action:" not in result
-        assert "Avoid:" not in result
-        assert "Constraints:" not in result
+        assert "ACTION:" not in result
+        assert "AVOID:" not in result
+        assert "CONSTRAINTS:" not in result
         assert "lighter color" in result
 
     def test_build_instructions_empty_avoid_and_constraints(self):
@@ -322,8 +322,8 @@ class TestEditInstructions:
             ),
         ]
         result = _build_edit_instructions(annotations)
-        assert "Avoid:" not in result
-        assert "Constraints:" not in result
+        assert "AVOID:" not in result
+        assert "CONSTRAINTS:" not in result
 
     def test_build_instructions_all_three_regions(self):
         """Verify all three region IDs get coordinate descriptions."""
@@ -364,9 +364,9 @@ class TestEditInstructions:
             ),
         ]
         result = _build_edit_instructions(annotations)
-        assert "Action: Remove" in result
-        assert "Avoid: leaving marks" in result
-        assert "Constraints:" not in result
+        assert "ACTION: Remove" in result
+        assert "AVOID: leaving marks" in result
+        assert "CONSTRAINTS:" not in result
 
 
 class TestPositionDescription:
@@ -579,6 +579,11 @@ class TestEditDesignActivity:
                 "app.activities.edit.download_image",
                 new_callable=AsyncMock,
                 return_value=_make_test_image(),
+            ),
+            patch(
+                "app.activities.edit.download_images",
+                new_callable=AsyncMock,
+                return_value=[_make_test_image()],
             ),
             patch("app.activities.edit.restore_from_r2", return_value=mock_history),
             patch("app.activities.edit.get_client"),
@@ -796,7 +801,7 @@ class TestEditDesignActivity:
             # Verify retry message requests image generation
             retry_msg = mock_chat.send_message.call_args_list[2][0][0]
             assert "generate" in retry_msg.lower()
-            assert "annotation" in retry_msg.lower()
+            assert "photograph" in retry_msg.lower()
 
     @pytest.mark.asyncio
     async def test_bootstrap_fails_when_no_image_after_retry(self):
@@ -871,6 +876,11 @@ class TestEditDesignActivity:
                 new_callable=AsyncMock,
                 return_value=_make_test_image(),
             ),
+            patch(
+                "app.activities.edit.download_images",
+                new_callable=AsyncMock,
+                return_value=[_make_test_image()],
+            ),
             patch("app.activities.edit.restore_from_r2", return_value=mock_history),
             patch("app.activities.edit.get_client"),
             patch(
@@ -898,8 +908,10 @@ class TestEditDesignActivity:
             assert updated_history[1].role == "model"
             assert updated_history[2].role == "user"
             assert updated_history[3].role == "model"
-            # The user turn should have image + text parts (annotation)
-            assert len(updated_history[2].parts) >= 2
+            # The user turn should have: room anchor text + room image + base image + edit prompt
+            assert len(updated_history[2].parts) >= 4
+            # First part should be the room photo anchor text
+            assert "preserve this architecture" in updated_history[2].parts[0].text
 
     @pytest.mark.asyncio
     async def test_continuation_with_both_annotations_and_feedback(self):
@@ -935,6 +947,11 @@ class TestEditDesignActivity:
                 "app.activities.edit.download_image",
                 new_callable=AsyncMock,
                 return_value=_make_test_image(),
+            ),
+            patch(
+                "app.activities.edit.download_images",
+                new_callable=AsyncMock,
+                return_value=[_make_test_image()],
             ),
             patch("app.activities.edit.restore_from_r2", return_value=mock_history),
             patch("app.activities.edit.get_client"),
@@ -988,6 +1005,11 @@ class TestEditDesignActivity:
                 new_callable=AsyncMock,
                 return_value=_make_test_image(),
             ),
+            patch(
+                "app.activities.edit.download_images",
+                new_callable=AsyncMock,
+                return_value=[_make_test_image()],
+            ),
             patch("app.activities.edit.restore_from_r2", return_value=mock_history),
             patch("app.activities.edit.get_client"),
             patch("app.activities.edit.continue_chat", mock_continue),
@@ -1006,7 +1028,7 @@ class TestEditDesignActivity:
             assert mock_continue.call_count == 2
             # Verify retry message content
             retry_call_parts = mock_continue.call_args_list[1][0][1]
-            assert any("annotation" in str(p).lower() for p in retry_call_parts)
+            assert any("photograph" in str(p).lower() for p in retry_call_parts)
             # History: 2 original + user + model + retry user + retry model = 6
             call_args = mock_serialize.call_args[0]
             updated_history = call_args[0]
@@ -1046,6 +1068,11 @@ class TestEditDesignActivity:
                 "app.activities.edit.download_image",
                 new_callable=AsyncMock,
                 return_value=_make_test_image(),
+            ),
+            patch(
+                "app.activities.edit.download_images",
+                new_callable=AsyncMock,
+                return_value=[_make_test_image()],
             ),
             patch("app.activities.edit.restore_from_r2", return_value=mock_history),
             patch("app.activities.edit.get_client"),
@@ -1298,19 +1325,124 @@ class TestContinueChatDirectly:
         )
         base_image = _make_test_image()
 
+        with pytest.raises(ApplicationError, match="No annotations or feedback"):
+            await _continue_chat(inp, base_image)
+
+
+class TestBuildChangelog:
+    """Tests for _build_changelog() that extracts edit history from chat turns."""
+
+    def test_empty_history_returns_empty(self):
+        from app.activities.edit import _build_changelog
+
+        assert _build_changelog([]) == ""
+
+    def test_context_only_history_returns_empty(self):
         from google.genai import types
 
-        mock_history = [
-            types.Content(role="user", parts=[types.Part(text="ctx")]),
+        from app.activities.edit import CONTEXT_PROMPT, _build_changelog
+
+        history = [
+            types.Content(role="user", parts=[types.Part(text=CONTEXT_PROMPT)]),
             types.Content(role="model", parts=[types.Part(text="ok")]),
         ]
+        assert _build_changelog(history) == ""
 
-        with (
-            patch("app.activities.edit.restore_from_r2", return_value=mock_history),
-            patch("app.activities.edit.get_client"),
-            pytest.raises(ApplicationError, match="No annotations or feedback"),
-        ):
-            await _continue_chat(inp, base_image)
+    def test_extracts_region_edits(self):
+        from google.genai import types
+
+        from app.activities.edit import _build_changelog
+
+        edit_text = (
+            "Region 1: left area (30% from left, 50% from top, medium area)\n"
+            "  ACTION: Replace\n"
+            "  INSTRUCTION: Replace with a modern armchair"
+        )
+        history = [
+            types.Content(role="user", parts=[types.Part(text="context")]),
+            types.Content(role="model", parts=[types.Part(text="ok")]),
+            types.Content(role="user", parts=[types.Part(text=edit_text)]),
+            types.Content(role="model", parts=[types.Part(text="done")]),
+        ]
+        result = _build_changelog(history)
+        assert "PREVIOUS EDITS" in result
+        assert "Region 1" in result
+        assert "INSTRUCTION: Replace with a modern armchair" in result
+
+    def test_extracts_feedback(self):
+        from google.genai import types
+
+        from app.activities.edit import _build_changelog
+
+        feedback_text = (
+            "Please modify this room design based on the following feedback:\n"
+            "Add more plants in the corner\n\n"
+            "Keep all architectural features unchanged."
+        )
+        history = [
+            types.Content(role="user", parts=[types.Part(text="context")]),
+            types.Content(role="model", parts=[types.Part(text="ok")]),
+            types.Content(role="user", parts=[types.Part(text=feedback_text)]),
+            types.Content(role="model", parts=[types.Part(text="done")]),
+        ]
+        result = _build_changelog(history)
+        assert "PREVIOUS EDITS" in result
+        assert "Add more plants" in result
+
+    def test_skips_model_turns(self):
+        from google.genai import types
+
+        from app.activities.edit import _build_changelog
+
+        # Model turn with "Region" text should be ignored
+        history = [
+            types.Content(
+                role="model",
+                parts=[types.Part(text="Region 1: ACTION: I changed it")],
+            ),
+        ]
+        assert _build_changelog(history) == ""
+
+    def test_multiple_edits_accumulated(self):
+        from google.genai import types
+
+        from app.activities.edit import _build_changelog
+
+        edit1 = "Region 1: left area\n  ACTION: Replace\n  INSTRUCTION: Replace lamp with pendant"
+        edit2 = "Region 2: upper-right area\n  ACTION: Remove\n  INSTRUCTION: Remove the shelf"
+        history = [
+            types.Content(role="user", parts=[types.Part(text=edit1)]),
+            types.Content(role="model", parts=[types.Part(text="done")]),
+            types.Content(role="user", parts=[types.Part(text=edit2)]),
+            types.Content(role="model", parts=[types.Part(text="done")]),
+        ]
+        result = _build_changelog(history)
+        assert "Region 1" in result
+        assert "Region 2" in result
+        assert "pendant" in result
+        assert "shelf" in result
+
+    def test_extracts_region_edits_without_action(self):
+        """_build_changelog detects edits even when ACTION field is absent."""
+        from google.genai import types
+
+        from app.activities.edit import _build_changelog
+
+        # ACTION is optional on AnnotationRegion, so edit instructions may not have it
+        edit_text = (
+            "Region 1: left area (30% from left, 50% from top, medium area)\n"
+            "  INSTRUCTION: Replace with a modern armchair"
+        )
+        history = [
+            types.Content(role="user", parts=[types.Part(text="context")]),
+            types.Content(role="model", parts=[types.Part(text="ok")]),
+            types.Content(role="user", parts=[types.Part(text=edit_text)]),
+            types.Content(role="model", parts=[types.Part(text="done")]),
+        ]
+        result = _build_changelog(history)
+        assert "PREVIOUS EDITS" in result
+        assert "Region 1" in result
+        assert "INSTRUCTION: Replace with a modern armchair" in result
 
 
 class TestCorruptR2History:

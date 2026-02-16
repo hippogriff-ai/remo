@@ -1,8 +1,8 @@
-"""edit_design activity — multi-turn annotation-based image editing.
+"""edit_design activity — multi-turn image editing via text coordinates.
 
-Handles annotation-based edits (numbered circles on image), text-only
-feedback, or both combined in a single call. Uses a persistent Gemini
-chat session serialized to R2 between Temporal activity calls.
+Handles region-based edits (described by text position coordinates),
+text-only feedback, or both combined in a single call. Uses a persistent
+Gemini chat session serialized to R2 between Temporal activity calls.
 
 First call: bootstraps a new chat with reference images + selected design.
 Subsequent calls: restores chat history from R2, continues the conversation.
@@ -13,7 +13,6 @@ from __future__ import annotations
 import asyncio
 import io
 import os
-import random
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -42,39 +41,33 @@ from app.utils.gemini_chat import (
     serialize_to_r2,
 )
 from app.utils.http import download_image, download_images
+from app.utils.prompt_versioning import (
+    get_active_version,
+    load_versioned_prompt,
+    strip_changelog_lines,
+)
 
 logger = structlog.get_logger()
 
 # Strong references to background eval tasks to prevent GC before completion
 _background_tasks: set[asyncio.Task] = set()  # type: ignore[type-arg]
 
-PROMPTS_DIR = Path(__file__).parent.parent.parent / "prompts"
-
 CONTEXT_PROMPT = (
-    "Here is a room redesign. I will send you edits as annotated images "
-    "with numbered circles marking areas to change, or as text instructions. "
-    "Always preserve the room architecture, camera angle, and lighting. "
-    "Never include annotations, circles, or markers in your output images."
+    "Here is a room redesign. I will send you edits describing specific areas "
+    "to change by their position in the image, or as text instructions. "
+    "Preserve the exact camera angle, perspective, and all architectural features "
+    "(walls, windows, doors, ceiling, floor). Only modify the specific elements "
+    "requested in each edit instruction. Your output must always be a clean "
+    "photorealistic photograph with no overlays, markers, or annotation-like shapes."
 )
 
 TEXT_FEEDBACK_TEMPLATE = (
     "Please modify this room design based on the following feedback:\n"
     "{feedback}\n\n"
-    "Keep the room architecture, camera angle, and overall composition. "
-    "Return a clean photorealistic image reflecting these changes."
+    "Keep all architectural features (walls, windows, doors, ceiling, floor), "
+    "camera angle, perspective, and overall composition unchanged. "
+    "Return a clean photorealistic photograph with zero annotations or markers."
 )
-
-
-def _load_prompt(name: str) -> str:
-    """Load a prompt template file, raising non-retryable error if missing."""
-    path = PROMPTS_DIR / name
-    try:
-        return path.read_text()
-    except FileNotFoundError as exc:
-        raise ApplicationError(
-            f"Prompt template not found: {name}",
-            non_retryable=True,
-        ) from exc
 
 
 def _position_description(center_x: float, center_y: float, radius: float) -> str:
@@ -119,24 +112,24 @@ def _position_description(center_x: float, center_y: float, radius: float) -> st
 
 
 def _build_edit_instructions(annotations: list[AnnotationRegion]) -> str:
-    """Build edit instruction text from annotation regions.
+    """Build structured edit instruction text from annotation regions.
 
     Uses text-only coordinate descriptions instead of visual circle references.
     This prevents Gemini from reproducing annotation circles in its output.
     """
-    lines = []
+    blocks = []
     for ann in annotations:
         position = _position_description(ann.center_x, ann.center_y, ann.radius)
-        parts = [f"Region {ann.region_id}: {position}"]
+        lines = [f"Region {ann.region_id}: {position}"]
         if ann.action:
-            parts.append(f"Action: {ann.action}.")
-        parts.append(ann.instruction)
+            lines.append(f"  ACTION: {ann.action}")
+        lines.append(f"  INSTRUCTION: {ann.instruction}")
         if ann.avoid:
-            parts.append(f"Avoid: {', '.join(ann.avoid)}.")
+            lines.append(f"  AVOID: {', '.join(ann.avoid)}")
         if ann.constraints:
-            parts.append(f"Constraints: {', '.join(ann.constraints)}.")
-        lines.append(" — ".join(parts))
-    return "\n".join(lines)
+            lines.append(f"  CONSTRAINTS: {', '.join(ann.constraints)}")
+        blocks.append("\n".join(lines))
+    return "\n\n".join(blocks)
 
 
 def _build_eval_instruction(input: EditDesignInput) -> str:
@@ -147,6 +140,53 @@ def _build_eval_instruction(input: EditDesignInput) -> str:
     if input.feedback:
         parts.append(input.feedback)
     return "\n".join(parts) if parts else "edit"
+
+
+def _build_changelog(history: list) -> str:
+    """Extract previous edit instructions from chat history into a changelog.
+
+    Scans user turns for text parts containing edit instructions (Region/ACTION
+    patterns) or feedback (TEXT_FEEDBACK_TEMPLATE markers). Returns a formatted
+    changelog string, or empty string if this is the first edit (bootstrap).
+    """
+    edits: list[str] = []
+    for content in history:
+        if content.role != "user":
+            continue
+        for part in content.parts:
+            if not hasattr(part, "text") or not part.text:
+                continue
+            text = part.text
+            # Skip context prompt (Turn 1 bootstrap)
+            if text == CONTEXT_PROMPT:
+                continue
+            # Detect region-based edits (ACTION is optional, INSTRUCTION is always present)
+            if "Region " in text and "INSTRUCTION:" in text:
+                # Extract a compact summary per region
+                for line in text.split("\n"):
+                    line = line.strip()
+                    if line.startswith("Region "):
+                        edits.append(f"- {line}")
+                    elif line.startswith("INSTRUCTION:"):
+                        edits.append(f"  {line}")
+            # Detect text feedback
+            elif "modify this room design" in text.lower():
+                # Extract the user's feedback from TEXT_FEEDBACK_TEMPLATE
+                for line in text.split("\n"):
+                    line = line.strip()
+                    if (
+                        line
+                        and not line.startswith("Keep all")
+                        and not line.startswith("Return")
+                        and "modify this room design" not in line.lower()
+                    ):
+                        edits.append(f"- Feedback: {line}")
+
+    if not edits:
+        return ""
+
+    header = "PREVIOUS EDITS (preserve all these changes):"
+    return f"{header}\n" + "\n".join(edits)
 
 
 def _upload_image(image: Image.Image, project_id: str) -> str:
@@ -186,10 +226,10 @@ async def _bootstrap_chat(
     )
 
     # Safety cap: product allows 2 room + 3 inspiration = 5 refs, plus
-    # base_image (always) and annotated image (when annotations present) =
+    # base_image (always, sent twice when annotations present: context + edit) =
     # 7 images max in bootstrap. Well under the model's 14-image ceiling.
     # This guard only fires if upstream validation is bypassed.
-    reserved = 2 if input.annotations else 1  # base_image + annotated
+    reserved = 2 if input.annotations else 1  # base_image in context + edit turns
     max_ref_images = MAX_INPUT_IMAGES - reserved
     total_ref = len(room_images) + len(inspiration_images)
     if total_ref > max_ref_images:
@@ -229,10 +269,11 @@ async def _bootstrap_chat(
         # Send the CLEAN base image with text-only coordinate descriptions.
         # Previously we drew visual circles on the image, but Gemini sometimes
         # reproduced those circles in its output. Text coordinates eliminate this.
-        edit_template = _load_prompt("edit.txt")
+        edit_template = strip_changelog_lines(load_versioned_prompt("edit"))
         instructions = _build_edit_instructions(input.annotations)
         edit_prompt = edit_template.format(
-            edit_instructions=instructions.replace("{", "{{").replace("}", "}}")
+            edit_instructions=instructions.replace("{", "{{").replace("}", "}}"),
+            changelog="",  # No previous edits on bootstrap
         )
         edit_parts.extend([base_image, edit_prompt])
 
@@ -256,10 +297,11 @@ async def _bootstrap_chat(
     result_image = extract_image(response2)
 
     if result_image is None:
-        response2 = await asyncio.to_thread(
-            chat.send_message,
-            "Please generate the edited room image now. Remove ALL annotation circles and markers.",
+        retry_msg = (
+            "Please generate the edited room image now. "
+            "Output only a clean photorealistic photograph with no overlays or markers."
         )
+        response2 = await asyncio.to_thread(chat.send_message, retry_msg)
         result_image = extract_image(response2)
 
     return chat, result_image
@@ -275,19 +317,46 @@ async def _continue_chat(
     """
     from google.genai import types as gtypes
 
+    if not input.annotations and not input.feedback:
+        raise ApplicationError(
+            "No annotations or feedback provided",
+            non_retryable=True,
+        )
+
     client = get_client()
     # Sync R2 download in thread pool
     history = await asyncio.to_thread(restore_from_r2, input.project_id)
 
+    # Re-anchor room photos so Gemini retains architectural context across edits.
+    # Without these, spatial drift accumulates after several edit turns.
+    room_images: list[Image.Image] = []
+    if input.room_photo_urls:
+        room_images = await download_images(input.room_photo_urls)
+
     # Build message parts (supports annotations, feedback, or both)
     message_parts: list = []
+
+    # Prepend room photos as spatial anchors (capped to leave room for edit images)
+    if room_images:
+        # Reserve slots: base_image (1 if annotations) + safety margin
+        reserved = 2 if input.annotations else 1
+        max_room = MAX_INPUT_IMAGES - reserved
+        if len(room_images) > max_room:
+            room_images = room_images[:max_room]
+        message_parts.append("Reference room photos (preserve this architecture):")
+        message_parts.extend(room_images)
+
+    # Build cumulative changelog from previous edit turns
+    changelog = _build_changelog(history)
+
     if input.annotations:
         assert base_image is not None  # guaranteed: caller downloads when annotations present
         # Send clean base image with text coordinates — no visual annotations
-        edit_template = _load_prompt("edit.txt")
+        edit_template = strip_changelog_lines(load_versioned_prompt("edit"))
         instructions = _build_edit_instructions(input.annotations)
         edit_prompt = edit_template.format(
-            edit_instructions=instructions.replace("{", "{{").replace("}", "}}")
+            edit_instructions=instructions.replace("{", "{{").replace("}", "}}"),
+            changelog=changelog.replace("{", "{{").replace("}", "}}"),
         )
         message_parts.extend([base_image, edit_prompt])
 
@@ -295,16 +364,11 @@ async def _continue_chat(
         feedback_prompt = TEXT_FEEDBACK_TEMPLATE.format(
             feedback=input.feedback.replace("{", "{{").replace("}", "}}")
         )
-        if message_parts:
+        if input.annotations:
+            # Both annotations and feedback — append feedback as additional context
             message_parts.append(f"\nAdditional feedback: {input.feedback}")
         else:
             message_parts.append(feedback_prompt)
-
-    if not message_parts:
-        raise ApplicationError(
-            "No annotations or feedback provided",
-            non_retryable=True,
-        )
 
     # Sync Gemini call in thread pool
     response = await asyncio.to_thread(continue_chat, history, message_parts, client)
@@ -341,16 +405,19 @@ async def _continue_chat(
 
     if result_image is None:
         # Retry with explicit request
+        retry_text = (
+            "Please generate the edited room image now. "
+            "Output only a clean photorealistic photograph with no overlays or markers."
+        )
         response = await asyncio.to_thread(
             continue_chat,
             updated_history,
-            ["Please generate the edited room image now. Remove all annotations."],
+            [retry_text],
             client,
         )
         result_image = extract_image(response)
 
         # Add retry turns to history
-        retry_text = "Please generate the edited room image now. Remove all annotations."
         updated_history.append(gtypes.Content(role="user", parts=[gtypes.Part(text=retry_text)]))
         retry_content = response_to_content(response)
         if retry_content:
@@ -366,46 +433,51 @@ async def _maybe_run_edit_eval(
     revised_url: str,
     instruction: str,
 ) -> None:
-    """Run eval pipeline on edit result if EVAL_MODE is set. Never raises."""
+    """Run VLM eval pipeline on edit result if EVAL_MODE is set. Never raises."""
     eval_mode = os.environ.get("EVAL_MODE", "off").lower()
     if eval_mode == "off":
         return
 
     try:
-        from app.utils.image_eval import run_fast_eval
+        from app.utils.image_eval import run_artifact_check
 
-        fast = run_fast_eval(result_image, original_image, brief=None, is_edit=True)
-        logger.info(
-            "eval_edit_fast_result",
-            composite=fast.composite_score,
-            has_artifacts=fast.has_artifacts,
-            needs_deep=fast.needs_deep_eval,
+        artifact = run_artifact_check(result_image)
+        if artifact.has_artifacts:
+            logger.warning(
+                "eval_edit_artifacts_detected",
+                count=artifact.artifact_count,
+            )
+
+        artifact_dict = {
+            "has_artifacts": artifact.has_artifacts,
+            "artifact_count": artifact.artifact_count,
+        }
+
+        from app.activities.design_eval import evaluate_edit
+        from app.utils.r2 import resolve_url
+
+        revised_presigned = await asyncio.to_thread(resolve_url, revised_url)
+
+        vlm_result = await evaluate_edit(
+            original_image_url=original_url,
+            edited_image_url=revised_presigned,
+            edit_instruction=instruction,
+            artifact_check=artifact_dict,
         )
-
-        deep_result = None
-        if eval_mode == "full" and (fast.needs_deep_eval or random.random() < 0.2):
-            from app.activities.design_eval import evaluate_edit
-
-            deep_result = await evaluate_edit(
-                original_image_url=original_url,
-                edited_image_url=revised_url,
-                edit_instruction=instruction,
-                fast_eval=fast,
-            )
-            logger.info(
-                "eval_edit_deep_result",
-                total=deep_result.total,
-                tag=deep_result.tag,
-            )
+        logger.info(
+            "eval_edit_vlm_result",
+            total=vlm_result.total,
+            tag=vlm_result.tag,
+        )
 
         from app.utils.score_tracking import append_score
 
         append_score(
             history_path=Path("eval_history.jsonl"),
             scenario="edit",
-            prompt_version="v1",
-            fast_eval=fast.__dict__,
-            deep_eval=({"total": deep_result.total, "tag": deep_result.tag} if deep_result else {}),
+            prompt_version=get_active_version("edit"),
+            vlm_eval={"total": vlm_result.total, "tag": vlm_result.tag},
+            artifact_check=artifact_dict,
         )
     except Exception:
         logger.warning("eval_edit_failed", exc_info=True)

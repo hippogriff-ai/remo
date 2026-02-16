@@ -14,6 +14,8 @@ private let captureLogger = Logger(subsystem: "com.remo.lidar", category: "captu
 /// delegate requires `NSCoding` conformance (a UIKit archiving protocol not needed here).
 class RoomCaptureCoordinator: NSObject, RoomCaptureSessionDelegate {
     let onComplete: (Result<CapturedRoom, Error>) -> Void
+    /// Set by RoomCaptureViewWrapper so dismantleUIView can use guarded stop.
+    weak var sessionRef: CaptureSessionRef?
     private let roomBuilder = RoomBuilder(options: [.beautifyObjects])
     private var buildTask: Task<Void, Never>?
 

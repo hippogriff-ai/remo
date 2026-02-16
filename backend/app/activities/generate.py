@@ -10,7 +10,6 @@ from __future__ import annotations
 import asyncio
 import io
 import os
-import random
 import re
 from pathlib import Path
 
@@ -37,7 +36,11 @@ from app.utils.gemini_chat import (
     get_client,
 )
 from app.utils.http import download_images
-from app.utils.prompt_versioning import get_active_version, load_versioned_prompt
+from app.utils.prompt_versioning import (
+    get_active_version,
+    load_versioned_prompt,
+    strip_changelog_lines,
+)
 
 logger = structlog.get_logger()
 
@@ -109,77 +112,198 @@ def _load_prompt(name: str) -> str:
         ) from exc
 
 
+def _orientation_to_compass(degrees: float) -> str:
+    """Convert wall orientation in degrees to a compass direction label.
+
+    RoomPlan convention: 0° = south-facing, 90° = west-facing,
+    180° = north-facing, 270° = east-facing. Intercardinals at 45° intervals.
+    """
+    # Normalize to [0, 360)
+    deg = degrees % 360
+    # 8 compass points at 45° intervals, starting from South at 0°
+    directions = [
+        "south",
+        "southwest",
+        "west",
+        "northwest",
+        "north",
+        "northeast",
+        "east",
+        "southeast",
+    ]
+    index = round(deg / 45) % 8
+    return directions[index]
+
+
+# Maximum furniture items to include in room context (noise reduction)
+_MAX_FURNITURE_ITEMS = 15
+# Minimum furniture dimension to include (meters) — smaller items are noise
+_MIN_FURNITURE_SIZE_M = 0.3
+
+
 def _format_room_context(dims: RoomDimensions | None) -> str:
-    """Format room dimensions into a human-readable context block for the prompt.
+    """Format room dimensions into structured scene data for the generation prompt.
 
     Returns empty string when no dimensions are available so the prompt
     template's {room_context} placeholder collapses cleanly.
 
-    Includes furniture bounding-box dimensions and opening sizes (G5/G13).
+    Output uses section headers (ROOM GEOMETRY / WALLS / FIXED OPENINGS /
+    EXISTING FURNITURE) for clear Gemini parsing. Includes wall compass
+    orientations, relative furniture proportions, and noise filtering.
+
     Uses fallback labels for None types/materials (G23).
     Gracefully handles non-dict entries and non-numeric dimensions.
     """
     if dims is None:
         return ""
 
-    parts = [
-        f"\nRoom dimensions: {dims.width_m:.1f}m × {dims.length_m:.1f}m, "
+    sections: list[str] = []
+
+    # --- ROOM GEOMETRY ---
+    geo_lines = [
+        f"- Dimensions: {dims.width_m:.1f}m wide × {dims.length_m:.1f}m long, "
         f"ceiling height {dims.height_m:.1f}m"
     ]
     if dims.floor_area_sqm is not None:
-        parts.append(f"Floor area: {dims.floor_area_sqm:.1f} m²")
+        geo_lines.append(f"- Floor area: {dims.floor_area_sqm:.1f} m²")
+    sections.append("\nROOM GEOMETRY (LiDAR-measured, precise):\n" + "\n".join(geo_lines))
+
+    # --- WALLS ---
+    if dims.walls:
+        wall_lines: list[str] = []
+        for w in dims.walls:
+            if not isinstance(w, dict):
+                continue
+            wid = w.get("id", f"wall_{len(wall_lines)}")
+            ww = w.get("width")
+            wh = w.get("height")
+            orientation = w.get("orientation")
+            try:
+                width_str = f"{float(ww):.1f}m wide" if ww is not None else ""
+                height_str = f"{float(wh):.1f}m tall" if wh is not None else ""
+            except (TypeError, ValueError):
+                width_str = ""
+                height_str = ""
+            dim_parts = [p for p in [width_str, height_str] if p]
+            compass = ""
+            if orientation is not None:
+                try:
+                    deg = float(orientation)
+                    direction = _orientation_to_compass(deg)
+                    compass = f", faces {direction} ({deg:.0f}°)"
+                except (TypeError, ValueError):
+                    pass
+            if dim_parts:
+                wall_lines.append(f"- {wid}: {', '.join(dim_parts)}{compass}")
+            elif compass:
+                wall_lines.append(f"- {wid}{compass}")
+        if wall_lines:
+            sections.append(f"WALLS ({len(wall_lines)} detected):\n" + "\n".join(wall_lines))
+
+    # --- FIXED OPENINGS ---
     if dims.openings:
         opening_descs = []
         for o in dims.openings:
             if not isinstance(o, dict):
                 continue
             otype = str(o.get("type") or "opening")
-            w = o.get("width")
-            h = o.get("height")
-            if w is not None and h is not None:
+            ow = o.get("width")
+            oh = o.get("height")
+            if ow is not None and oh is not None:
                 try:
-                    opening_descs.append(f"{otype} ({float(w):.1f}m × {float(h):.1f}m)")
+                    opening_descs.append(f"- {otype} ({float(ow):.1f}m × {float(oh):.1f}m)")
                 except (TypeError, ValueError):
-                    opening_descs.append(otype)
+                    opening_descs.append(f"- {otype}")
             else:
-                opening_descs.append(otype)
+                opening_descs.append(f"- {otype}")
         if opening_descs:
-            parts.append(f"Openings: {', '.join(opening_descs)}")
+            sections.append("FIXED OPENINGS (do not relocate):\n" + "\n".join(opening_descs))
+
+    # --- EXISTING FURNITURE ---
     if dims.furniture:
+        shorter_wall = min(dims.width_m, dims.length_m)
         furniture_descs = []
         for f in dims.furniture:
             if not isinstance(f, dict):
                 continue
             ftype = str(f.get("type") or "item")
-            w = f.get("width")
-            d = f.get("depth")
-            h = f.get("height")
-            dim_parts = []
+            fw = f.get("width")
+            fd = f.get("depth")
+            fh = f.get("height")
+            f_dims: list[str] = []
             try:
-                if w is not None:
-                    dim_parts.append(f"{float(w):.1f}m")
-                if d is not None:
-                    dim_parts.append(f"{float(d):.1f}m")
-                if h is not None:
-                    dim_parts.append(f"h{float(h):.1f}m")
+                if fw is not None:
+                    f_dims.append(f"{float(fw):.1f}m")
+                if fd is not None:
+                    f_dims.append(f"{float(fd):.1f}m")
+                if fh is not None:
+                    f_dims.append(f"h{float(fh):.1f}m")
             except (TypeError, ValueError):
-                dim_parts = []
-            if dim_parts:
-                furniture_descs.append(f"{ftype} ({' × '.join(dim_parts)})")
-            else:
-                furniture_descs.append(ftype)
+                f_dims = []
+
+            # Skip small items (< 0.3m in all measured dimensions) as noise
+            if f_dims:
+                try:
+                    measured = []
+                    if fw is not None:
+                        measured.append(float(fw))
+                    if fd is not None:
+                        measured.append(float(fd))
+                    if fh is not None:
+                        measured.append(float(fh))
+                    if measured and max(measured) < _MIN_FURNITURE_SIZE_M:
+                        continue
+                except (TypeError, ValueError):
+                    pass
+
+            desc = f"- {ftype}"
+            if f_dims:
+                # Footprint × height format
+                footprint_parts = []
+                height_part = ""
+                for p in f_dims:
+                    if p.startswith("h"):
+                        height_part = p[1:]  # strip 'h' prefix for new format
+                    else:
+                        footprint_parts.append(p)
+                if footprint_parts and height_part:
+                    fp_label = "footprint" if len(footprint_parts) >= 2 else "wide"
+                    desc += f": {' × '.join(footprint_parts)} {fp_label}, {height_part} tall"
+                elif footprint_parts:
+                    fp_label = "footprint" if len(footprint_parts) >= 2 else "wide"
+                    desc += f": {' × '.join(footprint_parts)} {fp_label}"
+                elif height_part:
+                    desc += f": {height_part} tall"
+
+                # Add relative proportion for large furniture
+                try:
+                    if fw is not None and shorter_wall > 0:
+                        pct = float(fw) / shorter_wall * 100
+                        if pct >= 20:
+                            desc += f" — spans ~{pct:.0f}% of shorter wall"
+                except (TypeError, ValueError):
+                    pass
+
+            furniture_descs.append(desc)
+            if len(furniture_descs) >= _MAX_FURNITURE_ITEMS:
+                break
         if furniture_descs:
-            parts.append(f"Existing furniture: {', '.join(furniture_descs)}")
+            sections.append(
+                "EXISTING FURNITURE (scale reference — respect these proportions):\n"
+                + "\n".join(furniture_descs)
+            )
+
+    # --- SURFACES ---
     if dims.surfaces:
         surface_descs = [
-            f"{s.get('type') or 'surface'}: {s.get('material') or 'unknown'}"
+            f"- {s.get('type') or 'surface'}: {s.get('material') or 'unknown'}"
             for s in dims.surfaces
             if isinstance(s, dict)
         ]
         if surface_descs:
-            parts.append(f"Surfaces: {', '.join(surface_descs)}")
+            sections.append("SURFACES:\n" + "\n".join(surface_descs))
 
-    return "\n".join(parts)
+    return "\n\n".join(sections)
 
 
 _OPTION_VARIANTS: tuple[str, str] = (
@@ -193,6 +317,31 @@ _OPTION_VARIANTS: tuple[str, str] = (
 )
 
 
+def _format_color_palette(colors: list[str]) -> str:
+    """Format colors with 60-30-10 proportional hierarchy for Gemini.
+
+    Research shows proportional color descriptions with application guidance
+    produce more cohesive palettes than flat comma-separated lists.
+    """
+    if len(colors) == 1:
+        return f"Color palette: {colors[0]} (dominant throughout)"
+    if len(colors) == 2:
+        return (
+            f"Color palette (70/30): {colors[0]} (70% — walls, large surfaces), "
+            f"{colors[1]} (30% — furniture, textiles)"
+        )
+    # 3+ colors: 60-30-10 rule
+    parts = [
+        f"Color palette (60/30/10): {colors[0]} (60% — walls, large surfaces), "
+        f"{colors[1]} (30% — furniture, textiles), "
+        f"{colors[2]} (10% — accent pillows, art, accessories)"
+    ]
+    if len(colors) > 3:
+        extras = ", ".join(colors[3:])
+        parts.append(f"Additional accents: {extras}")
+    return "\n".join(parts)
+
+
 def _build_generation_prompt(
     brief: DesignBrief | None,
     inspiration_notes: list[InspirationNote],
@@ -200,8 +349,8 @@ def _build_generation_prompt(
     option_variant: str = "",
 ) -> str:
     """Build the generation prompt from templates and brief data."""
-    template = load_versioned_prompt("generation")
-    preservation = load_versioned_prompt("room_preservation")
+    template = strip_changelog_lines(load_versioned_prompt("generation"))
+    preservation = strip_changelog_lines(load_versioned_prompt("room_preservation"))
 
     brief_text = "Create a beautiful, modern interior design."
     keep_items_text = ""
@@ -217,7 +366,7 @@ def _build_generation_prompt(
             if sp.mood:
                 parts.append(f"Mood: {sp.mood}")
             if sp.colors:
-                parts.append(f"Colors: {', '.join(sp.colors)}")
+                parts.append(_format_color_palette(sp.colors))
             if sp.textures:
                 parts.append(f"Textures: {', '.join(sp.textures)}")
             if sp.lighting:
@@ -246,6 +395,8 @@ def _build_generation_prompt(
         brief_text += "\n\nInspiration notes:\n" + "\n".join(notes)
 
     room_context = _format_room_context(room_dimensions)
+    if room_context:
+        room_context += "\n"  # Visual separator before option_variant
 
     # Escape curly braces in user-provided text to prevent str.format() KeyError
     return template.format(
@@ -389,8 +540,10 @@ async def _maybe_run_eval(
     brief: DesignBrief | None,
     generated_urls: list[str],
     original_url: str,
+    generation_prompts: list[str] | None = None,
+    room_context: str = "",
 ) -> None:
-    """Run eval pipeline if EVAL_MODE is set. Never raises — logs and returns."""
+    """Run VLM eval pipeline if EVAL_MODE is set. Never raises — logs and returns."""
     eval_mode = os.environ.get("EVAL_MODE", "off").lower()
     if eval_mode == "off":
         return
@@ -399,39 +552,45 @@ async def _maybe_run_eval(
 
     for idx, (option_img, gen_url) in enumerate(zip(options, generated_urls, strict=True)):
         try:
-            from app.utils.image_eval import run_fast_eval
+            from app.utils.image_eval import run_artifact_check
 
-            fast = run_fast_eval(option_img, original, brief)
-            logger.info(
-                "eval_fast_result",
-                option=idx,
-                composite=fast.composite_score,
-                clip_text=fast.clip_text_score,
-                clip_image=fast.clip_image_score,
-                edge_ssim=fast.edge_ssim_score,
-                needs_deep=fast.needs_deep_eval,
-                prompt_version=prompt_version,
-            )
+            artifact = run_artifact_check(option_img)
+            if artifact.has_artifacts:
+                logger.warning(
+                    "eval_artifacts_detected",
+                    option=idx,
+                    count=artifact.artifact_count,
+                )
 
-            deep_result = None
-            if (
-                eval_mode == "full"
-                and brief is not None
-                and (fast.needs_deep_eval or random.random() < 0.2)
-            ):
+            result = None
+            if brief is not None:
                 from app.activities.design_eval import evaluate_generation
 
-                deep_result = await evaluate_generation(
+                gen_prompt = ""
+                if generation_prompts and idx < len(generation_prompts):
+                    gen_prompt = generation_prompts[idx]
+
+                from app.utils.r2 import resolve_url
+
+                gen_presigned = await asyncio.to_thread(resolve_url, gen_url)
+
+                result = await evaluate_generation(
                     original_photo_url=original_url,
-                    generated_image_url=gen_url,
+                    generated_image_url=gen_presigned,
                     brief=brief,
-                    fast_eval=fast,
+                    generation_prompt=gen_prompt,
+                    room_context=room_context,
+                    artifact_check={
+                        "has_artifacts": artifact.has_artifacts,
+                        "artifact_count": artifact.artifact_count,
+                    },
                 )
                 logger.info(
-                    "eval_deep_result",
+                    "eval_vlm_result",
                     option=idx,
-                    total=deep_result.total,
-                    tag=deep_result.tag,
+                    total=result.total,
+                    tag=result.tag,
+                    diagnostics=result.diagnostics,
                     prompt_version=prompt_version,
                 )
 
@@ -442,10 +601,20 @@ async def _maybe_run_eval(
                 history_path=Path("eval_history.jsonl"),
                 scenario=f"generation_option_{idx}",
                 prompt_version=prompt_version,
-                fast_eval=fast.__dict__,
-                deep_eval=(
-                    {"total": deep_result.total, "tag": deep_result.tag} if deep_result else {}
+                vlm_eval=(
+                    {
+                        "total": result.total,
+                        "tag": result.tag,
+                        **{c.name: c.score for c in result.criteria},
+                        **result.diagnostics,
+                    }
+                    if result
+                    else {}
                 ),
+                artifact_check={
+                    "has_artifacts": artifact.has_artifacts,
+                    "artifact_count": artifact.artifact_count,
+                },
             )
         except Exception:
             logger.warning("eval_failed", option=idx, exc_info=True)
@@ -535,6 +704,7 @@ async def generate_designs(input: GenerateDesignsInput) -> GenerateDesignsOutput
         url_1 = await asyncio.to_thread(_upload_image, option_1, project_id, "option_1.png")
 
         # Run eval if enabled — fire-and-forget, never blocks the activity
+        room_context = _format_room_context(input.room_dimensions)
         task = asyncio.create_task(
             _maybe_run_eval(
                 options=[option_0, option_1],
@@ -542,6 +712,8 @@ async def generate_designs(input: GenerateDesignsInput) -> GenerateDesignsOutput
                 brief=input.design_brief,
                 generated_urls=[url_0, url_1],
                 original_url=room_urls[0],
+                generation_prompts=prompts,
+                room_context=room_context,
             )
         )
         _background_tasks.add(task)

@@ -1,0 +1,23 @@
+[v2: Enhanced lock language with explicit preservation rules and element list]
+
+This interior design image has numbered colored circles marking areas to change.
+Each numbered circle indicates a specific region and edit instruction:
+
+{edit_instructions}
+
+PRESERVATION RULES (strictly enforced):
+- Modify ONLY the elements within the numbered circles
+- Every element outside marked regions must remain pixel-identical
+- Specifically preserve these unchanged:
+  * Wall colors, textures, and architectural features
+  * All furniture not marked for editing
+  * Window treatments and natural light direction
+  * Floor material and any rugs not marked
+  * Camera angle, perspective, and focal length
+  * Overall color temperature and white balance
+
+CRITICAL OUTPUT REQUIREMENT: Your output image must be a clean photorealistic
+photograph with ZERO visual annotations. Do NOT include any circles, numbers,
+badges, outlines, or markers in your output. If you see colored circles or
+numbered badges in the input, those are edit instructions ONLY — they must NOT
+appear in your generated image. The output must look like a real photograph.

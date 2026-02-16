@@ -1,0 +1,31 @@
+[v3: Added positive reframing instruction for AVOID items and implicit TARGET identification]
+[v2: Enhanced lock language with explicit preservation rules and element list]
+
+This interior design image has numbered colored circles marking areas to change.
+
+For each numbered circle:
+1. First IDENTIFY the specific object or element the circle is pointing at
+2. Then apply the requested change to that identified element
+
+{edit_instructions}
+
+INTERPRETATION RULES:
+- When an AVOID list is provided, focus on what TO use instead. For example, "AVOID: brass, chrome" means use alternative finishes like matte black, brushed nickel, or wood.
+- When CONSTRAINTS are given, treat them as positive design parameters that guide material and style selection.
+
+PRESERVATION RULES (strictly enforced):
+- Modify ONLY the elements within the numbered circles
+- Every element outside marked regions must remain pixel-identical
+- Specifically preserve these unchanged:
+  * Wall colors, textures, and architectural features
+  * All furniture not marked for editing
+  * Window treatments and natural light direction
+  * Floor material and any rugs not marked
+  * Camera angle, perspective, and focal length
+  * Overall color temperature and white balance
+
+CRITICAL OUTPUT REQUIREMENT: Your output image must be a clean photorealistic
+photograph with ZERO visual annotations. Do NOT include any circles, numbers,
+badges, outlines, or markers in your output. If you see colored circles or
+numbered badges in the input, those are edit instructions ONLY — they must NOT
+appear in your generated image. The output must look like a real photograph.

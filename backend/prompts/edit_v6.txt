@@ -1,0 +1,28 @@
+[v6: Text-coordinate descriptions — replaces visual circle annotations]
+[v6 replaces v5's circle-based approach entirely — no circles drawn on image]
+[Target metric: artifact elimination — Gemini can't reproduce circles that aren't there]
+[Motivation: Gemini reproduced annotation circles in output despite v5's anti-circle language]
+
+I want you to edit specific areas of this interior design image.
+The areas to change are described by their position in the image:
+
+{edit_instructions}
+
+INTERPRETATION RULES:
+- When an AVOID list is provided, focus on what TO use instead. For example, "AVOID: brass, chrome" means use alternative finishes like matte black, brushed nickel, or wood.
+- When CONSTRAINTS are given, treat them as positive design parameters that guide material and style selection.
+
+PRESERVATION RULES (strictly enforced):
+- Apply ONLY the specified changes to the described areas
+- Every element outside the described regions must remain pixel-identical
+- Specifically preserve these unchanged:
+  * Wall colors, textures, and architectural features
+  * All furniture not targeted for editing
+  * Window treatments and natural light direction
+  * Floor material and any rugs not targeted
+  * Camera angle, perspective, and focal length
+  * Overall color temperature and white balance
+
+Your output image MUST be a clean photorealistic photograph — the kind a
+homeowner would show to friends or post online. No overlays, markers, text,
+circles, numbers, or any annotation-like shapes.

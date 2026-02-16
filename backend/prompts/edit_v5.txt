@@ -1,0 +1,31 @@
+[v5: Anti-artifact sandwich — front-loaded + rear-loaded circle removal instructions]
+[v5 builds on v3 — adds specific visual descriptions of annotation markers for reliable removal]
+[Target metric: artifact cleanliness — prevents colored circles from leaking into output]
+[Research: RESEARCH_GEMINI_PROMPTING.md §5.3 (annotation practices), §5.4 (lock language)]
+[v3: Added positive reframing instruction for AVOID items and implicit TARGET identification]
+[v2: Enhanced lock language with explicit preservation rules and element list]
+
+IMPORTANT: The input image contains colored circle annotations (red, blue, and/or green outlines with small numbered badges) that were drawn ON TOP of the photograph by our editing tool. These circles are for demonstration purposes ONLY — they show you where to make changes but are NOT part of the actual room. They must NEVER appear in your output. Remove all traces of these circles and generate only the natural room content.
+
+For each numbered circle:
+1. First IDENTIFY the specific object or element the circle is pointing at
+2. Then apply the requested change to that identified element
+
+{edit_instructions}
+
+INTERPRETATION RULES:
+- When an AVOID list is provided, focus on what TO use instead. For example, "AVOID: brass, chrome" means use alternative finishes like matte black, brushed nickel, or wood.
+- When CONSTRAINTS are given, treat them as positive design parameters that guide material and style selection.
+
+PRESERVATION RULES (strictly enforced):
+- Modify ONLY the elements within the numbered circles
+- Every element outside marked regions must remain pixel-identical
+- Specifically preserve these unchanged:
+  * Wall colors, textures, and architectural features
+  * All furniture not marked for editing
+  * Window treatments and natural light direction
+  * Floor material and any rugs not marked
+  * Camera angle, perspective, and focal length
+  * Overall color temperature and white balance
+
+CRITICAL — CLEAN OUTPUT: Your output must be a clean photorealistic photograph. The red, blue, and green circle outlines and numbered badges visible in the input are software annotations ONLY. Do NOT reproduce any circles, outlines, numbers, badges, or colored markers in your output. Where you see an annotation circle, generate only the natural room content that belongs there. The final image must look like a real photograph — zero overlays, zero artifacts.

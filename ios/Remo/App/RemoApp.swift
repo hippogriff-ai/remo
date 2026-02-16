@@ -24,7 +24,13 @@ struct RemoApp: App {
             return nil
         }()
 
-        if !isMaestroTest, let url = resolvedURL {
+        let isValidBackend = resolvedURL.flatMap { url in
+            guard let scheme = url.scheme, ["http", "https"].contains(scheme),
+                  url.host != nil else { return nil as URL? }
+            return url
+        }
+
+        if !isMaestroTest, let url = isValidBackend {
             client = RealWorkflowClient(baseURL: url)
         } else {
             client = MockWorkflowClient(skipPhotos: isMaestroTest)

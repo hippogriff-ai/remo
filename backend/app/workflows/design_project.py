@@ -111,11 +111,17 @@ class DesignProjectWorkflow:
 
     async def _run_phases(self) -> None:
         # --- Phase: Photos (need >= 2 room photos + explicit confirmation) ---
-        await self._wait(
-            lambda: (
-                sum(1 for p in self.photos if p.photo_type == "room") >= 2 and self.photos_confirmed
+        if workflow.patched("photos-confirmed-gate"):
+            # New path: require explicit confirm_photos signal
+            await self._wait(
+                lambda: (
+                    sum(1 for p in self.photos if p.photo_type == "room") >= 2
+                    and self.photos_confirmed
+                )
             )
-        )
+        else:
+            # Legacy path: workflows started before confirm_photos was added
+            await self._wait(lambda: sum(1 for p in self.photos if p.photo_type == "room") >= 2)
 
         # Fire read_the_room analysis immediately (non-blocking, runs during scan)
         self._start_eager_analysis()

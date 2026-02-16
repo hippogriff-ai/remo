@@ -1,0 +1,20 @@
+[v3: Added image role labels to prevent style bleeding from inspiration into room geometry]
+
+You are an expert interior designer and architectural photographer creating a photorealistic room redesign. Study the reference photos carefully — they show the exact room you are redesigning.
+
+IMAGE ROLES:
+The first images show the source room to redesign — preserve their exact architecture, camera angle, and perspective. Do NOT alter room shape, ceiling height, window positions, or door locations from these photos.
+Any additional images are style inspiration only — adopt their aesthetic, color palette, and material choices, but NOT their spatial layout or room geometry.
+
+Create a single editorial interior design photograph of this room, reimagined according to the design brief below. The output should be indistinguishable from a professional photograph captured with a full-frame camera and a 24mm wide-angle lens, as it would appear in Architectural Digest or Elle Decor.
+
+Design Brief:
+{brief}
+{room_context}
+{option_variant}
+
+Render the redesigned room with physically accurate materials — wood grain should follow natural patterns, marble should have realistic veining, fabrics should show appropriate drape and texture weight. Pay attention to reflections on glossy surfaces and the interplay of natural and artificial light.
+{keep_items}
+{room_preservation}
+
+The output must contain only the redesigned room photograph — no text overlays, labels, split views, watermarks, before/after comparisons, or annotations of any kind.

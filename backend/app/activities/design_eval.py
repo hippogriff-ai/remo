@@ -1,7 +1,9 @@
-"""Deep eval layer — Claude Vision judge for generation, edit, and shopping quality.
+"""VLM eval layer — Claude Vision judge for generation, edit, and shopping quality.
+
+The single authoritative eval layer. CLIP/SSIM metrics were removed (false positives).
 
 Three rubric-based evaluators using Claude Sonnet as a multimodal judge:
-1. Generation rubric (100 points, 9 criteria)
+1. Generation rubric (100 points, 9 criteria + 2 diagnostic scores)
 2. Edit rubric (50 points, 5 criteria)
 3. Shopping visual rubric (30 points, 3 criteria)
 
@@ -24,7 +26,6 @@ from app.activities.shopping import _extract_json
 
 if TYPE_CHECKING:
     from app.models.contracts import DesignBrief
-    from app.utils.image_eval import FastEvalResult
 
 log = structlog.get_logger("design_eval")
 
@@ -49,24 +50,25 @@ class CriterionScore:
 
 @dataclass
 class GenerationEvalResult:
-    """Result of the generation deep eval (100 points, 9 criteria)."""
+    """Result of the generation VLM eval (100 points, 9 criteria + diagnostics)."""
 
     criteria: list[CriterionScore]
-    total: int
+    total: int  # 0-100 (existing 9 criteria only)
     tag: str  # EXCELLENT, GOOD, ACCEPTABLE, WEAK, FAIL
     notes: str = ""
-    fast_eval: dict[str, Any] = field(default_factory=dict)
+    diagnostics: dict[str, int] = field(default_factory=dict)
+    artifact_check: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass
 class EditEvalResult:
-    """Result of the edit deep eval (50 points, 5 criteria)."""
+    """Result of the edit VLM eval (50 points, 5 criteria)."""
 
     criteria: list[CriterionScore]
     total: int
     tag: str
     notes: str = ""
-    fast_eval: dict[str, Any] = field(default_factory=dict)
+    artifact_check: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass
@@ -157,11 +159,18 @@ Score this AI-generated room redesign against the rubric below. You are given:
 3: most constraints met. 1: few constraints met. 0: brief ignored.
 
 9. **Keep Items** (0-5): 5: all keep_items preserved exactly. \
-3: most preserved. 0: kept items were replaced."""
+3: most preserved. 0: kept items were replaced.
+
+DIAGNOSTIC SCORES (reported separately, not part of the 100-point total):
+D1. **Instruction Adherence** (0-10): 10: all generation prompt directives followed exactly. \
+7: most followed. 3: partially followed. 0: prompt ignored or contradicted.
+D2. **Spatial Accuracy** (0-5): 5: furniture sizes, room proportions, and spatial \
+relationships match the provided room context. 3: mostly correct. 0: impossible \
+spatial relationships or wildly wrong proportions."""
 
 _GENERATION_RESPONSE_FORMAT = """\
 Respond with EXACTLY this JSON (no markdown fences):
-{{
+{
   "photorealism": <0-15>,
   "style_adherence": <0-15>,
   "color_palette": <0-10>,
@@ -171,9 +180,11 @@ Respond with EXACTLY this JSON (no markdown fences):
   "design_coherence": <0-10>,
   "brief_compliance": <0-5>,
   "keep_items": <0-5>,
-  "total": <sum, 0-100>,
+  "total": <sum of above 9 criteria, 0-100>,
+  "instruction_adherence": <0-10>,
+  "spatial_accuracy": <0-5>,
   "notes": "<1-2 sentences>"
-}}"""
+}"""
 
 _GENERATION_CRITERIA_MAX = {
     "photorealism": 15,
@@ -194,20 +205,21 @@ _GENERATION_CRITERIA_MAX = {
 
 _EDIT_RUBRIC = """\
 Score this AI-edited room image against the rubric below. You are given:
-1. The original image (before edit)
+1. The original design image (before edit)
 2. The edited image (after edit)
-3. The edit instruction describing what should change
+3. The edit instruction describing what should change and where
 
 ## Rubric (50 points total):
 
-1. **Edit Fidelity** (0-15): 15: annotated regions changed exactly as instructed. \
+1. **Edit Fidelity** (0-15): 15: targeted areas changed exactly as instructed. \
 10: mostly correct changes. 5: partially correct. 0: wrong changes or no change.
 
-2. **Preservation Fidelity** (0-15): 15: unannotated regions completely unchanged. \
+2. **Preservation Fidelity** (0-15): 15: non-targeted areas completely unchanged. \
 10: minor unintended changes. 5: noticeable drift. 0: significant unwanted changes.
 
-3. **Artifact Cleanliness** (0-10): 10: no annotation markers visible in output. \
-7: barely visible traces. 3: clearly visible markers. 0: prominent annotation artifacts.
+3. **Artifact Cleanliness** (0-10): 10: clean photorealistic output with no visual \
+artifacts, overlays, or markers. 7: minor artifacts. 3: clearly visible artifacts \
+or non-photorealistic elements. 0: prominent artifacts or annotation-like shapes.
 
 4. **Seamless Blending** (0-5): 5: edited regions blend naturally with surroundings. \
 3: minor seam artifacts. 0: obvious cut-paste boundaries.
@@ -217,7 +229,7 @@ Score this AI-edited room image against the rubric below. You are given:
 
 _EDIT_RESPONSE_FORMAT = """\
 Respond with EXACTLY this JSON (no markdown fences):
-{{
+{
   "edit_fidelity": <0-15>,
   "preservation_fidelity": <0-15>,
   "artifact_cleanliness": <0-10>,
@@ -225,7 +237,7 @@ Respond with EXACTLY this JSON (no markdown fences):
   "instruction_accuracy": <0-5>,
   "total": <sum, 0-50>,
   "notes": "<1-2 sentences>"
-}}"""
+}"""
 
 _EDIT_CRITERIA_MAX = {
     "edit_fidelity": 15,
@@ -259,13 +271,13 @@ and shown in the room render. 10: close match. 5: vaguely similar. 0: wrong prod
 
 _SHOPPING_RESPONSE_FORMAT = """\
 Respond with EXACTLY this JSON (no markdown fences):
-{{
+{
   "visual_match": <0-15>,
   "style_consistency": <0-10>,
   "scale_appropriateness": <0-5>,
   "total": <sum, 0-30>,
   "notes": "<1-2 sentences>"
-}}"""
+}"""
 
 _SHOPPING_CRITERIA_MAX = {
     "visual_match": 15,
@@ -373,22 +385,33 @@ async def evaluate_generation(
     original_photo_url: str,
     generated_image_url: str,
     brief: DesignBrief,
-    fast_eval: FastEvalResult | None = None,
+    generation_prompt: str = "",
+    room_context: str = "",
+    artifact_check: dict | None = None,
 ) -> GenerationEvalResult:
-    """Run the generation deep eval (100 points, 9 criteria).
+    """Run the generation VLM eval (100 points, 9 criteria + diagnostics).
 
-    Downloads both images, sends them to Claude Sonnet with the brief
-    and rubric, and returns per-criterion scores.
+    Downloads both images, sends them to Claude Sonnet with the brief,
+    optional generation prompt and room context, and rubric. Returns
+    per-criterion scores plus diagnostic scores (instruction_adherence,
+    spatial_accuracy) that are NOT part of the 100-point total.
     """
     orig_b64, orig_mime = await _load_image_base64(original_photo_url)
     gen_b64, gen_mime = await _load_image_base64(generated_image_url)
 
     brief_json = brief.model_dump_json(indent=2)
-    prompt_text = (
-        f"{_GENERATION_RUBRIC}\n\n"
-        f"## DesignBrief:\n```json\n{brief_json}\n```\n\n"
-        f"{_GENERATION_RESPONSE_FORMAT}"
-    )
+
+    # Build prompt text with optional generation prompt and room context
+    sections = [
+        f"{_GENERATION_RUBRIC}\n\n",
+        f"## DesignBrief:\n```json\n{brief_json}\n```\n\n",
+    ]
+    if generation_prompt:
+        sections.append(f"## Generation Prompt:\n```\n{generation_prompt}\n```\n\n")
+    if room_context:
+        sections.append(f"## Room Context (LiDAR):\n{room_context}\n\n")
+    sections.append(_GENERATION_RESPONSE_FORMAT)
+    prompt_text = "".join(sections)
 
     content = [
         _text_block("Original room photo:"),
@@ -403,12 +426,24 @@ async def evaluate_generation(
     total = sum(c.score for c in criteria)
     tag = _generation_tag(total)
 
+    # Extract diagnostic scores (not part of the 100-point total)
+    diagnostics: dict[str, int] = {}
+    for diag_key, diag_max in [("instruction_adherence", 10), ("spatial_accuracy", 5)]:
+        val = raw.get(diag_key, 0)
+        if not isinstance(val, int):
+            try:
+                val = int(val) if val else 0
+            except (ValueError, TypeError):
+                val = 0
+        diagnostics[diag_key] = max(0, min(val, diag_max))
+
     return GenerationEvalResult(
         criteria=criteria,
         total=total,
         tag=tag,
         notes=raw.get("notes", ""),
-        fast_eval=fast_eval.__dict__ if fast_eval else {},
+        diagnostics=diagnostics,
+        artifact_check=artifact_check or {},
     )
 
 
@@ -416,9 +451,9 @@ async def evaluate_edit(
     original_image_url: str,
     edited_image_url: str,
     edit_instruction: str,
-    fast_eval: FastEvalResult | None = None,
+    artifact_check: dict | None = None,
 ) -> EditEvalResult:
-    """Run the edit deep eval (50 points, 5 criteria).
+    """Run the edit VLM eval (50 points, 5 criteria).
 
     Downloads both images, sends them to Claude Sonnet with the edit
     instruction and rubric, and returns per-criterion scores.
@@ -448,7 +483,7 @@ async def evaluate_edit(
         total=total,
         tag=tag,
         notes=raw.get("notes", ""),
-        fast_eval=fast_eval.__dict__ if fast_eval else {},
+        artifact_check=artifact_check or {},
     )
 
 
