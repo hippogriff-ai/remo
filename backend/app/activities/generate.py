@@ -170,7 +170,7 @@ def _format_room_context(dims: RoomDimensions | None) -> str:
 
     # --- WALLS ---
     if dims.walls:
-        wall_lines = []
+        wall_lines: list[str] = []
         for w in dims.walls:
             if not isinstance(w, dict):
                 continue
@@ -207,11 +207,11 @@ def _format_room_context(dims: RoomDimensions | None) -> str:
             if not isinstance(o, dict):
                 continue
             otype = str(o.get("type") or "opening")
-            w = o.get("width")
-            h = o.get("height")
-            if w is not None and h is not None:
+            ow = o.get("width")
+            oh = o.get("height")
+            if ow is not None and oh is not None:
                 try:
-                    opening_descs.append(f"- {otype} ({float(w):.1f}m × {float(h):.1f}m)")
+                    opening_descs.append(f"- {otype} ({float(ow):.1f}m × {float(oh):.1f}m)")
                 except (TypeError, ValueError):
                     opening_descs.append(f"- {otype}")
             else:
@@ -230,19 +230,19 @@ def _format_room_context(dims: RoomDimensions | None) -> str:
             fw = f.get("width")
             fd = f.get("depth")
             fh = f.get("height")
-            dim_parts: list[str] = []
+            f_dims: list[str] = []
             try:
                 if fw is not None:
-                    dim_parts.append(f"{float(fw):.1f}m")
+                    f_dims.append(f"{float(fw):.1f}m")
                 if fd is not None:
-                    dim_parts.append(f"{float(fd):.1f}m")
+                    f_dims.append(f"{float(fd):.1f}m")
                 if fh is not None:
-                    dim_parts.append(f"h{float(fh):.1f}m")
+                    f_dims.append(f"h{float(fh):.1f}m")
             except (TypeError, ValueError):
-                dim_parts = []
+                f_dims = []
 
             # Skip small items (< 0.3m in all measured dimensions) as noise
-            if dim_parts:
+            if f_dims:
                 try:
                     measured = []
                     if fw is not None:
@@ -257,11 +257,11 @@ def _format_room_context(dims: RoomDimensions | None) -> str:
                     pass
 
             desc = f"- {ftype}"
-            if dim_parts:
+            if f_dims:
                 # Footprint × height format
                 footprint_parts = []
                 height_part = ""
-                for p in dim_parts:
+                for p in f_dims:
                     if p.startswith("h"):
                         height_part = p[1:]  # strip 'h' prefix for new format
                     else:
