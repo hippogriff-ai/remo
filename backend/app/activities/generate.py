@@ -273,15 +273,20 @@ def _extract_project_id(urls: list[str]) -> str:
 
 
 def _upload_image(image: Image.Image, project_id: str, filename: str) -> str:
-    """Upload a PIL Image to R2 and return the presigned URL."""
-    from app.utils.r2 import generate_presigned_url, upload_object
+    """Upload a PIL Image to R2 and return the storage key.
+
+    Returns the R2 key (not a presigned URL) so the workflow stores a stable
+    reference.  The API layer presigns on every state query, giving iOS
+    always-fresh URLs.
+    """
+    from app.utils.r2 import upload_object
 
     buf = io.BytesIO()
     image.save(buf, format="PNG")
     key = f"projects/{project_id}/generated/{filename}"
     logger.info("r2_upload_start", key=key, size_bytes=buf.tell())
     upload_object(key, buf.getvalue(), content_type="image/png")
-    return generate_presigned_url(key)
+    return key
 
 
 async def _generate_single_option(
@@ -317,8 +322,16 @@ async def _generate_single_option(
     client = get_client()
     config = image_config or IMAGE_CONFIG
 
-    # Build content: room photos + inspiration photos + text prompt
-    contents: list = [*room_images, *inspiration_images, prompt]
+    # Build content: labeled room photos + labeled inspiration photos + text prompt.
+    # Labels prevent Gemini from confusing inspiration images for the actual room.
+    contents: list = []
+    if room_images:
+        contents.append("ROOM PHOTOS (these show the actual room to redesign):")
+        contents.extend(room_images)
+    if inspiration_images:
+        contents.append("INSPIRATION PHOTOS (style reference only — do NOT redesign these rooms):")
+        contents.extend(inspiration_images)
+    contents.append(prompt)
 
     logger.info(
         "gemini_generate_start",
@@ -327,13 +340,14 @@ async def _generate_single_option(
         num_inspiration_images=len(inspiration_images),
     )
 
-    # Run sync Gemini call in thread pool to avoid blocking the event loop
-    response = await asyncio.to_thread(
-        client.models.generate_content,
-        model=GEMINI_MODEL,
-        contents=contents,
-        config=config,
-    )
+    # Run sync Gemini call in thread pool with timeout to prevent hanging
+    async with asyncio.timeout(150):
+        response = await asyncio.to_thread(
+            client.models.generate_content,
+            model=GEMINI_MODEL,
+            contents=contents,
+            config=config,
+        )
 
     result_image = extract_image(response)
 
@@ -345,12 +359,13 @@ async def _generate_single_option(
             option=option_index,
             gemini_text=text_response[:300],
         )
-        response = await asyncio.to_thread(
-            client.models.generate_content,
-            model=GEMINI_MODEL,
-            contents=contents + ["Please generate the room image now."],
-            config=config,
-        )
+        async with asyncio.timeout(150):
+            response = await asyncio.to_thread(
+                client.models.generate_content,
+                model=GEMINI_MODEL,
+                contents=contents + ["Please generate the room image now."],
+                config=config,
+            )
         result_image = extract_image(response)
 
     if result_image is None:
@@ -450,6 +465,7 @@ async def generate_designs(input: GenerateDesignsInput) -> GenerateDesignsOutput
 
     # Resolve R2 storage keys to presigned URLs (pass through existing URLs)
     from app.utils.r2 import resolve_urls
+    from app.utils.tracing import trace_thread
 
     room_urls = await asyncio.to_thread(resolve_urls, input.room_photo_urls)
     inspiration_urls = await asyncio.to_thread(resolve_urls, input.inspiration_photo_urls)
@@ -504,14 +520,15 @@ async def generate_designs(input: GenerateDesignsInput) -> GenerateDesignsOutput
         # Generate 2 options in parallel with differentiated prompts
         # Pass original R2 keys (stable, not presigned) for cache key identity
         source_urls = input.room_photo_urls + input.inspiration_photo_urls
-        option_0, option_1 = await asyncio.gather(
-            *(
-                _generate_single_option(
-                    prompt, room_images, inspiration_images, idx, source_urls, config
+        with trace_thread(project_id, "generate"):
+            option_0, option_1 = await asyncio.gather(
+                *(
+                    _generate_single_option(
+                        prompt, room_images, inspiration_images, idx, source_urls, config
+                    )
+                    for idx, prompt in enumerate(prompts)
                 )
-                for idx, prompt in enumerate(prompts)
             )
-        )
 
         # Upload to R2 (sync boto3 calls run in thread pool)
         url_0 = await asyncio.to_thread(_upload_image, option_0, project_id, "option_0.png")
@@ -539,6 +556,11 @@ async def generate_designs(input: GenerateDesignsInput) -> GenerateDesignsOutput
 
     except ApplicationError:
         raise
+    except TimeoutError as e:
+        raise ApplicationError(
+            "Gemini API timed out after 150s",
+            non_retryable=False,
+        ) from e
     except Exception as e:
         error_type = type(e).__name__
         error_msg = str(e)

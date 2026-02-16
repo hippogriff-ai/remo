@@ -338,19 +338,26 @@ async def analyze_room_photos(
         inspiration_photo_count=len(input.inspiration_photo_urls),
     )
 
-    from app.utils.tracing import wrap_anthropic
+    from app.utils.tracing import trace_thread, wrap_anthropic
 
     client = wrap_anthropic(anthropic.AsyncAnthropic(api_key=api_key))
 
+    # Extract project_id from R2 URL pattern for trace grouping
+    import re as _re
+
+    _pid_match = _re.search(r"projects/([a-zA-Z0-9_-]+)/", input.room_photo_urls[0])
+    _project_id = _pid_match.group(1) if _pid_match else "unknown"
+
     try:
-        response = await client.messages.create(  # type: ignore[call-overload]
-            model=MODEL,
-            max_tokens=MAX_TOKENS,
-            system=system_prompt,
-            tools=[ANALYZE_ROOM_TOOL],
-            tool_choice={"type": "tool", "name": "analyze_room"},
-            messages=messages,
-        )
+        with trace_thread(_project_id, "analyze_room"):
+            response = await client.messages.create(  # type: ignore[call-overload]
+                model=MODEL,
+                max_tokens=MAX_TOKENS,
+                system=system_prompt,
+                tools=[ANALYZE_ROOM_TOOL],
+                tool_choice={"type": "tool", "name": "analyze_room"},
+                messages=messages,
+            )
     except anthropic.RateLimitError as e:
         log.warning("analyze_room_rate_limited")
         raise ApplicationError(f"Claude rate limited: {e}", non_retryable=False) from e

@@ -1,16 +1,14 @@
-This interior design image has numbered colored circles marking areas to change.
-Each numbered circle indicates a specific region and edit instruction:
+I want you to edit specific areas of this interior design image.
+The areas to change are described by their position in the image:
 
 {edit_instructions}
 
 Rules:
-- Apply ONLY the specified changes to the marked areas
-- Keep all unmarked elements exactly as they are
+- Apply ONLY the specified changes to the described areas
+- Keep all other elements exactly as they are
 - Preserve room architecture, camera angle, and lighting direction
 - Blend edits naturally with the surrounding environment
 
-CRITICAL OUTPUT REQUIREMENT: Your output image must be a clean photorealistic
-photograph with ZERO visual annotations. Do NOT include any circles, numbers,
-badges, outlines, or markers in your output. If you see colored circles or
-numbered badges in the input, those are edit instructions ONLY — they must NOT
-appear in your generated image. The output must look like a real photograph.
+Your output image MUST be a clean photorealistic photograph — the kind a
+homeowner would show to friends or post online. No overlays, markers, text,
+circles, numbers, or any annotation-like shapes.

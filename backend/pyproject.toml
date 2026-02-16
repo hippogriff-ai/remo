@@ -19,6 +19,7 @@ dependencies = [
     "google-genai>=1,<2",
     "anthropic>=0.44,<1",
     "python-multipart>=0.0.20",
+    "langsmith>=0.2,<1",
 ]
 
 [project.optional-dependencies]
@@ -28,7 +29,6 @@ dev = [
     "pytest-cov>=6,<7",
     "ruff>=0.9,<1",
     "mypy>=1.14,<2",
-    "langsmith>=0.2,<1",
 ]
 eval = [
     "open-clip-torch>=2.26,<3",

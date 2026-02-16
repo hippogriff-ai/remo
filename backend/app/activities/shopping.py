@@ -1531,9 +1531,13 @@ async def generate_shopping_list(
     if not exa_key:
         raise ApplicationError("EXA_API_KEY not set", non_retryable=True)
 
-    from app.utils.tracing import wrap_anthropic
+    from app.utils.tracing import trace_thread, wrap_anthropic
 
     client = wrap_anthropic(anthropic.AsyncAnthropic(api_key=anthropic_key))
+
+    # Extract project_id from R2 URL pattern for trace grouping
+    _pid_match = re.search(r"projects/([a-zA-Z0-9_-]+)/", input.design_image_url)
+    _project_id = _pid_match.group(1) if _pid_match else "unknown"
 
     # Resolve R2 storage keys to presigned URLs (pass through existing URLs)
     from app.utils.r2 import resolve_url, resolve_urls
@@ -1555,16 +1559,17 @@ async def generate_shopping_list(
 
     # Step 1: Extract items
     try:
-        items = await extract_items(
-            client,
-            design_image_url,
-            original_room_photo_urls,
-            input.design_brief,
-            input.revision_history,
-            source_urls=[input.design_image_url, *input.original_room_photo_urls],
-            room_context=input.room_context,
-            room_dimensions=input.room_dimensions,
-        )
+        with trace_thread(_project_id, "shopping"):
+            items = await extract_items(
+                client,
+                design_image_url,
+                original_room_photo_urls,
+                input.design_brief,
+                input.revision_history,
+                source_urls=[input.design_image_url, *input.original_room_photo_urls],
+                room_context=input.room_context,
+                room_dimensions=input.room_dimensions,
+            )
     except anthropic.RateLimitError as e:
         log.warning("shopping_extraction_rate_limited")
         raise ApplicationError(
@@ -1599,13 +1604,14 @@ async def generate_shopping_list(
     # Step 3: Score products (individual failures handled inside score_all_products;
     # these handlers catch errors from the gather setup or unexpected propagation)
     try:
-        scored = await score_all_products(
-            client,
-            items,
-            search_results,
-            input.design_brief,
-            room_dimensions=input.room_dimensions,
-        )
+        with trace_thread(_project_id, "shopping"):
+            scored = await score_all_products(
+                client,
+                items,
+                search_results,
+                input.design_brief,
+                room_dimensions=input.room_dimensions,
+            )
     except anthropic.RateLimitError as e:
         log.warning("shopping_scoring_rate_limited")
         raise ApplicationError(

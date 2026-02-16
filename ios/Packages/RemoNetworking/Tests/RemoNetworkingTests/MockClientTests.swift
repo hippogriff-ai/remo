@@ -79,12 +79,12 @@ final class MockClientTests: XCTestCase {
         XCTAssertTrue(response.validation.passed)
     }
 
-    func testTwoRoomPhotosTransitionToScan() async throws {
+    func testTwoRoomPhotosDoNotAutoTransition() async throws {
         let id = try await client.createProject(deviceFingerprint: "test", hasLidar: false)
         _ = try await client.uploadPhoto(projectId: id, imageData: Data(), photoType: "room")
         _ = try await client.uploadPhoto(projectId: id, imageData: Data(), photoType: "room")
         let state = try await client.getState(projectId: id)
-        XCTAssertEqual(state.step, "scan")
+        XCTAssertEqual(state.step, "photos", "No auto-transition; user clicks Continue in UI")
         XCTAssertEqual(state.photos.count, 2)
     }
 
@@ -122,18 +122,27 @@ final class MockClientTests: XCTestCase {
         let start = try await client.startIntake(projectId: id, mode: "full")
         XCTAssertFalse(start.agentMessage.isEmpty)
         XCTAssertNotNil(start.options)
-        XCTAssertEqual(start.progress, "Question 1 of 3")
+        XCTAssertEqual(start.progress, "Question 1 of 5")
 
-        let msg1 = try await client.sendIntakeMessage(projectId: id, message: "living room")
+        let msg1 = try await client.sendIntakeMessage(projectId: id, message: "living room", conversationHistory: [], mode: "full")
         XCTAssertNotNil(msg1.options)
-        XCTAssertEqual(msg1.progress, "Question 2 of 3")
+        XCTAssertEqual(msg1.progress, "Question 2 of 5")
 
-        let msg2 = try await client.sendIntakeMessage(projectId: id, message: "modern")
-        XCTAssertTrue(msg2.isOpenEnded)
+        let msg2 = try await client.sendIntakeMessage(projectId: id, message: "modern", conversationHistory: [], mode: "full")
+        XCTAssertNotNil(msg2.options) // Budget question
+        XCTAssertEqual(msg2.progress, "Question 3 of 5")
 
-        let msg3 = try await client.sendIntakeMessage(projectId: id, message: "replace the couch")
-        XCTAssertTrue(msg3.isSummary)
-        XCTAssertNotNil(msg3.partialBrief)
+        let msg3 = try await client.sendIntakeMessage(projectId: id, message: "Under $1,000", conversationHistory: [], mode: "full")
+        XCTAssertTrue(msg3.isOpenEnded) // Color preferences
+        XCTAssertEqual(msg3.progress, "Question 4 of 5")
+
+        let msg4 = try await client.sendIntakeMessage(projectId: id, message: "I like warm tones", conversationHistory: [], mode: "full")
+        XCTAssertTrue(msg4.isOpenEnded) // Furniture to keep
+        XCTAssertEqual(msg4.progress, "Question 5 of 5")
+
+        let msg5 = try await client.sendIntakeMessage(projectId: id, message: "Keep the bookshelf", conversationHistory: [], mode: "full")
+        XCTAssertTrue(msg5.isSummary)
+        XCTAssertNotNil(msg5.partialBrief)
     }
 
     func testConfirmIntakeTransitionsToSelection() async throws {
@@ -236,11 +245,11 @@ final class MockClientTests: XCTestCase {
     func testFullFlowPhotosToCompleted() async throws {
         let id = try await client.createProject(deviceFingerprint: "test", hasLidar: false)
 
-        // Upload 2 room photos -> scan step
+        // Upload 2 room photos (step stays "photos" — user clicks Continue in UI)
         _ = try await client.uploadPhoto(projectId: id, imageData: Data(), photoType: "room")
         _ = try await client.uploadPhoto(projectId: id, imageData: Data(), photoType: "room")
         var state = try await client.getState(projectId: id)
-        XCTAssertEqual(state.step, "scan")
+        XCTAssertEqual(state.step, "photos")
 
         // Skip scan -> intake
         try await client.skipScan(projectId: id)

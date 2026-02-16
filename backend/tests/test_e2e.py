@@ -1691,9 +1691,9 @@ class TestWI26IntakeConversationValidation:
         assert r.status_code == 200
         data = r.json()
         progress = data.get("progress", "")
-        # Real agent returns "Turn X of ~Y — Z/11 domains covered"
-        assert "domain" in progress.lower() or "turn" in progress.lower(), (
-            f"Progress field doesn't track domains: '{progress}'"
+        # Real agent returns "Question X of ~Y"
+        assert "question" in progress.lower(), (
+            f"Progress field missing expected format: '{progress}'"
         )
 
     async def test_intake_with_inspiration_photo_context(self, client: httpx.AsyncClient):

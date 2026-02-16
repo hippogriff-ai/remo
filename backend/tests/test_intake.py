@@ -322,7 +322,7 @@ class TestRoomAnalysisInjection:
         """Using This Analysis and HYPOTHESIS CORRECTIONS instructions present."""
         analysis = {"room_type": "living room"}
         section = _format_room_analysis_section(analysis)
-        assert "Do NOT re-ask" in section
+        assert "Do NOT ask" in section
         assert "HYPOTHESIS CORRECTIONS" in section
         assert "photos can be misleading" in section
 
@@ -1245,7 +1245,7 @@ class TestRunIntakeCoreMocked:
         assert result.partial_brief is not None
         assert result.partial_brief.room_type == "living room"
         assert result.is_summary is False
-        assert "Turn 1" in result.progress
+        assert "Question 1" in result.progress
 
     @patch.dict("os.environ", {"ANTHROPIC_API_KEY": "test-key"})
     @patch("app.activities.intake.anthropic.AsyncAnthropic")
@@ -1342,7 +1342,7 @@ class TestRunIntakeCoreMocked:
         result = asyncio.run(_run_intake_core(input_data))
 
         # Turn 3 (2 user messages in history + this one)
-        assert "Turn 3" in result.progress
+        assert "Question 3" in result.progress
 
     @patch.dict("os.environ", {"ANTHROPIC_API_KEY": "test-key"})
     @patch("app.activities.intake.anthropic.AsyncAnthropic")

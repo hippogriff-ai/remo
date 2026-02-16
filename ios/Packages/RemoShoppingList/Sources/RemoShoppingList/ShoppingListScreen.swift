@@ -216,11 +216,35 @@ struct ProductCard: View {
                 VStack(alignment: .leading, spacing: 4) {
                     Text(item.productName)
                         .font(.subheadline.bold())
+                        #if os(iOS)
+                        .contextMenu {
+                            Button {
+                                let query = item.productName.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? item.productName
+                                if let url = URL(string: "https://www.google.com/search?q=\(query)") {
+                                    UIApplication.shared.open(url)
+                                }
+                            } label: {
+                                Label("Search Google", systemImage: "magnifyingglass")
+                            }
+                        }
+                        #endif
                     if !item.whyMatched.isEmpty {
                         Text(item.whyMatched)
                             .font(.caption)
                             .italic()
                             .foregroundStyle(.secondary)
+                            #if os(iOS)
+                            .contextMenu {
+                                Button {
+                                    let query = item.whyMatched.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? item.whyMatched
+                                    if let url = URL(string: "https://www.google.com/search?q=\(query)") {
+                                        UIApplication.shared.open(url)
+                                    }
+                                } label: {
+                                    Label("Search Google", systemImage: "magnifyingglass")
+                                }
+                            }
+                            #endif
                     }
                     Text(item.retailer)
                         .font(.caption)

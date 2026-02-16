@@ -2,21 +2,38 @@
 import SwiftUI
 import RoomPlan
 
+/// Holds a reference to the active capture session so SwiftUI can call stop().
+/// Tracks whether stop() has already been called to prevent double-stop crashes
+/// in RoomPlan (dismantleUIView fires after Done button already stopped the session).
+class CaptureSessionRef {
+    var session: RoomCaptureSession?
+    private var hasStopped = false
+
+    func stop() {
+        guard !hasStopped else { return }
+        hasStopped = true
+        session?.stop()
+    }
+
+    func reset() {
+        hasStopped = false
+    }
+}
+
 /// SwiftUI wrapper for Apple's `RoomCaptureView`.
 ///
 /// Presents the live room scanning UI. Starts the capture session immediately.
-/// When the user taps Done, the session ends and `onComplete` is called
-/// with the resulting `CapturedRoom` or error.
-///
-/// Note: We only set `captureSession.delegate` (not `view.delegate`) because
-/// `RoomCaptureViewDelegate` requires `NSCoding` conformance. The session delegate
-/// is sufficient — we get the result from `CapturedRoomData.finalResults`.
+/// The `sessionRef` is populated on creation so the parent can call `stop()`
+/// via a Done button. When the session ends, `onComplete` fires with the result.
 struct RoomCaptureViewWrapper: UIViewRepresentable {
+    let sessionRef: CaptureSessionRef
     let onComplete: (Result<CapturedRoom, Error>) -> Void
 
     func makeUIView(context: Context) -> RoomCaptureView {
         let view = RoomCaptureView(frame: .zero)
         view.captureSession.delegate = context.coordinator
+        sessionRef.session = view.captureSession
+        sessionRef.reset()
         view.captureSession.run(configuration: RoomCaptureSession.Configuration())
         return view
     }

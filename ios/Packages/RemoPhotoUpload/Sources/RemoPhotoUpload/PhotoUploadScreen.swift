@@ -16,6 +16,7 @@ public struct PhotoUploadScreen: View {
     @State private var isUploading = false
     @State private var validationMessages: [String] = []
     @State private var showCamera = false
+    @State private var imageCache: [String: Data] = [:]
 
     public init(projectState: ProjectState, client: any WorkflowClientProtocol) {
         self.projectState = projectState
@@ -52,7 +53,7 @@ public struct PhotoUploadScreen: View {
                 if !projectState.photos.isEmpty {
                     LazyVGrid(columns: [GridItem(.adaptive(minimum: 100))], spacing: 12) {
                         ForEach(projectState.photos) { photo in
-                            PhotoThumbnail(photo: photo, onDelete: {
+                            PhotoThumbnail(photo: photo, imageData: imageCache[photo.photoId], onDelete: {
                                 deletePhoto(photo)
                             })
                         }
@@ -156,6 +157,21 @@ public struct PhotoUploadScreen: View {
                 .padding(.horizontal)
                 .disabled(isUploading)
 
+                // Continue button — visible once user has enough room photos
+                if projectState.roomPhotoCount >= 2 {
+                    Button {
+                        Task { await confirmAndContinue() }
+                    } label: {
+                        Label("Continue to Room Scan", systemImage: "arrow.right")
+                            .frame(maxWidth: .infinity)
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .controlSize(.large)
+                    .padding(.horizontal)
+                    .disabled(isUploading)
+                    .accessibilityIdentifier("photos_continue")
+                }
+
                 if isUploading {
                     ProgressView("Uploading...")
                 }
@@ -224,6 +240,7 @@ public struct PhotoUploadScreen: View {
             if !response.validation.passed {
                 validationMessages = response.validation.messages
             } else {
+                imageCache[response.photoId] = data
                 // Refresh state to pick up new photos and possible step transition
                 let newState = try await client.getState(projectId: projectId)
                 projectState.apply(newState)
@@ -267,6 +284,19 @@ public struct PhotoUploadScreen: View {
         }
     }
 
+    private func confirmAndContinue() async {
+        guard let projectId = projectState.projectId else { return }
+        isUploading = true
+        defer { isUploading = false }
+        do {
+            try await client.confirmPhotos(projectId: projectId)
+            let newState = try await client.getState(projectId: projectId)
+            projectState.apply(newState)
+        } catch {
+            validationMessages = [error.localizedDescription]
+        }
+    }
+
     private func persistNote(photoId: String, note: String?) async {
         guard let projectId = projectState.projectId else { return }
         do {
@@ -288,21 +318,28 @@ public struct PhotoUploadScreen: View {
 
 struct PhotoThumbnail: View {
     let photo: PhotoData
+    var imageData: Data?
     var onDelete: (() -> Void)?
 
     var body: some View {
-        RoundedRectangle(cornerRadius: 8)
-            .fill(Color.secondary.opacity(0.15))
-            .aspectRatio(1, contentMode: .fit)
-            .overlay {
-                VStack(spacing: 4) {
-                    Image(systemName: photo.photoTypeEnum == .room ? "house" : "sparkles")
-                        .font(.title3)
-                    Text(photo.photoType.capitalized)
-                        .font(.caption2)
-                }
-                .foregroundStyle(.secondary)
+        Group {
+            #if os(iOS)
+            if let imageData, let uiImage = UIImage(data: imageData) {
+                Image(uiImage: uiImage)
+                    .resizable()
+                    .scaledToFill()
+                    .frame(minWidth: 0, maxWidth: .infinity, minHeight: 0, maxHeight: .infinity)
+                    .aspectRatio(1, contentMode: .fill)
+                    .clipped()
+                    .clipShape(RoundedRectangle(cornerRadius: 8))
+            } else {
+                placeholderView
             }
+            #else
+            placeholderView
+            #endif
+        }
+        .aspectRatio(1, contentMode: .fit)
             .overlay(alignment: .topTrailing) {
                 if let onDelete {
                     Button {
@@ -317,8 +354,31 @@ struct PhotoThumbnail: View {
                     .accessibilityLabel("Delete \(photo.photoType) photo")
                 }
             }
+            .overlay(alignment: .bottomLeading) {
+                Text(photo.photoType.capitalized)
+                    .font(.caption2.bold())
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 2)
+                    .background(.black.opacity(0.6), in: RoundedRectangle(cornerRadius: 4))
+                    .padding(4)
+            }
             .accessibilityElement(children: .combine)
             .accessibilityLabel("\(photo.photoType.capitalized) photo")
+    }
+
+    private var placeholderView: some View {
+        RoundedRectangle(cornerRadius: 8)
+            .fill(Color.secondary.opacity(0.15))
+            .overlay {
+                VStack(spacing: 4) {
+                    Image(systemName: photo.photoTypeEnum == .room ? "house" : "sparkles")
+                        .font(.title3)
+                    Text(photo.photoType.capitalized)
+                        .font(.caption2)
+                }
+                .foregroundStyle(.secondary)
+            }
     }
 }
 

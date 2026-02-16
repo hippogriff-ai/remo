@@ -85,6 +85,7 @@ class DesignProjectWorkflow:
         self._action_queue: list[tuple[str, Any]] = []
         self._restart_requested = False
         self._cancelled = False
+        self.photos_confirmed = False
 
     @workflow.run
     async def run(self, project_id: str) -> None:
@@ -109,8 +110,12 @@ class DesignProjectWorkflow:
             raise
 
     async def _run_phases(self) -> None:
-        # --- Phase: Photos (need >= 2 room photos) ---
-        await self._wait(lambda: sum(1 for p in self.photos if p.photo_type == "room") >= 2)
+        # --- Phase: Photos (need >= 2 room photos + explicit confirmation) ---
+        await self._wait(
+            lambda: (
+                sum(1 for p in self.photos if p.photo_type == "room") >= 2 and self.photos_confirmed
+            )
+        )
 
         # Fire read_the_room analysis immediately (non-blocking, runs during scan)
         self._start_eager_analysis()
@@ -348,6 +353,10 @@ class DesignProjectWorkflow:
                 photo_id,
                 self._project_id,
             )
+
+    @workflow.signal
+    async def confirm_photos(self) -> None:
+        self.photos_confirmed = True
 
     @workflow.signal
     async def complete_scan(self, scan: ScanData) -> None:

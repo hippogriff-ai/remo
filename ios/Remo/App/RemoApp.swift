@@ -8,10 +8,23 @@ struct RemoApp: App {
 
     init() {
         let isMaestroTest = UserDefaults.standard.bool(forKey: "maestro-test")
-        let useRealBackend = UserDefaults.standard.bool(forKey: "real-backend")
-        let backendURL = UserDefaults.standard.string(forKey: "backend-url")
 
-        if useRealBackend, let urlString = backendURL, let url = URL(string: urlString) {
+        // Priority: 1) UserDefaults (runtime override)  2) Info.plist/xcconfig (build-time)
+        //           3) Scheme env var (simulator only)   4) Mock fallback
+        let resolvedURL: URL? = {
+            if let ud = UserDefaults.standard.string(forKey: "backend-url"),
+               let url = URL(string: ud) { return url }
+            if let plist = Bundle.main.object(forInfoDictionaryKey: "BackendURL") as? String,
+               !plist.isEmpty,
+               let url = URL(string: plist) { return url }
+            #if DEBUG
+            if let env = ProcessInfo.processInfo.environment["BACKEND_URL"],
+               let url = URL(string: env) { return url }
+            #endif
+            return nil
+        }()
+
+        if !isMaestroTest, let url = resolvedURL {
             client = RealWorkflowClient(baseURL: url)
         } else {
             client = MockWorkflowClient(skipPhotos: isMaestroTest)

@@ -553,9 +553,19 @@ public struct IntakeStartRequest: Codable, Sendable {
 
 public struct IntakeMessageRequest: Codable, Sendable {
     public var message: String
+    public var conversationHistory: [ChatMessage]?
+    public var mode: String?
 
-    public init(message: String) {
+    enum CodingKeys: String, CodingKey {
+        case message
+        case conversationHistory = "conversation_history"
+        case mode
+    }
+
+    public init(message: String, conversationHistory: [ChatMessage]? = nil, mode: String? = nil) {
         self.message = message
+        self.conversationHistory = conversationHistory
+        self.mode = mode
     }
 }
 
