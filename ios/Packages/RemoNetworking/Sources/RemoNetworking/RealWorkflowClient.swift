@@ -73,10 +73,6 @@ public final class RealWorkflowClient: WorkflowClientProtocol, @unchecked Sendab
         )
     }
 
-    public func confirmPhotos(projectId: String) async throws {
-        let _: ActionResponse = try await post("/api/v1/projects/\(projectId)/photos/confirm")
-    }
-
     // MARK: - Scan
 
     public func uploadScan(projectId: String, scanData: [String: Any]) async throws {
@@ -102,8 +98,8 @@ public final class RealWorkflowClient: WorkflowClientProtocol, @unchecked Sendab
         try await post("/api/v1/projects/\(projectId)/intake/start", body: IntakeStartRequest(mode: mode))
     }
 
-    public func sendIntakeMessage(projectId: String, message: String, conversationHistory: [ChatMessage], mode: String?) async throws -> IntakeChatOutput {
-        try await post("/api/v1/projects/\(projectId)/intake/message", body: IntakeMessageRequest(message: message, conversationHistory: conversationHistory, mode: mode))
+    public func sendIntakeMessage(projectId: String, message: String) async throws -> IntakeChatOutput {
+        try await post("/api/v1/projects/\(projectId)/intake/message", body: IntakeMessageRequest(message: message))
     }
 
     public func confirmIntake(projectId: String, brief: DesignBrief) async throws {

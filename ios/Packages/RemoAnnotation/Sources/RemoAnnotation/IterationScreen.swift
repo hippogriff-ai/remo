@@ -126,17 +126,7 @@ public struct IterationScreen: View {
         .navigationBarTitleDisplayMode(.inline)
         #endif
         .alert("Error", isPresented: .init(get: { errorMessage != nil }, set: { if !$0 { errorMessage = nil } })) {
-            Button("Retry") {
-                errorMessage = nil
-                Task { await submit() }
-            }
-            Button("Approve Current Design") {
-                errorMessage = nil
-                showApprovalConfirmation = true
-            }
-            Button("Dismiss", role: .cancel) {
-                errorMessage = nil
-            }
+            Button("OK") { errorMessage = nil }
         } message: {
             Text(errorMessage ?? "")
         }
@@ -284,18 +274,6 @@ public struct IterationScreen: View {
                         Label("Undo", systemImage: "arrow.uturn.backward")
                             .font(.caption)
                     }
-                }
-                if !regions.isEmpty {
-                    Button(role: .destructive) {
-                        snapshotRegions()
-                        withAnimation(.easeOut(duration: 0.2)) {
-                            regions.removeAll()
-                        }
-                    } label: {
-                        Label("Clear All", systemImage: "trash")
-                            .font(.caption)
-                    }
-                    .accessibilityIdentifier("iteration_clear_all")
                 }
             }
 

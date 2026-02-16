@@ -3,19 +3,12 @@
 Evaluation is lazy: the env var and import are checked on first call, not at
 import time.  If langsmith is requested (key is set) but not installed, we
 fall back to no-ops with a warning rather than crashing the pipeline.
-
-Threading: use trace_thread(project_id, "activity_name") as a context manager
-to group all LLM calls within the same project into a single LangSmith thread.
 """
 
 from __future__ import annotations
 
 import os
-from contextlib import contextmanager
-from typing import TYPE_CHECKING, Any
-
-if TYPE_CHECKING:
-    from collections.abc import Generator
+from typing import Any
 
 import structlog
 
@@ -43,31 +36,6 @@ def wrap_anthropic(client: Any) -> Any:
             error=str(exc),
             error_type=type(exc).__name__,
             reason="langsmith wrapping failed; continuing without tracing",
-        )
-        return client
-
-
-def wrap_gemini(client: Any) -> Any:
-    """Wrap Gemini (google-genai) client for auto-tracing. No-op without LANGSMITH_API_KEY."""
-    if not os.environ.get("LANGSMITH_API_KEY", "").strip():
-        return client
-    try:
-        from langsmith.wrappers import wrap_gemini as _wrap
-    except (ImportError, ModuleNotFoundError):
-        _log.warning(
-            "langsmith_not_installed",
-            reason="LANGSMITH_API_KEY is set but langsmith is not installed; "
-            "install with: pip install 'langsmith>=0.2,<1'",
-        )
-        return client
-    try:
-        return _wrap(client)
-    except Exception as exc:
-        _log.error(
-            "langsmith_wrap_gemini_failed",
-            error=str(exc),
-            error_type=type(exc).__name__,
-            reason="langsmith Gemini wrapping failed; continuing without tracing",
         )
         return client
 
@@ -107,32 +75,3 @@ def traceable(**kwargs: Any) -> Any:
             return fn
 
         return _noop
-
-
-@contextmanager
-def trace_thread(project_id: str, name: str) -> Generator[None, None, None]:
-    """Group LLM calls under a LangSmith thread keyed by project_id.
-
-    Usage::
-
-        with trace_thread(project_id, "intake"):
-            response = await client.messages.create(...)
-
-    No-op without LANGSMITH_API_KEY or if langsmith is not installed.
-    """
-    if not os.environ.get("LANGSMITH_API_KEY", "").strip():
-        yield
-        return
-    try:
-        import langsmith
-
-        with langsmith.trace(
-            name=name,
-            metadata={"thread_id": project_id, "project_id": project_id},
-        ):
-            yield
-    except (ImportError, ModuleNotFoundError):
-        yield
-    except Exception as exc:
-        _log.warning("langsmith_trace_thread_failed", error=str(exc))
-        yield

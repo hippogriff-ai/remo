@@ -68,6 +68,12 @@ public actor MockWorkflowClient: WorkflowClientProtocol {
             photoType: photoType
         )
         state.photos.append(photo)
+
+        let roomCount = state.photos.filter { $0.photoTypeEnum == .room }.count
+        if roomCount >= 2 && state.step == "photos" {
+            state.step = "scan"
+        }
+
         states[projectId] = state
         return PhotoUploadResponse(
             photoId: photoId,
@@ -88,13 +94,6 @@ public actor MockWorkflowClient: WorkflowClientProtocol {
         if let index = state.photos.firstIndex(where: { $0.photoId == photoId }) {
             state.photos[index].note = note
         }
-        states[projectId] = state
-    }
-
-    public func confirmPhotos(projectId: String) async throws {
-        try await simulateDelay()
-        guard var state = states[projectId] else { throw notFound() }
-        state.step = "scan"
         states[projectId] = state
     }
 
@@ -134,16 +133,13 @@ public actor MockWorkflowClient: WorkflowClientProtocol {
             options: [
                 QuickReplyOption(number: 1, label: "Living Room", value: "living room"),
                 QuickReplyOption(number: 2, label: "Bedroom", value: "bedroom"),
-                QuickReplyOption(number: 3, label: "Kitchen", value: "kitchen"),
-                QuickReplyOption(number: 4, label: "Bathroom", value: "bathroom"),
-                QuickReplyOption(number: 5, label: "Dining Room", value: "dining room"),
-                QuickReplyOption(number: 6, label: "Home Office", value: "home office"),
+                QuickReplyOption(number: 3, label: "Home Office", value: "home office"),
             ],
-            progress: "Question 1 of 5"
+            progress: "Question 1 of 3"
         )
     }
 
-    public func sendIntakeMessage(projectId: String, message: String, conversationHistory: [ChatMessage], mode: String?) async throws -> IntakeChatOutput {
+    public func sendIntakeMessage(projectId: String, message: String) async throws -> IntakeChatOutput {
         try await simulateDelay()
         guard states[projectId] != nil else { throw notFound() }
         var messages = intakeMessages[projectId] ?? []
@@ -160,39 +156,19 @@ public actor MockWorkflowClient: WorkflowClientProtocol {
                     QuickReplyOption(number: 3, label: "Industrial", value: "industrial"),
                     QuickReplyOption(number: 4, label: "Scandinavian", value: "scandinavian"),
                 ],
-                progress: "Question 2 of 5"
+                progress: "Question 2 of 3"
             )
         }
         if step == 2 {
             return IntakeChatOutput(
-                agentMessage: "Nice choice! What's your approximate budget for this redesign?",
-                options: [
-                    QuickReplyOption(number: 1, label: "Under $1,000", value: "budget_low"),
-                    QuickReplyOption(number: 2, label: "$1,000 - $3,000", value: "budget_mid"),
-                    QuickReplyOption(number: 3, label: "$3,000 - $10,000", value: "budget_high"),
-                    QuickReplyOption(number: 4, label: "No limit", value: "budget_unlimited"),
-                ],
-                progress: "Question 3 of 5"
-            )
-        }
-        if step == 3 {
-            return IntakeChatOutput(
-                agentMessage: "Got it! Are there any colors you love or want to avoid?",
+                agentMessage: "Love that style! Anything specific you'd like to change or keep in the room?",
                 isOpenEnded: true,
-                progress: "Question 4 of 5"
-            )
-        }
-        if step == 4 {
-            return IntakeChatOutput(
-                agentMessage: "Last one — is there any existing furniture you'd like to keep, or should we start fresh?",
-                isOpenEnded: true,
-                progress: "Question 5 of 5"
+                progress: "Question 3 of 3"
             )
         }
         let roomType = messages.first ?? "living room"
-        let style = messages.count > 1 ? messages[1] : "modern"
         return IntakeChatOutput(
-            agentMessage: "Here's what I've gathered: a \(style) \(roomType) redesign. Ready to generate some designs!",
+            agentMessage: "Here's what I've gathered: a \(roomType) redesign. Does this look right?",
             progress: "Summary",
             isSummary: true,
             partialBrief: DesignBrief(roomType: roomType)

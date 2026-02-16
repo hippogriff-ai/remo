@@ -34,16 +34,7 @@ public struct LiDARScanScreen: View {
 
     @State private var scanState: ScanState = .ready
     @State private var showSkipConfirmation = false
-    @State private var scanTimeoutTask: Task<Void, Never>?
-    #if canImport(RoomPlan)
-    @State private var sessionRef = CaptureSessionRef()
-    #endif
     @Environment(\.scenePhase) private var scenePhase
-
-    /// Scan timeout in seconds. If scanning state persists this long without a
-    /// delegate callback, auto-fail to prevent the user getting stuck (e.g. when
-    /// RoomPlan crashes internally without calling didEndWith).
-    private static let scanTimeoutSeconds: UInt64 = 120
 
     public init(projectState: ProjectState, client: any WorkflowClientProtocol) {
         self.projectState = projectState
@@ -80,62 +71,10 @@ public struct LiDARScanScreen: View {
             get: { scanState == .scanning },
             set: { if !$0 && scanState == .scanning { scanState = .ready } }
         )) {
-            ZStack {
-                RoomCaptureViewWrapper(sessionRef: sessionRef) { result in
-                    onScanComplete(result)
-                }
-                .ignoresSafeArea()
-
-                VStack {
-                    HStack {
-                        Spacer()
-                        Button {
-                            scanLogger.info("user cancelled scan manually")
-                            sessionRef.stop()
-                            scanTimeoutTask?.cancel()
-                            scanTimeoutTask = nil
-                            scanState = .ready
-                        } label: {
-                            Image(systemName: "xmark.circle.fill")
-                                .font(.title)
-                                .symbolRenderingMode(.palette)
-                                .foregroundStyle(.white, .white.opacity(0.3))
-                        }
-                        .padding(.trailing, 20)
-                        .padding(.top, 60)
-                        .accessibilityLabel("Cancel scan")
-                        .accessibilityIdentifier("scan_cancel")
-                    }
-
-                    Text("Walk slowly around the room")
-                        .font(.subheadline)
-                        .padding(.horizontal, 20)
-                        .padding(.vertical, 10)
-                        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 10))
-
-                    Spacer()
-
-                    // Bottom bar: material backdrop extends to safe area edge
-                    // so the Done button never overlaps the RoomPlan 3D rendering
-                    VStack(spacing: 0) {
-                        Button {
-                            sessionRef.stop()
-                        } label: {
-                            Label("Done Scanning", systemImage: "checkmark.circle.fill")
-                                .font(.headline)
-                                .frame(maxWidth: .infinity)
-                        }
-                        .buttonStyle(.borderedProminent)
-                        .controlSize(.large)
-                        .tint(.green)
-                        .padding(.horizontal, 40)
-                        .padding(.top, 16)
-                        .padding(.bottom, 8)
-                    }
-                    .frame(maxWidth: .infinity)
-                    .background(.ultraThinMaterial, ignoresSafeAreaEdges: .bottom)
-                }
+            RoomCaptureViewWrapper { result in
+                onScanComplete(result)
             }
+            .ignoresSafeArea()
         }
         #endif
         .alert("Scan Error", isPresented: Binding(
@@ -161,8 +100,6 @@ public struct LiDARScanScreen: View {
         }
         .onChange(of: scenePhase) { _, newPhase in
             if newPhase != .active && scanState == .scanning {
-                scanTimeoutTask?.cancel()
-                scanTimeoutTask = nil
                 scanState = .failed("Scan interrupted. Please try again.")
             }
         }
@@ -255,31 +192,10 @@ public struct LiDARScanScreen: View {
         // Present RoomCaptureView via fullScreenCover
         scanLogger.info("startScan: presenting RoomCaptureView")
         scanState = .scanning
-        startScanTimeout()
-    }
-
-    private func startScanTimeout() {
-        scanTimeoutTask?.cancel()
-        scanTimeoutTask = Task {
-            do {
-                try await Task.sleep(nanoseconds: Self.scanTimeoutSeconds * 1_000_000_000)
-                if scanState == .scanning {
-                    scanLogger.error("scan timeout after \(Self.scanTimeoutSeconds)s — auto-failing")
-                    #if canImport(RoomPlan)
-                    sessionRef.stop()
-                    #endif
-                    scanState = .failed("Scan timed out. Please try again or skip this step.")
-                }
-            } catch {
-                // Task cancelled — scan completed or user dismissed before timeout
-            }
-        }
     }
 
     #if canImport(RoomPlan)
     private func onScanComplete(_ result: Result<CapturedRoom, Error>) {
-        scanTimeoutTask?.cancel()
-        scanTimeoutTask = nil
         switch result {
         case .success(let capturedRoom):
             // Guard: ignore late success callbacks after backgrounding interrupted the scan

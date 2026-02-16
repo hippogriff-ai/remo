@@ -110,7 +110,7 @@ _BRIEF_PROPERTIES: dict[str, Any] = {
     "constraints": {
         "type": "array",
         "items": {"type": "string"},
-        "description": "Pets, kids, mobility, rental, timeline, etc.",
+        "description": "Budget, pets, kids, mobility, rental, timeline, etc.",
     },
     "inspiration_notes": {
         "type": "array",
@@ -530,9 +530,7 @@ def _format_room_analysis_section(analysis: dict[str, Any] | None) -> str:
     lines.append(
         "\n### Using This Analysis\n"
         "- You already know the room type and basic layout. "
-        "Do NOT ask 'which room' or 'what type of room'. "
-        f"The room type is '{analysis.get('room_type', 'unknown')}' — "
-        "treat this as established fact.\n"
+        "Do NOT re-ask these.\n"
         "- Start by confirming your understanding and probing "
         "the highest-uncertainty aspects.\n"
         "- Pre-populate room_type, lighting, and furniture domains "
@@ -584,28 +582,22 @@ def build_messages(
     if is_first_turn and has_photos:
         content: list[dict[str, Any]] = []
 
-        # Room photos first — labeled so Claude doesn't confuse with inspiration
-        if room_photo_urls:
-            content.append({"type": "text", "text": "[Room photos — the actual room to redesign:]"})
-            for url in room_photo_urls:
-                content.append({"type": "image", "source": {"type": "url", "url": url}})
+        # Room photos first
+        for url in room_photo_urls or []:
+            content.append({"type": "image", "source": {"type": "url", "url": url}})
 
         # Inspiration photos with user notes as context
-        if inspiration_photo_urls:
-            content.append(
-                {"type": "text", "text": "[Inspiration photos — style references only:]"}
-            )
-            for i, url in enumerate(inspiration_photo_urls):
-                content.append({"type": "image", "source": {"type": "url", "url": url}})
-                # Attach user note if available
-                note = _get_inspiration_note(i, inspiration_notes)
-                if note:
-                    content.append(
-                        {
-                            "type": "text",
-                            "text": f"[Inspiration photo {i + 1} note: {note}]",
-                        }
-                    )
+        for i, url in enumerate(inspiration_photo_urls or []):
+            content.append({"type": "image", "source": {"type": "url", "url": url}})
+            # Attach user note if available
+            note = _get_inspiration_note(i, inspiration_notes)
+            if note:
+                content.append(
+                    {
+                        "type": "text",
+                        "text": f"[Inspiration photo {i + 1} note: {note}]",
+                    }
+                )
 
         content.append({"type": "text", "text": user_message})
         messages.append({"role": "user", "content": content})
@@ -742,15 +734,9 @@ async def _run_intake_core(input: IntakeChatInput) -> IntakeChatOutput:
     )
     inspo_photo_urls: list[str] = input.project_context.get("inspiration_photos", [])
     inspo_notes: list[dict[str, Any]] | None = input.project_context.get("inspiration_notes")
-    # On first turn with room analysis, prefix user message with room type context
-    # so the model never asks "which room" when we already know
-    user_message = input.user_message
-    if turn_number == 1 and room_analysis and room_analysis.get("room_type"):
-        user_message = f"[Context: Room type: {room_analysis['room_type']}] {user_message}"
-
     messages = build_messages(
         input.conversation_history,
-        user_message,
+        input.user_message,
         room_photo_urls,
         inspo_photo_urls,
         inspo_notes,
@@ -820,6 +806,7 @@ async def _run_intake_core(input: IntakeChatInput) -> IntakeChatOutput:
 
     # Build output based on which skill was chosen
     max_turns = MAX_TURNS.get(input.mode, 4)
+    total_domains = 11
 
     if skill_name == "draft_design_brief":
         # Draft skill: complete brief required, this is the summary turn
@@ -877,7 +864,10 @@ async def _run_intake_core(input: IntakeChatInput) -> IntakeChatOutput:
         agent_message=skill_data.get("message", ""),
         options=build_options(skill_data.get("options")),
         is_open_ended=skill_data.get("is_open_ended", False),
-        progress=f"Question {turn_number} of ~{max_turns}",
+        progress=(
+            f"Turn {turn_number} of ~{max_turns}"
+            f" — {len(domains_covered)}/{total_domains} domains covered"
+        ),
         is_summary=is_summary,
         partial_brief=partial_brief,
         requested_skills=requested_skills,

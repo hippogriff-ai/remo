@@ -2,8 +2,6 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-	<key>BackendURL</key>
-	<string>$(BACKEND_URL)</string>
 	<key>CFBundleDevelopmentRegion</key>
 	<string>$(DEVELOPMENT_LANGUAGE)</string>
 	<key>CFBundleDisplayName</key>
@@ -22,19 +20,8 @@
 	<string>1.0</string>
 	<key>CFBundleVersion</key>
 	<string>1</string>
-	<key>NSAppTransportSecurity</key>
-	<dict>
-		<key>NSAllowsLocalNetworking</key>
-		<true/>
-	</dict>
-	<key>NSBonjourServices</key>
-	<array>
-		<string>_http._tcp</string>
-	</array>
 	<key>NSCameraUsageDescription</key>
 	<string>Remo needs camera access to photograph your room.</string>
-	<key>NSLocalNetworkUsageDescription</key>
-	<string>Remo connects to a local development server for testing.</string>
 	<key>NSPhotoLibraryUsageDescription</key>
 	<string>Remo needs photo library access to select room and inspiration photos.</string>
 	<key>UILaunchScreen</key>

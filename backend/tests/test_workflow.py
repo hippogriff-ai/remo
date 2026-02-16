@@ -618,7 +618,6 @@ async def _advance_to_iteration(handle):
     """Send signals to advance workflow from photos through to iteration step."""
     await handle.signal(DesignProjectWorkflow.add_photo, _photo(0))
     await handle.signal(DesignProjectWorkflow.add_photo, _photo(1))
-    await handle.signal(DesignProjectWorkflow.confirm_photos)
     await handle.signal(DesignProjectWorkflow.skip_scan)
     await handle.signal(DesignProjectWorkflow.skip_intake)
     # Wait for generation activity to complete and reach selection
@@ -956,7 +955,6 @@ class TestWorkflowHappyPath:
 
             await handle.signal(DesignProjectWorkflow.add_photo, _photo(0))
             await handle.signal(DesignProjectWorkflow.add_photo, _photo(1))
-            await handle.signal(DesignProjectWorkflow.confirm_photos)
             await asyncio.sleep(0.5)
 
             # Scan phase
@@ -1034,7 +1032,6 @@ class TestPhotoPhase:
             handle = await _start_workflow(workflow_env, tq)
             await handle.signal(DesignProjectWorkflow.add_photo, _photo(0))
             await handle.signal(DesignProjectWorkflow.add_photo, _photo(1))
-            await handle.signal(DesignProjectWorkflow.confirm_photos)
             await asyncio.sleep(0.5)
 
             state = await handle.query(DesignProjectWorkflow.get_state)
@@ -1072,7 +1069,6 @@ class TestPhotoPhase:
             await handle.signal(DesignProjectWorkflow.add_photo, room1)
             await handle.signal(DesignProjectWorkflow.add_photo, inspo)
             await handle.signal(DesignProjectWorkflow.add_photo, room2)
-            await handle.signal(DesignProjectWorkflow.confirm_photos)
             await asyncio.sleep(0.5)
 
             state = await handle.query(DesignProjectWorkflow.get_state)
@@ -1102,7 +1098,6 @@ class TestPhotoPhase:
             handle = await _start_workflow(workflow_env, tq)
             await handle.signal(DesignProjectWorkflow.add_photo, _photo(0))
             await handle.signal(DesignProjectWorkflow.add_photo, _photo(1))
-            await handle.signal(DesignProjectWorkflow.confirm_photos)
             await asyncio.sleep(0.5)
 
             state = await handle.query(DesignProjectWorkflow.get_state)
@@ -1234,7 +1229,6 @@ class TestRemovePhoto:
             )
             await handle.signal(DesignProjectWorkflow.add_photo, photo_a)
             await handle.signal(DesignProjectWorkflow.add_photo, photo_b)
-            await handle.signal(DesignProjectWorkflow.confirm_photos)
             await asyncio.sleep(0.5)
 
             state = await handle.query(DesignProjectWorkflow.get_state)
@@ -1266,7 +1260,6 @@ class TestScanPhase:
             handle = await _start_workflow(workflow_env, tq)
             await handle.signal(DesignProjectWorkflow.add_photo, _photo(0))
             await handle.signal(DesignProjectWorkflow.add_photo, _photo(1))
-            await handle.signal(DesignProjectWorkflow.confirm_photos)
             await asyncio.sleep(0.5)
             await handle.signal(DesignProjectWorkflow.skip_scan)
             await asyncio.sleep(0.5)
@@ -1286,7 +1279,6 @@ class TestScanPhase:
             handle = await _start_workflow(workflow_env, tq)
             await handle.signal(DesignProjectWorkflow.add_photo, _photo(0))
             await handle.signal(DesignProjectWorkflow.add_photo, _photo(1))
-            await handle.signal(DesignProjectWorkflow.confirm_photos)
             await asyncio.sleep(0.5)
 
             scan = ScanData(
@@ -1318,7 +1310,6 @@ class TestScanPhase:
             handle = await _start_workflow(workflow_env, tq)
             await handle.signal(DesignProjectWorkflow.add_photo, _photo(0))
             await handle.signal(DesignProjectWorkflow.add_photo, _photo(1))
-            await handle.signal(DesignProjectWorkflow.confirm_photos)
             await asyncio.sleep(0.5)
             await handle.signal(DesignProjectWorkflow.skip_scan)
             await asyncio.sleep(0.5)
@@ -1360,7 +1351,6 @@ class TestIntakePhase:
             handle = await _start_workflow(workflow_env, tq)
             await handle.signal(DesignProjectWorkflow.add_photo, _photo(0))
             await handle.signal(DesignProjectWorkflow.add_photo, _photo(1))
-            await handle.signal(DesignProjectWorkflow.confirm_photos)
             await asyncio.sleep(0.5)
             await handle.signal(DesignProjectWorkflow.skip_scan)
             await asyncio.sleep(0.3)
@@ -1388,7 +1378,6 @@ class TestIntakePhase:
             handle = await _start_workflow(workflow_env, tq)
             await handle.signal(DesignProjectWorkflow.add_photo, _photo(0))
             await handle.signal(DesignProjectWorkflow.add_photo, _photo(1))
-            await handle.signal(DesignProjectWorkflow.confirm_photos)
             await asyncio.sleep(0.5)
             await handle.signal(DesignProjectWorkflow.skip_scan)
             await asyncio.sleep(0.3)
@@ -1450,7 +1439,6 @@ class TestGenerationInput:
             await handle.signal(DesignProjectWorkflow.add_photo, room1)
             await handle.signal(DesignProjectWorkflow.add_photo, room2)
             await handle.signal(DesignProjectWorkflow.add_photo, inspo)
-            await handle.signal(DesignProjectWorkflow.confirm_photos)
             await asyncio.sleep(0.5)
             await handle.signal(DesignProjectWorkflow.skip_scan)
             await asyncio.sleep(0.3)
@@ -1496,7 +1484,6 @@ class TestGenerationInput:
 
             await handle.signal(DesignProjectWorkflow.add_photo, _photo(0))
             await handle.signal(DesignProjectWorkflow.add_photo, _photo(1))
-            await handle.signal(DesignProjectWorkflow.confirm_photos)
             await asyncio.sleep(0.5)
 
             scan = ScanData(
@@ -1562,7 +1549,6 @@ class TestGenerationInput:
 
             await handle.signal(DesignProjectWorkflow.add_photo, _photo(0))
             await handle.signal(DesignProjectWorkflow.add_photo, _photo(1))
-            await handle.signal(DesignProjectWorkflow.confirm_photos)
             await asyncio.sleep(0.5)
 
             # Scan with storage_key but NO room_dimensions
@@ -1634,7 +1620,6 @@ class TestGenerationInput:
             await handle.signal(DesignProjectWorkflow.add_photo, room2)
             await handle.signal(DesignProjectWorkflow.add_photo, inspo_with_note)
             await handle.signal(DesignProjectWorkflow.add_photo, inspo_no_note)
-            await handle.signal(DesignProjectWorkflow.confirm_photos)
             await asyncio.sleep(0.5)
             await handle.signal(DesignProjectWorkflow.skip_scan)
             await asyncio.sleep(0.3)
@@ -1703,7 +1688,6 @@ class TestShoppingInput:
             await handle.signal(DesignProjectWorkflow.add_photo, room1)
             await handle.signal(DesignProjectWorkflow.add_photo, room2)
             await handle.signal(DesignProjectWorkflow.add_photo, inspo)
-            await handle.signal(DesignProjectWorkflow.confirm_photos)
             await asyncio.sleep(0.5)
 
             # Scan with dimensions
@@ -1788,7 +1772,6 @@ class TestShoppingInput:
             handle = await _start_workflow(workflow_env, tq)
             await handle.signal(DesignProjectWorkflow.add_photo, _photo(0))
             await handle.signal(DesignProjectWorkflow.add_photo, _photo(1))
-            await handle.signal(DesignProjectWorkflow.confirm_photos)
             await asyncio.sleep(0.5)
             await handle.signal(DesignProjectWorkflow.skip_scan)
             await asyncio.sleep(0.3)
@@ -1836,7 +1819,6 @@ class TestShoppingInput:
             # so 0.5s is ample for workflow to reach each phase.
             await handle.signal(DesignProjectWorkflow.add_photo, _photo(0))
             await handle.signal(DesignProjectWorkflow.add_photo, _photo(1))
-            await handle.signal(DesignProjectWorkflow.confirm_photos)
             await asyncio.sleep(0.5)
 
             await handle.signal(DesignProjectWorkflow.skip_scan)
@@ -1962,7 +1944,6 @@ class TestEditInput:
             await handle.signal(DesignProjectWorkflow.add_photo, room1)
             await handle.signal(DesignProjectWorkflow.add_photo, room2)
             await handle.signal(DesignProjectWorkflow.add_photo, inspo)
-            await handle.signal(DesignProjectWorkflow.confirm_photos)
             await asyncio.sleep(0.5)
 
             await handle.signal(DesignProjectWorkflow.skip_scan)
@@ -2042,7 +2023,6 @@ class TestEditInput:
             handle = await _start_workflow(workflow_env, tq)
             await handle.signal(DesignProjectWorkflow.add_photo, _photo(0))
             await handle.signal(DesignProjectWorkflow.add_photo, _photo(1))
-            await handle.signal(DesignProjectWorkflow.confirm_photos)
             await asyncio.sleep(0.5)
             await handle.signal(DesignProjectWorkflow.skip_scan)
             await asyncio.sleep(0.3)
@@ -2086,7 +2066,6 @@ class TestEditInput:
             handle = await _start_workflow(workflow_env, tq)
             await handle.signal(DesignProjectWorkflow.add_photo, _photo(0))
             await handle.signal(DesignProjectWorkflow.add_photo, _photo(1))
-            await handle.signal(DesignProjectWorkflow.confirm_photos)
             await asyncio.sleep(0.5)
 
             # Complete scan with room dimensions
@@ -2144,7 +2123,6 @@ class TestStartOver:
             # Advance to selection
             await handle.signal(DesignProjectWorkflow.add_photo, _photo(0))
             await handle.signal(DesignProjectWorkflow.add_photo, _photo(1))
-            await handle.signal(DesignProjectWorkflow.confirm_photos)
             await asyncio.sleep(0.5)
             await handle.signal(DesignProjectWorkflow.skip_scan)
             await asyncio.sleep(0.3)
@@ -2187,7 +2165,6 @@ class TestStartOver:
             # First cycle: advance to selection
             await handle.signal(DesignProjectWorkflow.add_photo, _photo(0))
             await handle.signal(DesignProjectWorkflow.add_photo, _photo(1))
-            await handle.signal(DesignProjectWorkflow.confirm_photos)
             await asyncio.sleep(0.5)
             await handle.signal(DesignProjectWorkflow.skip_scan)
             await asyncio.sleep(0.3)
@@ -2267,7 +2244,6 @@ class TestStartOver:
             await handle.signal(DesignProjectWorkflow.add_photo, room_photo1)
             await handle.signal(DesignProjectWorkflow.add_photo, room_photo2)
             await handle.signal(DesignProjectWorkflow.add_photo, inspo_photo)
-            await handle.signal(DesignProjectWorkflow.confirm_photos)
             await asyncio.sleep(0.5)
 
             # Complete scan with dimensions
@@ -2334,7 +2310,6 @@ class TestStartOver:
             handle = await _start_workflow(workflow_env, tq)
             await handle.signal(DesignProjectWorkflow.add_photo, _photo(0))
             await handle.signal(DesignProjectWorkflow.add_photo, _photo(1))
-            await handle.signal(DesignProjectWorkflow.confirm_photos)
             await asyncio.sleep(0.5)
             await handle.signal(DesignProjectWorkflow.skip_scan)
             await asyncio.sleep(0.3)
@@ -2375,7 +2350,6 @@ class TestStartOver:
             handle = await _start_workflow(workflow_env, tq)
             await handle.signal(DesignProjectWorkflow.add_photo, _photo(0))
             await handle.signal(DesignProjectWorkflow.add_photo, _photo(1))
-            await handle.signal(DesignProjectWorkflow.confirm_photos)
             await asyncio.sleep(0.5)
             await handle.signal(DesignProjectWorkflow.skip_scan)
             await asyncio.sleep(0.3)
@@ -2416,7 +2390,6 @@ class TestStartOver:
             handle = await _start_workflow(workflow_env, tq)
             await handle.signal(DesignProjectWorkflow.add_photo, _photo(0))
             await handle.signal(DesignProjectWorkflow.add_photo, _photo(1))
-            await handle.signal(DesignProjectWorkflow.confirm_photos)
             await asyncio.sleep(0.5)
             await handle.signal(DesignProjectWorkflow.skip_scan)
             await asyncio.sleep(0.3)
@@ -2616,7 +2589,6 @@ class TestStartOver:
             # Skip to intake, then skip intake to trigger generation
             await handle.signal(DesignProjectWorkflow.add_photo, _photo(0))
             await handle.signal(DesignProjectWorkflow.add_photo, _photo(1))
-            await handle.signal(DesignProjectWorkflow.confirm_photos)
             await asyncio.sleep(0.5)
             await handle.signal(DesignProjectWorkflow.skip_scan)
             await asyncio.sleep(0.3)
@@ -2661,7 +2633,6 @@ class TestSelectionValidation:
             handle = await _start_workflow(workflow_env, tq)
             await handle.signal(DesignProjectWorkflow.add_photo, _photo(0))
             await handle.signal(DesignProjectWorkflow.add_photo, _photo(1))
-            await handle.signal(DesignProjectWorkflow.confirm_photos)
             await asyncio.sleep(0.5)
             await handle.signal(DesignProjectWorkflow.skip_scan)
             await asyncio.sleep(0.3)
@@ -2737,7 +2708,6 @@ class TestIterationPhase:
             handle = await _start_workflow(workflow_env, tq)
             await handle.signal(DesignProjectWorkflow.add_photo, _photo(0))
             await handle.signal(DesignProjectWorkflow.add_photo, _photo(1))
-            await handle.signal(DesignProjectWorkflow.confirm_photos)
             await asyncio.sleep(0.5)
             await handle.signal(DesignProjectWorkflow.skip_scan)
             await asyncio.sleep(0.3)
@@ -2774,7 +2744,6 @@ class TestIterationPhase:
             handle = await _start_workflow(workflow_env, tq)
             await handle.signal(DesignProjectWorkflow.add_photo, _photo(0))
             await handle.signal(DesignProjectWorkflow.add_photo, _photo(1))
-            await handle.signal(DesignProjectWorkflow.confirm_photos)
             await asyncio.sleep(0.5)
             await handle.signal(DesignProjectWorkflow.skip_scan)
             await asyncio.sleep(0.3)
@@ -2808,7 +2777,6 @@ class TestIterationPhase:
             handle = await _start_workflow(workflow_env, tq)
             await handle.signal(DesignProjectWorkflow.add_photo, _photo(0))
             await handle.signal(DesignProjectWorkflow.add_photo, _photo(1))
-            await handle.signal(DesignProjectWorkflow.confirm_photos)
             await asyncio.sleep(0.5)
             await handle.signal(DesignProjectWorkflow.skip_scan)
             await asyncio.sleep(0.3)
@@ -3002,7 +2970,6 @@ class TestApproval:
             handle = await _start_workflow(workflow_env, tq)
             await handle.signal(DesignProjectWorkflow.add_photo, _photo(0))
             await handle.signal(DesignProjectWorkflow.add_photo, _photo(1))
-            await handle.signal(DesignProjectWorkflow.confirm_photos)
             await asyncio.sleep(0.5)
             await handle.signal(DesignProjectWorkflow.skip_scan)
             await asyncio.sleep(0.3)
@@ -3072,7 +3039,6 @@ class TestApproval:
             handle = await _start_workflow(workflow_env, tq)
             await handle.signal(DesignProjectWorkflow.add_photo, _photo(0))
             await handle.signal(DesignProjectWorkflow.add_photo, _photo(1))
-            await handle.signal(DesignProjectWorkflow.confirm_photos)
             await asyncio.sleep(0.5)
             await handle.signal(DesignProjectWorkflow.skip_scan)
             await asyncio.sleep(0.3)
@@ -3104,7 +3070,6 @@ class TestApproval:
             handle = await _start_workflow(workflow_env, tq)
             await handle.signal(DesignProjectWorkflow.add_photo, _photo(0))
             await handle.signal(DesignProjectWorkflow.add_photo, _photo(1))
-            await handle.signal(DesignProjectWorkflow.confirm_photos)
             await asyncio.sleep(0.5)
             await handle.signal(DesignProjectWorkflow.skip_scan)
             await asyncio.sleep(0.3)
@@ -3187,7 +3152,6 @@ class TestCancellation:
             handle = await _start_workflow(workflow_env, tq)
             await handle.signal(DesignProjectWorkflow.add_photo, _photo(0))
             await handle.signal(DesignProjectWorkflow.add_photo, _photo(1))
-            await handle.signal(DesignProjectWorkflow.confirm_photos)
             await asyncio.sleep(0.5)
             await handle.signal(DesignProjectWorkflow.skip_scan)
             await asyncio.sleep(0.3)
@@ -3274,7 +3238,6 @@ class TestCancellation:
             handle = await _start_workflow(workflow_env, tq)
             await handle.signal(DesignProjectWorkflow.add_photo, _photo(0))
             await handle.signal(DesignProjectWorkflow.add_photo, _photo(1))
-            await handle.signal(DesignProjectWorkflow.confirm_photos)
             await asyncio.sleep(0.5)
             await handle.signal(DesignProjectWorkflow.skip_scan)
             await asyncio.sleep(0.3)
@@ -3462,7 +3425,6 @@ class TestAbandonmentTimeout:
             handle = await _start_workflow(workflow_env, tq)
             await handle.signal(DesignProjectWorkflow.add_photo, _photo(0))
             await handle.signal(DesignProjectWorkflow.add_photo, _photo(1))
-            await handle.signal(DesignProjectWorkflow.confirm_photos)
             await asyncio.sleep(0.5)
 
             state = await handle.query(DesignProjectWorkflow.get_state)
@@ -3620,7 +3582,6 @@ class TestErrorRecovery:
             handle = await _start_workflow(workflow_env, tq)
             await handle.signal(DesignProjectWorkflow.add_photo, _photo(0))
             await handle.signal(DesignProjectWorkflow.add_photo, _photo(1))
-            await handle.signal(DesignProjectWorkflow.confirm_photos)
             await asyncio.sleep(0.5)
             await handle.signal(DesignProjectWorkflow.skip_scan)
             await asyncio.sleep(0.3)
@@ -3653,7 +3614,6 @@ class TestErrorRecovery:
             handle = await _start_workflow(workflow_env, tq)
             await handle.signal(DesignProjectWorkflow.add_photo, _photo(0))
             await handle.signal(DesignProjectWorkflow.add_photo, _photo(1))
-            await handle.signal(DesignProjectWorkflow.confirm_photos)
             await asyncio.sleep(0.5)
             await handle.signal(DesignProjectWorkflow.skip_scan)
             await asyncio.sleep(0.3)
@@ -3915,7 +3875,6 @@ class TestEagerAnalysis:
             handle = await _start_workflow(workflow_env, tq)
             await handle.signal(DesignProjectWorkflow.add_photo, _photo(0))
             await handle.signal(DesignProjectWorkflow.add_photo, _photo(1))
-            await handle.signal(DesignProjectWorkflow.confirm_photos)
             # Wait for photos to be processed and step to transition to 'scan'
             await asyncio.sleep(0.5)
             # Analysis fires after 2+ photos; scan proceeds in parallel
@@ -3939,7 +3898,6 @@ class TestEagerAnalysis:
             handle = await _start_workflow(workflow_env, tq)
             await handle.signal(DesignProjectWorkflow.add_photo, _photo(0))
             await handle.signal(DesignProjectWorkflow.add_photo, _photo(1))
-            await handle.signal(DesignProjectWorkflow.confirm_photos)
             # Wait for photos to be processed and step to transition to 'scan'
             await asyncio.sleep(0.5)
             await handle.signal(DesignProjectWorkflow.complete_scan, _scan_with_dims())
@@ -3964,7 +3922,6 @@ class TestEagerAnalysis:
             handle = await _start_workflow(workflow_env, tq)
             await handle.signal(DesignProjectWorkflow.add_photo, _photo(0))
             await handle.signal(DesignProjectWorkflow.add_photo, _photo(1))
-            await handle.signal(DesignProjectWorkflow.confirm_photos)
             await handle.signal(DesignProjectWorkflow.skip_scan)
             await asyncio.sleep(1.0)
 
@@ -3987,7 +3944,6 @@ class TestEagerAnalysis:
             handle = await _start_workflow(workflow_env, tq)
             await handle.signal(DesignProjectWorkflow.add_photo, _photo(0))
             await handle.signal(DesignProjectWorkflow.add_photo, _photo(1))
-            await handle.signal(DesignProjectWorkflow.confirm_photos)
             await handle.signal(DesignProjectWorkflow.skip_scan)
             await asyncio.sleep(1.0)
 
@@ -4026,7 +3982,6 @@ class TestEagerAnalysis:
             handle = await _start_workflow(workflow_env, tq)
             await handle.signal(DesignProjectWorkflow.add_photo, _photo(0))
             await handle.signal(DesignProjectWorkflow.add_photo, _photo(1))
-            await handle.signal(DesignProjectWorkflow.confirm_photos)
             await asyncio.sleep(0.5)
             await handle.signal(DesignProjectWorkflow.complete_scan, _scan_with_dims())
             await asyncio.sleep(1.0)
@@ -4063,7 +4018,6 @@ class TestEagerAnalysis:
             handle = await _start_workflow(workflow_env, tq)
             await handle.signal(DesignProjectWorkflow.add_photo, _photo(0))
             await handle.signal(DesignProjectWorkflow.add_photo, _photo(1))
-            await handle.signal(DesignProjectWorkflow.confirm_photos)
             await handle.signal(DesignProjectWorkflow.skip_scan)
             await asyncio.sleep(1.0)
 
@@ -4097,7 +4051,6 @@ class TestEagerAnalysis:
             handle = await _start_workflow(workflow_env, tq)
             await handle.signal(DesignProjectWorkflow.add_photo, _photo(0))
             await handle.signal(DesignProjectWorkflow.add_photo, _photo(1))
-            await handle.signal(DesignProjectWorkflow.confirm_photos)
             await handle.signal(DesignProjectWorkflow.skip_scan)
             await asyncio.sleep(1.0)
 
@@ -4121,7 +4074,6 @@ class TestEagerAnalysis:
             handle = await _start_workflow(workflow_env, tq)
             await handle.signal(DesignProjectWorkflow.add_photo, _photo(0))
             await handle.signal(DesignProjectWorkflow.add_photo, _photo(1))
-            await handle.signal(DesignProjectWorkflow.confirm_photos)
             # Wait for photos to be processed and step to transition to 'scan'
             await asyncio.sleep(0.5)
             await handle.signal(DesignProjectWorkflow.complete_scan, _scan_with_dims())
@@ -4139,261 +4091,3 @@ class TestEagerAnalysis:
             assert state.room_analysis is not None
             assert state.room_context is not None
             assert state.room_context.enrichment_sources == ["photos", "lidar"]
-
-
-# ---------------------------------------------------------------------------
-# Gap coverage: 6 identified test gaps
-# ---------------------------------------------------------------------------
-
-
-class TestStartOverDuringEdit:
-    """Gap 2: Start-over signal while edit activity is in-flight.
-
-    Verifies that the workflow correctly discards stale edit results and
-    restarts cleanly from intake — no corrupted state, no phantom revisions.
-    """
-
-    async def test_start_over_during_edit_discards_result(self, workflow_env, tq):
-        """Signal start_over while an edit activity is executing.
-
-        The edit activity completes with a result, but _restart_requested is
-        True so the result is discarded (line 203). The workflow should restart
-        from intake with a clean slate — no revision recorded, no stale
-        chat_history_key, iteration_count back to 0.
-        """
-        async with Worker(
-            workflow_env.client,
-            task_queue=tq,
-            workflows=[DesignProjectWorkflow],
-            activities=ALL_ACTIVITIES,
-        ):
-            handle = await _start_workflow(workflow_env, tq)
-            await _advance_to_iteration(handle)
-
-            # Submit a text feedback — this starts the edit activity
-            await handle.signal(
-                DesignProjectWorkflow.submit_text_feedback,
-                "Make the room much brighter and airy",
-            )
-            # Give the activity a moment to start
-            await asyncio.sleep(0.2)
-
-            # Signal start_over while activity is still in-flight
-            await handle.signal(DesignProjectWorkflow.start_over)
-
-            # Wait for activity to complete and restart to settle
-            await asyncio.sleep(2.0)
-
-            state = await handle.query(DesignProjectWorkflow.get_state)
-            # Should be back at intake, not iteration
-            assert state.step == "intake"
-            # No revision should be recorded (result was discarded)
-            assert state.iteration_count == 0
-            assert len(state.revision_history) == 0
-            # State should be clean for next cycle
-            assert state.chat_history_key is None
-            assert state.design_brief is None
-
-    async def test_start_over_during_edit_recovers_to_full_flow(self, workflow_env, tq):
-        """After start_over during edit, the workflow can complete a full cycle."""
-        async with Worker(
-            workflow_env.client,
-            task_queue=tq,
-            workflows=[DesignProjectWorkflow],
-            activities=ALL_ACTIVITIES,
-        ):
-            handle = await _start_workflow(workflow_env, tq)
-            await _advance_to_iteration(handle)
-
-            # Start edit, then interrupt with start_over
-            await handle.signal(DesignProjectWorkflow.submit_annotation_edit, _annotations())
-            await asyncio.sleep(0.2)
-            await handle.signal(DesignProjectWorkflow.start_over)
-            await asyncio.sleep(2.0)
-
-            state = await handle.query(DesignProjectWorkflow.get_state)
-            assert state.step == "intake"
-
-            # Complete a full new cycle — should work cleanly
-            await handle.signal(DesignProjectWorkflow.skip_intake)
-            await asyncio.sleep(1.0)
-            await handle.signal(DesignProjectWorkflow.select_option, 0)
-            await asyncio.sleep(0.5)
-            await handle.signal(DesignProjectWorkflow.approve_design)
-            await asyncio.sleep(2.0)
-
-            state = await handle.query(DesignProjectWorkflow.get_state)
-            assert state.step == "completed"
-            assert state.error is None
-
-
-class TestMalformedSignalPayloads:
-    """Gap 3: Additional edge cases for malformed signal payloads.
-
-    Supplements test_malformed_annotations_surfaces_error with missing-key
-    and wrong-type payloads that exercise AnnotationRegion(**r) deserialization.
-    """
-
-    async def test_missing_required_annotation_keys(self, workflow_env, tq):
-        """Annotation dict missing required keys (no region_id, no instruction)
-        should surface as a recoverable error, not crash the workflow."""
-        async with Worker(
-            workflow_env.client,
-            task_queue=tq,
-            workflows=[DesignProjectWorkflow],
-            activities=ALL_ACTIVITIES,
-        ):
-            handle = await _start_workflow(workflow_env, tq)
-            await _advance_to_iteration(handle)
-
-            # Dict with completely missing required fields
-            bad_regions = [{"center_x": 0.5, "center_y": 0.5}]
-            await handle.signal(DesignProjectWorkflow.submit_annotation_edit, bad_regions)
-            await asyncio.sleep(1.0)
-
-            state = await handle.query(DesignProjectWorkflow.get_state)
-            assert state.error is not None
-            assert "Invalid edit request" in state.error.message
-            assert state.iteration_count == 0
-
-    async def test_wrong_type_annotation_field(self, workflow_env, tq):
-        """Annotation dict with wrong types (string region_id, etc.)
-        should surface as a recoverable error."""
-        async with Worker(
-            workflow_env.client,
-            task_queue=tq,
-            workflows=[DesignProjectWorkflow],
-            activities=ALL_ACTIVITIES,
-        ):
-            handle = await _start_workflow(workflow_env, tq)
-            await _advance_to_iteration(handle)
-
-            # region_id as string instead of int
-            bad_regions = [
-                {
-                    "region_id": "not_an_int",
-                    "instruction": "Make this area brighter and more inviting",
-                    "center_x": 0.5,
-                    "center_y": 0.5,
-                }
-            ]
-            await handle.signal(DesignProjectWorkflow.submit_annotation_edit, bad_regions)
-            await asyncio.sleep(1.0)
-
-            state = await handle.query(DesignProjectWorkflow.get_state)
-            assert state.error is not None
-            assert state.iteration_count == 0
-
-            # Recover with valid action
-            await handle.signal(DesignProjectWorkflow.retry_failed_step)
-            await asyncio.sleep(0.3)
-            await handle.signal(DesignProjectWorkflow.submit_annotation_edit, _annotations())
-            await asyncio.sleep(1.0)
-
-            state = await handle.query(DesignProjectWorkflow.get_state)
-            assert state.error is None
-            assert state.iteration_count == 1
-
-
-class TestFeedbackLengthBounds:
-    """Gap 5: Feedback length validation.
-
-    TextFeedbackRequest enforces min_length=10, max_length=2000 at the API layer.
-    The workflow signal accepts any string. This tests that oversized feedback
-    still processes without crashing (Gemini handles truncation).
-    """
-
-    async def test_max_length_feedback_processes(self, workflow_env, tq):
-        """2000-char feedback (at the API limit) processes successfully."""
-        async with Worker(
-            workflow_env.client,
-            task_queue=tq,
-            workflows=[DesignProjectWorkflow],
-            activities=ALL_ACTIVITIES,
-        ):
-            handle = await _start_workflow(workflow_env, tq)
-            await _advance_to_iteration(handle)
-
-            long_feedback = "Make it brighter. " * 111  # ~1998 chars
-            await handle.signal(DesignProjectWorkflow.submit_text_feedback, long_feedback)
-            await asyncio.sleep(1.0)
-
-            state = await handle.query(DesignProjectWorkflow.get_state)
-            # Should process (mock activity accepts any string)
-            assert state.iteration_count == 1
-            assert state.error is None
-            assert len(state.revision_history) == 1
-            assert state.revision_history[0].type == "feedback"
-
-
-class TestRapidFireSignals:
-    """Gap 6: Concurrent rapid-fire signal burst during iteration.
-
-    Verifies that multiple signals submitted in quick succession are all
-    queued correctly and processed in FIFO order without loss or duplication.
-    """
-
-    async def test_rapid_feedback_signals_all_processed(self, workflow_env, tq):
-        """Submit 3 text feedbacks rapidly — all should be processed in order."""
-        async with Worker(
-            workflow_env.client,
-            task_queue=tq,
-            workflows=[DesignProjectWorkflow],
-            activities=ALL_ACTIVITIES,
-        ):
-            handle = await _start_workflow(workflow_env, tq)
-            await _advance_to_iteration(handle)
-
-            # Fire 3 feedbacks without waiting between them
-            await handle.signal(
-                DesignProjectWorkflow.submit_text_feedback,
-                "First: add warm ambient lighting throughout",
-            )
-            await handle.signal(
-                DesignProjectWorkflow.submit_text_feedback,
-                "Second: place a potted plant near the window",
-            )
-            await handle.signal(
-                DesignProjectWorkflow.submit_text_feedback,
-                "Third: change the rug to a neutral tone",
-            )
-
-            # Wait for all 3 to process (mock activity is fast)
-            await asyncio.sleep(3.0)
-
-            state = await handle.query(DesignProjectWorkflow.get_state)
-            assert state.iteration_count == 3
-            assert len(state.revision_history) == 3
-            # Verify FIFO order preserved
-            assert "First" in state.revision_history[0].instructions[0]
-            assert "Second" in state.revision_history[1].instructions[0]
-            assert "Third" in state.revision_history[2].instructions[0]
-
-    async def test_mixed_signal_types_during_iteration(self, workflow_env, tq):
-        """Mix of annotation + feedback signals queued rapidly."""
-        async with Worker(
-            workflow_env.client,
-            task_queue=tq,
-            workflows=[DesignProjectWorkflow],
-            activities=ALL_ACTIVITIES,
-        ):
-            handle = await _start_workflow(workflow_env, tq)
-            await _advance_to_iteration(handle)
-
-            # Fire annotation, then feedback, then annotation — no waiting
-            await handle.signal(DesignProjectWorkflow.submit_annotation_edit, _annotations())
-            await handle.signal(
-                DesignProjectWorkflow.submit_text_feedback,
-                "Make the overall tone warmer and more inviting",
-            )
-            await handle.signal(DesignProjectWorkflow.submit_annotation_edit, _annotations())
-
-            await asyncio.sleep(3.0)
-
-            state = await handle.query(DesignProjectWorkflow.get_state)
-            assert state.iteration_count == 3
-            assert len(state.revision_history) == 3
-            # Order: annotation, feedback, annotation
-            assert state.revision_history[0].type == "annotation"
-            assert state.revision_history[1].type == "feedback"
-            assert state.revision_history[2].type == "annotation"

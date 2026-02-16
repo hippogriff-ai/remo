@@ -13,13 +13,12 @@ final class PollingManagerTests: XCTestCase {
         // Start polling in a task, then change the step
         let poller = PollingManager(client: client, interval: .milliseconds(50))
 
-        // Upload photos then skip scan to trigger step change from "photos" -> "intake"
+        // Upload 2 photos to trigger step change from "photos" -> "scan"
         _ = try await client.uploadPhoto(projectId: projectId, imageData: Data(), photoType: "room")
         _ = try await client.uploadPhoto(projectId: projectId, imageData: Data(), photoType: "room")
-        try await client.skipScan(projectId: projectId)
 
         let newState = try await poller.pollUntilStepChanges(projectId: projectId, currentStep: "photos")
-        XCTAssertEqual(newState.step, "intake")
+        XCTAssertEqual(newState.step, "scan")
     }
 
     func testPollReturnsOnErrorState() async throws {
@@ -203,7 +202,6 @@ private actor FlakyClient: WorkflowClientProtocol {
     func deleteProject(projectId: String) async throws {}
     func deletePhoto(projectId: String, photoId: String) async throws {}
     func updatePhotoNote(projectId: String, photoId: String, note: String?) async throws {}
-    func confirmPhotos(projectId: String) async throws {}
     func uploadPhoto(projectId: String, imageData: Data, photoType: String) async throws -> PhotoUploadResponse {
         PhotoUploadResponse(photoId: "", validation: ValidatePhotoOutput(passed: true, failures: [], messages: []))
     }
@@ -212,7 +210,7 @@ private actor FlakyClient: WorkflowClientProtocol {
     func startIntake(projectId: String, mode: String) async throws -> IntakeChatOutput {
         IntakeChatOutput(agentMessage: "")
     }
-    func sendIntakeMessage(projectId: String, message: String, conversationHistory: [ChatMessage], mode: String?) async throws -> IntakeChatOutput {
+    func sendIntakeMessage(projectId: String, message: String) async throws -> IntakeChatOutput {
         IntakeChatOutput(agentMessage: "")
     }
     func confirmIntake(projectId: String, brief: DesignBrief) async throws {}
@@ -251,14 +249,13 @@ private actor IncrementingClient: WorkflowClientProtocol {
     func deleteProject(projectId: String) async throws {}
     func deletePhoto(projectId: String, photoId: String) async throws {}
     func updatePhotoNote(projectId: String, photoId: String, note: String?) async throws {}
-    func confirmPhotos(projectId: String) async throws {}
     func uploadPhoto(projectId: String, imageData: Data, photoType: String) async throws -> PhotoUploadResponse {
         PhotoUploadResponse(photoId: "", validation: ValidatePhotoOutput(passed: true, failures: [], messages: []))
     }
     func uploadScan(projectId: String, scanData: [String: Any]) async throws {}
     func skipScan(projectId: String) async throws {}
     func startIntake(projectId: String, mode: String) async throws -> IntakeChatOutput { IntakeChatOutput(agentMessage: "") }
-    func sendIntakeMessage(projectId: String, message: String, conversationHistory: [ChatMessage], mode: String?) async throws -> IntakeChatOutput { IntakeChatOutput(agentMessage: "") }
+    func sendIntakeMessage(projectId: String, message: String) async throws -> IntakeChatOutput { IntakeChatOutput(agentMessage: "") }
     func confirmIntake(projectId: String, brief: DesignBrief) async throws {}
     func skipIntake(projectId: String) async throws {}
     func selectOption(projectId: String, index: Int) async throws {}
@@ -292,14 +289,13 @@ private actor FlakyConditionClient: WorkflowClientProtocol {
     func deleteProject(projectId: String) async throws {}
     func deletePhoto(projectId: String, photoId: String) async throws {}
     func updatePhotoNote(projectId: String, photoId: String, note: String?) async throws {}
-    func confirmPhotos(projectId: String) async throws {}
     func uploadPhoto(projectId: String, imageData: Data, photoType: String) async throws -> PhotoUploadResponse {
         PhotoUploadResponse(photoId: "", validation: ValidatePhotoOutput(passed: true, failures: [], messages: []))
     }
     func uploadScan(projectId: String, scanData: [String: Any]) async throws {}
     func skipScan(projectId: String) async throws {}
     func startIntake(projectId: String, mode: String) async throws -> IntakeChatOutput { IntakeChatOutput(agentMessage: "") }
-    func sendIntakeMessage(projectId: String, message: String, conversationHistory: [ChatMessage], mode: String?) async throws -> IntakeChatOutput { IntakeChatOutput(agentMessage: "") }
+    func sendIntakeMessage(projectId: String, message: String) async throws -> IntakeChatOutput { IntakeChatOutput(agentMessage: "") }
     func confirmIntake(projectId: String, brief: DesignBrief) async throws {}
     func skipIntake(projectId: String) async throws {}
     func selectOption(projectId: String, index: Int) async throws {}

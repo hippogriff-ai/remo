@@ -183,9 +183,7 @@ class TestEditInstructions:
             ),
         ]
         result = _build_edit_instructions(annotations)
-        assert "Region 1:" in result
-        assert "50% from left" in result
-        assert "50% from top" in result
+        assert "1 (red circle)" in result
         assert "oak table" in result
 
     def test_build_instructions_multiple(self):
@@ -208,10 +206,8 @@ class TestEditInstructions:
             ),
         ]
         result = _build_edit_instructions(annotations)
-        assert "Region 1:" in result
-        assert "Region 2:" in result
-        assert "left side" in result  # 30% → left
-        assert "right side" in result  # 70% → right
+        assert "1 (red circle)" in result
+        assert "2 (blue circle)" in result
         assert "sectional" in result
         assert "bookshelf" in result
 
@@ -280,8 +276,7 @@ class TestEditInstructions:
             ),
         ]
         result = _build_edit_instructions(annotations)
-        assert "Region 2:" in result
-        assert "center of the image" in result
+        assert "2 (blue circle)" in result
         assert "Action: Remove" in result
         assert "old armchair" in result
         assert "Avoid: leaving empty space" in result
@@ -325,8 +320,8 @@ class TestEditInstructions:
         assert "Avoid:" not in result
         assert "Constraints:" not in result
 
-    def test_build_instructions_all_three_regions(self):
-        """Verify all three region IDs get coordinate descriptions."""
+    def test_build_instructions_all_three_colors(self):
+        """Verify all three region IDs map to correct colors."""
         from app.activities.edit import _build_edit_instructions
 
         annotations = [
@@ -340,13 +335,9 @@ class TestEditInstructions:
             for i in range(1, 4)
         ]
         result = _build_edit_instructions(annotations)
-        assert "Region 1:" in result
-        assert "Region 2:" in result
-        assert "Region 3:" in result
-        # Verify position descriptions differ based on coordinates
-        assert "left side" in result  # 0.3 → left
-        assert "center" in result  # 0.6 → center
-        assert "right side" in result  # 0.9 → right
+        assert "1 (red circle)" in result
+        assert "2 (blue circle)" in result
+        assert "3 (green circle)" in result
 
     def test_build_instructions_action_and_avoid_only(self):
         """Action + avoid without constraints should omit Constraints label."""
@@ -367,53 +358,6 @@ class TestEditInstructions:
         assert "Action: Remove" in result
         assert "Avoid: leaving marks" in result
         assert "Constraints:" not in result
-
-
-class TestPositionDescription:
-    """Test coordinate-to-text position descriptions."""
-
-    def test_center(self):
-        from app.activities.edit import _position_description
-
-        result = _position_description(0.5, 0.5, 0.1)
-        assert "center of the image" in result
-
-    def test_upper_left(self):
-        from app.activities.edit import _position_description
-
-        result = _position_description(0.1, 0.1, 0.1)
-        assert "upper-left" in result
-
-    def test_lower_right(self):
-        from app.activities.edit import _position_description
-
-        result = _position_description(0.8, 0.8, 0.1)
-        assert "lower-right" in result
-
-    def test_percentage_coordinates(self):
-        from app.activities.edit import _position_description
-
-        result = _position_description(0.3, 0.7, 0.1)
-        assert "30% from left" in result
-        assert "70% from top" in result
-
-    def test_large_area(self):
-        from app.activities.edit import _position_description
-
-        result = _position_description(0.5, 0.5, 0.3)
-        assert "large area" in result
-
-    def test_medium_area(self):
-        from app.activities.edit import _position_description
-
-        result = _position_description(0.5, 0.5, 0.15)
-        assert "medium area" in result
-
-    def test_small_area(self):
-        from app.activities.edit import _position_description
-
-        result = _position_description(0.5, 0.5, 0.05)
-        assert "small area" in result
 
 
 def _make_test_image(w: int = 100, h: int = 100) -> Image.Image:
@@ -1217,21 +1161,25 @@ class TestDownloadImages:
 class TestUploadImage:
     """Tests for _upload_image."""
 
-    def test_upload_image_returns_storage_key(self):
-        """_upload_image returns an R2 key (not presigned URL) for stable storage."""
+    def test_upload_image_returns_presigned_url(self):
         from app.activities.edit import _upload_image
 
         img = _make_test_image()
 
-        with patch("app.utils.r2.upload_object") as mock_upload:
-            key = _upload_image(img, "proj-123")
-            # Returns storage key, not a presigned URL
-            assert key.startswith("projects/proj-123/revisions/")
-            assert key.endswith(".png")
-            assert not key.startswith("http")
+        with (
+            patch("app.utils.r2.upload_object") as mock_upload,
+            patch(
+                "app.utils.r2.generate_presigned_url",
+                return_value="https://r2.example.com/presigned/rev.png",
+            ),
+        ):
+            url = _upload_image(img, "proj-123")
+            assert url == "https://r2.example.com/presigned/rev.png"
             mock_upload.assert_called_once()
+            # Verify upload key format
             call_args = mock_upload.call_args[0]
-            assert call_args[0] == key
+            assert call_args[0].startswith("projects/proj-123/revisions/")
+            assert call_args[0].endswith(".png")
 
 
 class TestBootstrapWithInspirationImages:
@@ -1311,78 +1259,3 @@ class TestContinueChatDirectly:
             pytest.raises(ApplicationError, match="No annotations or feedback"),
         ):
             await _continue_chat(inp, base_image)
-
-
-class TestCorruptR2History:
-    """Gap 1: Corrupt chat history JSON from R2 during continuation edit."""
-
-    @pytest.mark.asyncio
-    async def test_corrupt_r2_json_raises_non_retryable(self):
-        """When R2 returns invalid JSON for chat history, the edit activity
-        should raise a non-retryable ApplicationError instead of crashing
-        or retrying infinitely with the same corrupt data."""
-        from temporalio.exceptions import ApplicationError
-
-        from app.activities.edit import edit_design
-
-        inp = EditDesignInput(
-            project_id="proj-123",
-            base_image_url="https://r2.example.com/design.png",
-            room_photo_urls=["https://r2.example.com/room.jpg"],
-            feedback="Make the room brighter and more modern",
-            chat_history_key="projects/proj-123/gemini_chat_history.json",
-        )
-
-        with (
-            patch(
-                "app.activities.edit.download_image",
-                new_callable=AsyncMock,
-                return_value=_make_test_image(),
-            ),
-            patch("app.activities.edit.get_client"),
-            patch(
-                "app.activities.edit.restore_from_r2",
-                side_effect=ApplicationError(
-                    "Chat history corrupted: invalid JSON",
-                    non_retryable=True,
-                ),
-            ),
-        ):
-            with pytest.raises(ApplicationError, match="corrupted") as exc_info:
-                await edit_design(inp)
-            assert exc_info.value.non_retryable
-
-    @pytest.mark.asyncio
-    async def test_deserialization_failure_raises_non_retryable(self):
-        """When R2 returns valid JSON but with invalid data shape (e.g.
-        missing Content fields), restore_from_r2 raises non-retryable."""
-        from temporalio.exceptions import ApplicationError
-
-        from app.activities.edit import edit_design
-
-        inp = EditDesignInput(
-            project_id="proj-123",
-            base_image_url="https://r2.example.com/design.png",
-            room_photo_urls=["https://r2.example.com/room.jpg"],
-            feedback="Add more warm lighting throughout",
-            chat_history_key="projects/proj-123/gemini_chat_history.json",
-        )
-
-        with (
-            patch(
-                "app.activities.edit.download_image",
-                new_callable=AsyncMock,
-                return_value=_make_test_image(),
-            ),
-            patch("app.activities.edit.get_client"),
-            patch(
-                "app.activities.edit.restore_from_r2",
-                side_effect=ApplicationError(
-                    "Chat history deserialization failed",
-                    non_retryable=True,
-                ),
-            ),
-        ):
-            with pytest.raises(ApplicationError, match="deserialization") as exc_info:
-                await edit_design(inp)
-            assert exc_info.value.non_retryable

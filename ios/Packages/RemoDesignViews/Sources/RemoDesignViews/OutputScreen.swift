@@ -25,51 +25,45 @@ public struct OutputScreen: View {
     }
 
     public var body: some View {
-        VStack(spacing: 0) {
-            // Scrollable content area
-            ScrollView {
-                VStack(spacing: 20) {
-                    // Final design image (pinch to zoom)
-                    DesignImageView(projectState.currentImage)
-                        .aspectRatio(4/3, contentMode: .fit)
-                        .scaleEffect(zoomScale)
-                        .gesture(
-                            MagnifyGesture()
-                                .onChanged { value in
-                                    zoomScale = max(1.0, min(3.0, value.magnification))
-                                }
-                                .onEnded { _ in
-                                    withAnimation(.spring(response: 0.3)) {
-                                        zoomScale = 1.0
-                                    }
-                                }
-                        )
-                        .padding(.horizontal)
-
-                    Text("Your Design is Ready!")
-                        .font(.title2.bold())
-
-                    if projectState.iterationCount > 0 {
-                        Button {
-                            showRevisionHistory = true
-                        } label: {
-                            Label("\(projectState.iterationCount) revision\(projectState.iterationCount == 1 ? "" : "s")", systemImage: "clock.arrow.circlepath")
-                                .font(.caption)
+        // Note: Using VStack instead of ScrollView because Maestro's tap simulation
+        // doesn't reliably trigger SwiftUI Button actions inside a ScrollView on iOS 18.
+        VStack(spacing: 20) {
+            // Final design image (pinch to zoom)
+            DesignImageView(projectState.currentImage)
+                .aspectRatio(4/3, contentMode: .fit)
+                .scaleEffect(zoomScale)
+                .gesture(
+                    MagnifyGesture()
+                        .onChanged { value in
+                            zoomScale = max(1.0, min(3.0, value.magnification))
                         }
-                    }
+                        .onEnded { _ in
+                            withAnimation(.spring(response: 0.3)) {
+                                zoomScale = 1.0
+                            }
+                        }
+                )
+                .padding(.horizontal)
 
-                    Text("Save your design image and copy your specs.\nProject data will be deleted after 24 hours.")
+            Text("Your Design is Ready!")
+                .font(.title2.bold())
+
+            if projectState.iterationCount > 0 {
+                Button {
+                    showRevisionHistory = true
+                } label: {
+                    Label("\(projectState.iterationCount) revision\(projectState.iterationCount == 1 ? "" : "s")", systemImage: "clock.arrow.circlepath")
                         .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .multilineTextAlignment(.center)
-                        .padding(.horizontal)
                 }
-                .padding(.vertical)
             }
 
-            Divider()
+            Text("Save your design image and copy your specs.\nProject data will be deleted after 24 hours.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+                .padding(.horizontal)
 
-            // Action buttons — fixed at bottom so they're always reachable
+            // Action buttons
             VStack(spacing: 12) {
                 Button {
                     Task { await saveToPhotos() }
@@ -104,7 +98,7 @@ public struct OutputScreen: View {
                 .buttonStyle(.bordered)
                 .accessibilityIdentifier("output_shopping")
             }
-            .padding()
+            .padding(.horizontal)
         }
         .navigationTitle("Complete")
         #if os(iOS)

@@ -12,7 +12,6 @@ public protocol WorkflowClientProtocol: Sendable {
     func uploadPhoto(projectId: String, imageData: Data, photoType: String) async throws -> PhotoUploadResponse
     func deletePhoto(projectId: String, photoId: String) async throws
     func updatePhotoNote(projectId: String, photoId: String, note: String?) async throws
-    func confirmPhotos(projectId: String) async throws
 
     // Scan
     func uploadScan(projectId: String, scanData: [String: Any]) async throws
@@ -20,7 +19,7 @@ public protocol WorkflowClientProtocol: Sendable {
 
     // Intake
     func startIntake(projectId: String, mode: String) async throws -> IntakeChatOutput
-    func sendIntakeMessage(projectId: String, message: String, conversationHistory: [ChatMessage], mode: String?) async throws -> IntakeChatOutput
+    func sendIntakeMessage(projectId: String, message: String) async throws -> IntakeChatOutput
     func confirmIntake(projectId: String, brief: DesignBrief) async throws
     func skipIntake(projectId: String) async throws
 

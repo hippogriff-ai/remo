@@ -14,7 +14,7 @@ from dataclasses import dataclass, field
 from typing import Literal
 
 import structlog
-from fastapi import APIRouter, Form, Request, UploadFile
+from fastapi import APIRouter, Request, UploadFile
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
@@ -253,25 +253,6 @@ async def _resolve_state(request: Request, project_id: str) -> WorkflowState | N
     return _get_state(project_id)
 
 
-def _presign_image_urls(state: WorkflowState) -> None:
-    """Resolve R2 storage keys → fresh presigned URLs in-place.
-
-    Activities store R2 keys (``projects/{id}/generated/option_0.png``).
-    This function converts them to presigned URLs before serving to iOS
-    so images never expire while the project is still active.  Already-
-    presigned URLs (mock mode, legacy data) pass through unchanged.
-    """
-    from app.utils.r2 import resolve_url
-
-    for opt in state.generated_options:
-        opt.image_url = resolve_url(opt.image_url)
-    if state.current_image:
-        state.current_image = resolve_url(state.current_image)
-    for rev in state.revision_history:
-        rev.base_image_url = resolve_url(rev.base_image_url)
-        rev.revised_image_url = resolve_url(rev.revised_image_url)
-
-
 # --- Project lifecycle ---
 
 
@@ -309,16 +290,10 @@ async def create_project(body: CreateProjectRequest, request: Request) -> Create
     responses={404: {"model": ErrorResponse}},
 )
 async def get_project_state(project_id: str, request: Request):
-    """Query current workflow state. iOS polls this endpoint.
-
-    Image URLs are presigned on every response so they never expire while
-    the project is still active.  Workflow state stores R2 storage keys;
-    the presigning happens here at the API boundary.
-    """
+    """Query current workflow state. iOS polls this endpoint."""
     state = await _resolve_state(request, project_id)
     if state is None:
         return _error(404, *_NOT_FOUND)
-    _presign_image_urls(state)
     return state
 
 
@@ -362,8 +337,8 @@ async def upload_photo(
     project_id: str,
     file: UploadFile,
     request: Request,
-    photo_type: Literal["room", "inspiration"] = Form("room"),
-    note: str | None = Form(None),
+    photo_type: Literal["room", "inspiration"] = "room",
+    note: str | None = None,
 ):
     """Upload photo -> validate -> store (R2 in Temporal mode) -> add to state."""
     state = await _resolve_state(request, project_id)
@@ -459,6 +434,10 @@ async def upload_photo(
                 return err
         else:
             state.photos.append(photo)
+            # Auto-transition to scan after minimum room photos (mirrors workflow behavior)
+            room_count = sum(1 for p in state.photos if p.photo_type == "room")
+            if room_count >= 2 and state.step == "photos":
+                state.step = "scan"
 
     logger.info(
         "photo_uploaded",
@@ -556,37 +535,6 @@ async def update_photo_note(
         photo.note = body.note
 
     logger.info("photo_note_updated", project_id=project_id, photo_id=photo_id)
-    return ActionResponse()
-
-
-# --- Confirm photos (advance to scan) ---
-
-
-@router.post(
-    "/projects/{project_id}/photos/confirm",
-    response_model=ActionResponse,
-    responses={404: {"model": ErrorResponse}, 409: {"model": ErrorResponse}},
-)
-async def confirm_photos(project_id: str, request: Request):
-    """Confirm photo selection -> advance to scan step."""
-    state = await _resolve_state(request, project_id)
-    if err := _check_step(state, "photos", "confirm photos"):
-        return err
-    assert state is not None
-
-    room_count = sum(1 for p in state.photos if p.photo_type == "room")
-    if room_count < 2:
-        return _error(409, "not_enough_photos", "Need at least 2 room photos before continuing")
-
-    if settings.use_temporal:
-        from app.workflows.design_project import DesignProjectWorkflow
-
-        if err := await _signal_workflow(request, project_id, DesignProjectWorkflow.confirm_photos):
-            return err
-    else:
-        state.step = "scan"
-
-    logger.info("photos_confirmed", project_id=project_id, room_photos=room_count)
     return ActionResponse()
 
 
@@ -715,7 +663,6 @@ async def start_intake(project_id: str, body: IntakeStartRequest, request: Reque
         return err
     assert state is not None
     _intake_sessions[project_id] = _IntakeSession(mode=body.mode)
-    _max_turns = {"quick": 4, "full": 11, "open": 16}
     return IntakeChatOutput(
         agent_message="Welcome! Let's design your perfect room. "
         "What type of room are we working with?",
@@ -727,7 +674,7 @@ async def start_intake(project_id: str, body: IntakeStartRequest, request: Reque
             QuickReplyOption(number=5, label="Dining Room", value="dining room"),
             QuickReplyOption(number=6, label="Home Office", value="home office"),
         ],
-        progress=f"Question 1 of ~{_max_turns.get(body.mode, 4)}",
+        progress="Question 1 of 3",
     )
 
 
@@ -858,11 +805,8 @@ async def _real_intake_message(
         user_message=message,
     )
 
-    from app.utils.tracing import trace_thread
-
     try:
-        with trace_thread(project_id, "intake"):
-            result = await _run_intake_core(intake_input)
+        result = await _run_intake_core(intake_input)
     except Exception:
         logger.exception("intake_agent_error", project_id=project_id)
         return _error(

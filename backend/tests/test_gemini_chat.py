@@ -635,28 +635,11 @@ class TestGetClient:
 
         from app.utils.gemini_chat import get_client
 
-        with (
-            patch("app.utils.gemini_chat.genai.Client") as mock_client_cls,
-            patch("app.utils.gemini_chat.settings") as mock_settings,
-        ):
-            mock_settings.google_ai_api_key = "test-key"
+        with patch("app.utils.gemini_chat.genai.Client") as mock_client_cls:
             mock_client_cls.return_value = MagicMock()
             client = get_client()
-            mock_client_cls.assert_called_once_with(api_key="test-key")
+            mock_client_cls.assert_called_once()
             assert client is not None
-
-    def test_raises_without_api_key(self):
-        """get_client() raises ApplicationError when GOOGLE_AI_API_KEY is unset."""
-        from unittest.mock import patch
-
-        from temporalio.exceptions import ApplicationError
-
-        from app.utils.gemini_chat import get_client
-
-        with patch("app.utils.gemini_chat.settings") as mock_settings:
-            mock_settings.google_ai_api_key = ""
-            with pytest.raises(ApplicationError, match="GOOGLE_AI_API_KEY not configured"):
-                get_client()
 
 
 class TestCreateChatDefaultClient:

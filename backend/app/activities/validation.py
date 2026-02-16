@@ -4,8 +4,8 @@ Runs synchronously in the FastAPI photo upload handler (not a Temporal activity)
 because it's fast (<3s) and needs immediate user feedback.
 
 Three checks:
-1. Resolution: min 1024px for room / 400px for inspiration (Pillow) — <10ms
-2. Blur: Laplacian variance, threshold 60 for room / 25 for inspiration — <50ms
+1. Resolution: min 1024px shortest side (Pillow) — <10ms
+2. Blur: Laplacian variance on normalized 1024px image, threshold 60 — <50ms
 3. Content: Claude Haiku 4.5 image classification — ~1-2s
 """
 
@@ -24,9 +24,7 @@ from app.models.contracts import ValidatePhotoInput, ValidatePhotoOutput
 logger = structlog.get_logger()
 
 MIN_RESOLUTION = 1024
-MIN_RESOLUTION_INSPIRATION = 400
 BLUR_THRESHOLD = 60.0
-BLUR_THRESHOLD_INSPIRATION = 25.0
 NORMALIZE_SIZE = 1024
 
 
@@ -46,14 +44,14 @@ def validate_photo(input: ValidatePhotoInput) -> ValidatePhotoOutput:
             messages=["Could not open image. Please upload a valid JPEG or PNG."],
         )
 
-    # Check 1: Resolution (lower bar for inspiration — online images are often smaller)
-    res_ok, res_msg = _check_resolution(img, input.photo_type)
+    # Check 1: Resolution
+    res_ok, res_msg = _check_resolution(img)
     if not res_ok:
         failures.append("low_resolution")
         messages.append(res_msg)
 
-    # Check 2: Blur (lower bar for inspiration — stylized/filtered images are common)
-    blur_ok, blur_msg = _check_blur(img, input.photo_type)
+    # Check 2: Blur
+    blur_ok, blur_msg = _check_blur(img)
     if not blur_ok:
         failures.append("blurry")
         messages.append(blur_msg)
@@ -84,22 +82,18 @@ def validate_photo(input: ValidatePhotoInput) -> ValidatePhotoOutput:
     return ValidatePhotoOutput(passed=passed, failures=failures, messages=messages)
 
 
-def _check_resolution(img: Image.Image, photo_type: str = "room") -> tuple[bool, str]:
-    """Check that the shortest side meets the minimum resolution for the photo type."""
-    threshold = MIN_RESOLUTION_INSPIRATION if photo_type == "inspiration" else MIN_RESOLUTION
+def _check_resolution(img: Image.Image) -> tuple[bool, str]:
+    """Check that the shortest side is at least MIN_RESOLUTION pixels."""
     shortest = min(img.size)
-    if shortest < threshold:
-        msg = (
-            f"This inspiration photo is too small (minimum {MIN_RESOLUTION_INSPIRATION}px). "
-            "Please choose a larger image."
-            if photo_type == "inspiration"
-            else "This photo is too low resolution. Please use a higher quality image."
+    if shortest < MIN_RESOLUTION:
+        return (
+            False,
+            "This photo is too low resolution. Please use a higher quality image.",
         )
-        return False, msg
     return True, ""
 
 
-def _check_blur(img: Image.Image, photo_type: str = "room") -> tuple[bool, str]:
+def _check_blur(img: Image.Image) -> tuple[bool, str]:
     """Detect blur via Laplacian variance on a normalized grayscale image."""
     gray = img.convert("L")
     # Normalize to NORMALIZE_SIZE on shortest side for consistent measurement
@@ -124,14 +118,11 @@ def _check_blur(img: Image.Image, photo_type: str = "room") -> tuple[bool, str]:
     mean = sum(pixels) / len(pixels)
     variance = sum((p - mean) ** 2 for p in pixels) / len(pixels)
 
-    threshold = BLUR_THRESHOLD_INSPIRATION if photo_type == "inspiration" else BLUR_THRESHOLD
-    if variance < threshold:
-        msg = (
-            "This photo looks too blurry. Please choose a clearer image."
-            if photo_type == "inspiration"
-            else "This photo looks blurry. Please retake with a steady hand."
+    if variance < BLUR_THRESHOLD:
+        return (
+            False,
+            "This photo looks blurry. Please retake with a steady hand.",
         )
-        return False, msg
     return True, ""
 
 

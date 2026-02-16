@@ -13,8 +13,6 @@ public struct IntakeChatScreen: View {
     @State private var selectedMode: String?
     @State private var showSkipConfirmation = false
     @State private var errorMessage: String?
-    @State private var selectedQuickReply: Int?
-    @FocusState private var isInputFocused: Bool
 
     public init(projectState: ProjectState, client: any WorkflowClientProtocol) {
         self.projectState = projectState
@@ -145,43 +143,11 @@ public struct IntakeChatScreen: View {
                                 .id(index)
                         }
 
-                        // Quick reply chips — hidden once user selects one or while waiting for response
-                        if let options = projectState.currentIntakeOutput?.options, !options.isEmpty,
-                           selectedQuickReply == nil, !isSending {
-                            QuickReplyChips(
-                                options: options,
-                                selectedId: selectedQuickReply,
-                                disabled: isSending
-                            ) { option in
-                                selectedQuickReply = option.number
-                                Task { await sendMessage(option.label) }
+                        // Quick reply chips
+                        if let options = projectState.currentIntakeOutput?.options, !options.isEmpty {
+                            QuickReplyChips(options: options) { option in
+                                Task { await sendMessage(option.value) }
                             }
-
-                            // Always offer free-text escape hatch — none of the options may fit
-                            Button {
-                                selectedQuickReply = -1
-                                isInputFocused = true
-                            } label: {
-                                HStack {
-                                    Image(systemName: "keyboard")
-                                        .frame(width: 24, height: 24)
-                                    Text("Type my own answer...")
-                                        .font(.subheadline)
-                                    Spacer()
-                                }
-                                .foregroundStyle(.secondary)
-                                .padding(.horizontal, 12)
-                                .padding(.vertical, 10)
-                                .background(Color.secondary.opacity(0.08))
-                                .clipShape(RoundedRectangle(cornerRadius: 12))
-                            }
-                            .buttonStyle(.plain)
-                        }
-
-                        // Typing indicator
-                        if isSending {
-                            TypingIndicatorBubble()
-                                .id("typing")
                         }
 
                         // Summary card
@@ -200,19 +166,9 @@ public struct IntakeChatScreen: View {
                     }
                     .padding()
                 }
-                .textSelection(.enabled)
                 .onChange(of: projectState.chatMessages.count) { _, _ in
                     withAnimation {
                         proxy.scrollTo(projectState.chatMessages.count - 1, anchor: .bottom)
-                    }
-                    // Reset quick reply selection after response arrives
-                    selectedQuickReply = nil
-                }
-                .onChange(of: isSending) { _, sending in
-                    if sending {
-                        withAnimation {
-                            proxy.scrollTo("typing", anchor: .bottom)
-                        }
                     }
                 }
             }
@@ -225,7 +181,6 @@ public struct IntakeChatScreen: View {
                     TextField("Type your message...", text: $inputText, axis: .vertical)
                         .textFieldStyle(.roundedBorder)
                         .lineLimit(1...4)
-                        .focused($isInputFocused)
                         .accessibilityIdentifier("chat_input")
 
                     Button {
@@ -244,7 +199,6 @@ public struct IntakeChatScreen: View {
     }
 
     private var shouldShowTextInput: Bool {
-        if selectedQuickReply == -1 { return true }
         let output = projectState.currentIntakeOutput
         return output?.isOpenEnded == true || (output?.options == nil && !projectState.chatMessages.isEmpty && output?.isSummary != true)
     }
@@ -275,35 +229,15 @@ public struct IntakeChatScreen: View {
         guard !trimmed.isEmpty else { return }
 
         isSending = true
-        defer { isSending = false }
+        defer { isSending = false; inputText = "" }
 
         projectState.chatMessages.append(ChatMessage(role: "user", content: trimmed))
-        isInputFocused = false
-        inputText = ""
 
         do {
-            let output = try await client.sendIntakeMessage(projectId: projectId, message: trimmed, conversationHistory: projectState.chatMessages, mode: selectedMode)
+            let output = try await client.sendIntakeMessage(projectId: projectId, message: trimmed)
             projectState.chatMessages.append(ChatMessage(role: "assistant", content: output.agentMessage))
             projectState.currentIntakeOutput = output
         } catch {
-            // Roll back optimistic message so chat isn't polluted with unsent text
-            if let lastIndex = projectState.chatMessages.indices.last,
-               projectState.chatMessages[lastIndex].role == "user",
-               projectState.chatMessages[lastIndex].content == trimmed {
-                projectState.chatMessages.removeLast()
-            }
-
-            // "wrong_step" means the workflow advanced past intake — refresh state
-            // so the router navigates to the correct screen instead of showing a dead-end error
-            if case .httpError(409, let response) = error as? APIError, response.error == "wrong_step" {
-                if let newState = try? await client.getState(projectId: projectId) {
-                    projectState.apply(newState)
-                    return
-                }
-            }
-
-            inputText = trimmed
-            selectedQuickReply = nil
             errorMessage = error.localizedDescription
         }
     }
@@ -316,25 +250,10 @@ public struct IntakeChatScreen: View {
         }
         do {
             try await client.confirmIntake(projectId: projectId, brief: brief)
-        } catch {
-            // 409 means the workflow already advanced (signal was received earlier)
-            // — fall through to state refresh below
-            if case .httpError(409, _) = error as? APIError {
-                // Signal already processed — continue to refresh
-            } else {
-                errorMessage = error.localizedDescription
-                return
-            }
-        }
-        // Always refresh state after confirm — the workflow may have advanced
-        // through generation quickly, so we need the latest step for navigation
-        do {
             let newState = try await client.getState(projectId: projectId)
             projectState.apply(newState)
         } catch {
-            // Signal was sent; force step forward so the router navigates away
-            // even if the state refresh fails
-            projectState.step = .generation
+            errorMessage = error.localizedDescription
         }
     }
 
@@ -361,28 +280,15 @@ struct ChatBubble: View {
 
     private var isUser: Bool { message.role == "user" }
 
-    private var markdownContent: AttributedString {
-        (try? AttributedString(markdown: message.content, options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace))) ?? AttributedString(message.content)
-    }
-
     var body: some View {
         HStack {
             if isUser { Spacer(minLength: 60) }
-            Text(markdownContent)
+            Text(message.content)
                 .padding(.horizontal, 14)
                 .padding(.vertical, 10)
                 .background(isUser ? Color.accentColor : Color.secondary.opacity(0.2))
                 .foregroundStyle(isUser ? .white : .primary)
                 .clipShape(RoundedRectangle(cornerRadius: 16))
-                #if os(iOS)
-                .contextMenu {
-                    Button {
-                        UIPasteboard.general.string = message.content
-                    } label: {
-                        Label("Copy", systemImage: "doc.on.doc")
-                    }
-                }
-                #endif
             if !isUser { Spacer(minLength: 60) }
         }
     }
@@ -392,79 +298,34 @@ struct ChatBubble: View {
 
 struct QuickReplyChips: View {
     let options: [QuickReplyOption]
-    var selectedId: Int?
-    var disabled: Bool = false
     let onSelect: (QuickReplyOption) -> Void
 
     var body: some View {
         VStack(spacing: 8) {
             ForEach(options) { option in
-                let isSelected = selectedId == option.number
                 Button {
                     onSelect(option)
                 } label: {
                     HStack {
-                        if isSelected {
-                            Image(systemName: "checkmark.circle.fill")
-                                .font(.caption.bold())
-                                .frame(width: 24, height: 24)
-                                .foregroundStyle(.white)
-                        } else {
-                            Text("\(option.number)")
-                                .font(.caption.bold())
-                                .frame(width: 24, height: 24)
-                                .background(Color.accentColor.opacity(0.15))
-                                .clipShape(Circle())
-                        }
+                        Text("\(option.number)")
+                            .font(.caption.bold())
+                            .frame(width: 24, height: 24)
+                            .background(Color.accentColor.opacity(0.15))
+                            .clipShape(Circle())
                         Text(option.label)
                             .font(.subheadline)
                         Spacer()
                     }
                     .padding(.horizontal, 12)
                     .padding(.vertical, 10)
-                    .background(isSelected ? Color.accentColor : Color.secondary.opacity(0.12))
-                    .foregroundStyle(isSelected ? .white : .primary)
+                    .background(Color.secondary.opacity(0.12))
                     .clipShape(RoundedRectangle(cornerRadius: 12))
-                    .opacity(selectedId != nil && !isSelected ? 0.5 : 1.0)
                 }
                 .buttonStyle(.plain)
-                .disabled(disabled || selectedId != nil)
                 .accessibilityLabel("Option \(option.number): \(option.label)")
                 .accessibilityIdentifier("chat_option_\(option.number)")
             }
         }
-    }
-}
-
-// MARK: - Typing Indicator
-
-struct TypingIndicatorBubble: View {
-    @State private var animating = false
-
-    var body: some View {
-        HStack {
-            HStack(spacing: 4) {
-                ForEach(0..<3, id: \.self) { index in
-                    Circle()
-                        .fill(Color.secondary.opacity(0.5))
-                        .frame(width: 8, height: 8)
-                        .offset(y: animating ? -4 : 0)
-                        .animation(
-                            .easeInOut(duration: 0.4)
-                                .repeatForever(autoreverses: true)
-                                .delay(Double(index) * 0.15),
-                            value: animating
-                        )
-                }
-            }
-            .padding(.horizontal, 14)
-            .padding(.vertical, 12)
-            .background(Color.secondary.opacity(0.2))
-            .clipShape(RoundedRectangle(cornerRadius: 16))
-            Spacer(minLength: 60)
-        }
-        .onAppear { animating = true }
-        .accessibilityLabel("Thinking...")
     }
 }
 
@@ -494,30 +355,20 @@ struct SummaryCard: View {
             Label("Design Brief", systemImage: "doc.text")
                 .font(.headline)
 
-            BriefField(label: "Room Type", value: brief.roomType)
+            LabeledContent("Room Type", value: brief.roomType)
 
             if !brief.painPoints.isEmpty {
-                BriefField(label: "Change", value: brief.painPoints.map { "• \($0)" }.joined(separator: "\n"))
+                LabeledContent("Change", value: brief.painPoints.joined(separator: ", "))
             }
 
             if !brief.keepItems.isEmpty {
-                BriefField(label: "Keep", value: brief.keepItems.map { "• \($0)" }.joined(separator: "\n"))
-            }
-
-            if let style = brief.styleProfile {
-                if let mood = style.mood, !mood.isEmpty {
-                    BriefField(label: "Mood", value: mood)
-                }
-                if !style.colors.isEmpty {
-                    BriefField(label: "Colors", value: style.colors.joined(separator: ", "))
-                }
+                LabeledContent("Keep", value: brief.keepItems.joined(separator: ", "))
             }
 
             Button("Looks Good!") {
                 onAction(.confirm)
             }
             .buttonStyle(.borderedProminent)
-            .controlSize(.large)
             .frame(maxWidth: .infinity)
             .accessibilityIdentifier("chat_confirm_brief")
 
@@ -525,28 +376,12 @@ struct SummaryCard: View {
                 onAction(.change)
             }
             .buttonStyle(.bordered)
-            .controlSize(.large)
             .frame(maxWidth: .infinity)
             .accessibilityIdentifier("chat_change_brief")
         }
         .padding()
         .background(Color.secondary.opacity(0.12))
         .clipShape(RoundedRectangle(cornerRadius: 16))
-    }
-}
-
-struct BriefField: View {
-    let label: String
-    let value: String
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 2) {
-            Text(label)
-                .font(.caption)
-                .foregroundStyle(.secondary)
-            Text(value)
-                .font(.subheadline)
-        }
     }
 }
 

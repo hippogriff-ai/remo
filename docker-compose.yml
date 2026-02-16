@@ -56,9 +56,6 @@ services:
       R2_ACCESS_KEY_ID: "${R2_ACCESS_KEY_ID:-}"
       R2_SECRET_ACCESS_KEY: "${R2_SECRET_ACCESS_KEY:-}"
       R2_BUCKET_NAME: "${R2_BUCKET_NAME:-remo-images}"
-      LANGSMITH_API_KEY: "${LANGSMITH_API_KEY:-}"
-      LANGSMITH_PROJECT: "${LANGSMITH_PROJECT:-remo}"
-      LANGSMITH_TRACING: "${LANGSMITH_TRACING:-true}"
       ENVIRONMENT: "development"
     ports:
       - "8000:8000"
@@ -89,9 +86,6 @@ services:
       R2_ACCESS_KEY_ID: "${R2_ACCESS_KEY_ID:-}"
       R2_SECRET_ACCESS_KEY: "${R2_SECRET_ACCESS_KEY:-}"
       R2_BUCKET_NAME: "${R2_BUCKET_NAME:-remo-images}"
-      LANGSMITH_API_KEY: "${LANGSMITH_API_KEY:-}"
-      LANGSMITH_PROJECT: "${LANGSMITH_PROJECT:-remo}"
-      LANGSMITH_TRACING: "${LANGSMITH_TRACING:-true}"
       ENVIRONMENT: "development"
     depends_on:
       postgres:

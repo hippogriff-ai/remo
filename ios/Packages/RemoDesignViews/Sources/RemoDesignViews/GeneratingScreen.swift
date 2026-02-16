@@ -26,7 +26,7 @@ public struct GeneratingScreen: View {
             Text("Creating your designs...")
                 .font(.title3.bold())
 
-            Text("This usually takes 20-40 seconds.\nWe're generating 2 unique options for you.")
+            Text("This usually takes 15-30 seconds.\nWe're generating 2 unique options for you.")
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)

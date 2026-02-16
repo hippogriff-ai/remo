@@ -42,6 +42,7 @@ from app.utils.gemini_chat import (
     serialize_to_r2,
 )
 from app.utils.http import download_image, download_images
+from app.utils.image import draw_annotations
 
 logger = structlog.get_logger()
 
@@ -77,57 +78,17 @@ def _load_prompt(name: str) -> str:
         ) from exc
 
 
-def _position_description(center_x: float, center_y: float, radius: float) -> str:
-    """Convert normalized coordinates to a human-readable position description."""
-    # Horizontal position
-    if center_x < 0.33:
-        h_pos = "left"
-    elif center_x < 0.66:
-        h_pos = "center"
-    else:
-        h_pos = "right"
-
-    # Vertical position
-    if center_y < 0.33:
-        v_pos = "upper"
-    elif center_y < 0.66:
-        v_pos = "middle"
-    else:
-        v_pos = "lower"
-
-    # Combine
-    if v_pos == "middle" and h_pos == "center":
-        location = "center of the image"
-    elif v_pos == "middle":
-        location = f"{h_pos} side of the image"
-    elif h_pos == "center":
-        location = f"{v_pos} area of the image"
-    else:
-        location = f"{v_pos}-{h_pos} area of the image"
-
-    # Size hint
-    if radius > 0.25:
-        size = "large area"
-    elif radius > 0.12:
-        size = "medium area"
-    else:
-        size = "small area"
-
-    pct_x = int(center_x * 100)
-    pct_y = int(center_y * 100)
-    return f"{location} ({pct_x}% from left, {pct_y}% from top, {size})"
-
-
 def _build_edit_instructions(annotations: list[AnnotationRegion]) -> str:
     """Build edit instruction text from annotation regions.
 
-    Uses text-only coordinate descriptions instead of visual circle references.
-    This prevents Gemini from reproducing annotation circles in its output.
+    Includes action, avoid, and constraints when present to give Gemini
+    full context about the intended edit.
     """
+    color_names = {1: "red", 2: "blue", 3: "green"}
     lines = []
     for ann in annotations:
-        position = _position_description(ann.center_x, ann.center_y, ann.radius)
-        parts = [f"Region {ann.region_id}: {position}"]
+        color = color_names.get(ann.region_id, "red")
+        parts = [f"{ann.region_id} ({color} circle)"]
         if ann.action:
             parts.append(f"Action: {ann.action}.")
         parts.append(ann.instruction)
@@ -150,15 +111,10 @@ def _build_eval_instruction(input: EditDesignInput) -> str:
 
 
 def _upload_image(image: Image.Image, project_id: str) -> str:
-    """Upload revised image to R2 and return the storage key.
-
-    Returns the R2 key (not a presigned URL) so the workflow stores a stable
-    reference.  The API layer presigns on every state query, giving iOS
-    always-fresh URLs.
-    """
+    """Upload revised image to R2 and return presigned URL."""
     import uuid
 
-    from app.utils.r2 import upload_object
+    from app.utils.r2 import generate_presigned_url, upload_object
 
     revision_id = uuid.uuid4().hex[:8]
     key = f"projects/{project_id}/revisions/{revision_id}.png"
@@ -166,7 +122,7 @@ def _upload_image(image: Image.Image, project_id: str) -> str:
     image.save(buf, format="PNG")
     logger.info("r2_upload_start", key=key, size_bytes=buf.tell())
     upload_object(key, buf.getvalue(), content_type="image/png")
-    return key
+    return generate_presigned_url(key)
 
 
 async def _bootstrap_chat(
@@ -226,15 +182,14 @@ async def _bootstrap_chat(
     edit_parts: list = []
 
     if input.annotations:
-        # Send the CLEAN base image with text-only coordinate descriptions.
-        # Previously we drew visual circles on the image, but Gemini sometimes
-        # reproduced those circles in its output. Text coordinates eliminate this.
+        annotated = draw_annotations(base_image, input.annotations)
         edit_template = _load_prompt("edit.txt")
         instructions = _build_edit_instructions(input.annotations)
+        # Escape curly braces in user-provided text to prevent str.format() KeyError
         edit_prompt = edit_template.format(
             edit_instructions=instructions.replace("{", "{{").replace("}", "}}")
         )
-        edit_parts.extend([base_image, edit_prompt])
+        edit_parts.extend([annotated, edit_prompt])
 
     if input.feedback:
         feedback_prompt = TEXT_FEEDBACK_TEMPLATE.format(
@@ -283,13 +238,13 @@ async def _continue_chat(
     message_parts: list = []
     if input.annotations:
         assert base_image is not None  # guaranteed: caller downloads when annotations present
-        # Send clean base image with text coordinates — no visual annotations
+        annotated = draw_annotations(base_image, input.annotations)
         edit_template = _load_prompt("edit.txt")
         instructions = _build_edit_instructions(input.annotations)
         edit_prompt = edit_template.format(
             edit_instructions=instructions.replace("{", "{{").replace("}", "}}")
         )
-        message_parts.extend([base_image, edit_prompt])
+        message_parts.extend([annotated, edit_prompt])
 
     if input.feedback:
         feedback_prompt = TEXT_FEEDBACK_TEMPLATE.format(
@@ -430,7 +385,6 @@ async def edit_design(input: EditDesignInput) -> EditDesignOutput:
 
     # Resolve R2 storage keys to presigned URLs (pass through existing URLs)
     from app.utils.r2 import resolve_url, resolve_urls
-    from app.utils.tracing import trace_thread
 
     resolved_input = input.model_copy(
         update={
@@ -448,8 +402,7 @@ async def edit_design(input: EditDesignInput) -> EditDesignOutput:
             # First call: bootstrap — always needs the base image
             base_image = await download_image(resolved_input.base_image_url)
             original_image = base_image
-            with trace_thread(input.project_id, "edit"):
-                chat, result_image = await _bootstrap_chat(resolved_input, base_image)
+            chat, result_image = await _bootstrap_chat(resolved_input, base_image)
 
             if result_image is None:
                 raise ApplicationError(
@@ -472,8 +425,7 @@ async def edit_design(input: EditDesignInput) -> EditDesignOutput:
                 else None
             )
             original_image = cont_base
-            with trace_thread(input.project_id, "edit"):
-                result_image, updated_history = await _continue_chat(resolved_input, cont_base)
+            result_image, updated_history = await _continue_chat(resolved_input, cont_base)
 
             if result_image is None:
                 raise ApplicationError(

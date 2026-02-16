@@ -1254,19 +1254,23 @@ class TestDownloadImages:
 class TestUploadImageGenerate:
     """Tests for _upload_image in generate.py."""
 
-    def test_upload_returns_storage_key(self):
-        """_upload_image returns an R2 key (not presigned URL) for stable storage."""
+    def test_upload_returns_presigned_url(self):
         from app.activities.generate import _upload_image
 
         img = _make_test_image()
 
-        with patch("app.utils.r2.upload_object") as mock_upload:
-            key = _upload_image(img, "proj-123", "option_0.png")
-            assert key == "projects/proj-123/generated/option_0.png"
-            assert not key.startswith("http")
+        with (
+            patch("app.utils.r2.upload_object") as mock_upload,
+            patch(
+                "app.utils.r2.generate_presigned_url",
+                return_value="https://r2.example.com/presigned/gen.png",
+            ),
+        ):
+            url = _upload_image(img, "proj-123", "option_0.png")
+            assert url == "https://r2.example.com/presigned/gen.png"
             mock_upload.assert_called_once()
             call_args = mock_upload.call_args[0]
-            assert call_args[0] == key
+            assert call_args[0] == "projects/proj-123/generated/option_0.png"
 
 
 class TestGenerateSingleOptionWithInspiration:

@@ -451,7 +451,7 @@ class AnnotationEditRequest(BaseModel):
 
 
 class TextFeedbackRequest(BaseModel):
-    feedback: str = Field(min_length=10, max_length=2000)
+    feedback: str = Field(min_length=10)
 
 
 class ActionResponse(BaseModel):
