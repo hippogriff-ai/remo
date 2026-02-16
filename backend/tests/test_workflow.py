@@ -1005,7 +1005,7 @@ class TestWorkflowHappyPath:
 
             # Approve from iteration
             await handle.signal(DesignProjectWorkflow.approve_design)
-            await asyncio.sleep(0.5)
+            await asyncio.sleep(5)  # 3s SSE grace period + activity execution
 
             # Shopping then completed — verify structure
             state = await handle.query(DesignProjectWorkflow.get_state)
@@ -1743,7 +1743,7 @@ class TestShoppingInput:
 
             # Approve → triggers shopping
             await handle.signal(DesignProjectWorkflow.approve_design)
-            await asyncio.sleep(1.0)
+            await asyncio.sleep(5)
 
             state = await handle.query(DesignProjectWorkflow.get_state)
             assert state.step == "completed"
@@ -1812,7 +1812,7 @@ class TestShoppingInput:
             await handle.signal(DesignProjectWorkflow.select_option, 0)
             await asyncio.sleep(0.5)
             await handle.signal(DesignProjectWorkflow.approve_design)
-            await asyncio.sleep(1.0)
+            await asyncio.sleep(5)
 
             state = await handle.query(DesignProjectWorkflow.get_state)
             assert state.step == "completed"
@@ -1866,7 +1866,7 @@ class TestShoppingInput:
             await asyncio.sleep(0.5)
 
             await handle.signal(DesignProjectWorkflow.approve_design)
-            await asyncio.sleep(0.5)
+            await asyncio.sleep(5)
 
             # Workflow reaches completed — analysis failure is non-fatal
             state = await handle.query(DesignProjectWorkflow.get_state)
@@ -2238,7 +2238,7 @@ class TestStartOver:
             assert state.step == "iteration"
 
             await handle.signal(DesignProjectWorkflow.approve_design)
-            await asyncio.sleep(1.0)
+            await asyncio.sleep(5)
 
             state = await handle.query(DesignProjectWorkflow.get_state)
             assert state.step == "completed"
@@ -2465,7 +2465,7 @@ class TestStartOver:
             await handle.signal(DesignProjectWorkflow.select_option, 0)
             await asyncio.sleep(0.5)
             await handle.signal(DesignProjectWorkflow.approve_design)
-            await asyncio.sleep(1.0)
+            await asyncio.sleep(5)
 
             state = await handle.query(DesignProjectWorkflow.get_state)
             assert state.step == "completed"
@@ -2522,7 +2522,7 @@ class TestStartOver:
 
             # Approve the design
             await handle.signal(DesignProjectWorkflow.approve_design)
-            await asyncio.sleep(1.0)
+            await asyncio.sleep(5)
 
             state = await handle.query(DesignProjectWorkflow.get_state)
             assert state.approved is True
@@ -2873,7 +2873,7 @@ class TestIterationPhase:
 
             # Approve from the explicit approval step
             await handle.signal(DesignProjectWorkflow.approve_design)
-            await asyncio.sleep(1.0)
+            await asyncio.sleep(5)
 
             state = await handle.query(DesignProjectWorkflow.get_state)
             assert state.step == "completed"
@@ -2994,7 +2994,7 @@ class TestApproval:
 
             # Approve immediately without any edits
             await handle.signal(DesignProjectWorkflow.approve_design)
-            await asyncio.sleep(1.0)
+            await asyncio.sleep(5)
 
             state = await handle.query(DesignProjectWorkflow.get_state)
             assert state.step == "completed"
@@ -3025,7 +3025,7 @@ class TestApproval:
             await handle.signal(DesignProjectWorkflow.select_option, 0)
             await asyncio.sleep(0.5)
             await handle.signal(DesignProjectWorkflow.approve_design)
-            await asyncio.sleep(1.0)
+            await asyncio.sleep(5)
 
             state = await handle.query(DesignProjectWorkflow.get_state)
             assert state.step == "completed"
@@ -3358,7 +3358,7 @@ class TestCancellation:
             handle = await _start_workflow(workflow_env, tq)
             await _advance_to_iteration(handle)
             await handle.signal(DesignProjectWorkflow.approve_design)
-            await asyncio.sleep(2.0)
+            await asyncio.sleep(5)
 
             state = await handle.query(DesignProjectWorkflow.get_state)
             assert state.step == "shopping"
@@ -3415,7 +3415,7 @@ class TestCancellation:
 
             # Approve → shopping → completed
             await handle.signal(DesignProjectWorkflow.approve_design)
-            await asyncio.sleep(1.0)
+            await asyncio.sleep(5)
 
             state = await handle.query(DesignProjectWorkflow.get_state)
             assert state.step == "completed"
@@ -3535,7 +3535,7 @@ class TestCompletionPurge:
             handle = await _start_workflow(workflow_env, tq)
             await _advance_to_iteration(handle)
             await handle.signal(DesignProjectWorkflow.approve_design)
-            await asyncio.sleep(1.0)
+            await asyncio.sleep(5)
 
             # Verify completed state before 24h timer fires
             state = await handle.query(DesignProjectWorkflow.get_state)
@@ -3563,7 +3563,7 @@ class TestCompletionPurge:
             handle = await _start_workflow(workflow_env, tq)
             await _advance_to_iteration(handle)
             await handle.signal(DesignProjectWorkflow.approve_design)
-            await asyncio.sleep(1.0)
+            await asyncio.sleep(5)
 
             state = await handle.query(DesignProjectWorkflow.get_state)
             assert state.step == "completed"
@@ -3752,7 +3752,7 @@ class TestErrorRecovery:
 
             # No active error → approve is accepted.
             await handle.signal(DesignProjectWorkflow.approve_design)
-            await asyncio.sleep(2.0)
+            await asyncio.sleep(5)
 
             state = await handle.query(DesignProjectWorkflow.get_state)
             assert state.approved is True
@@ -3817,7 +3817,7 @@ class TestErrorRecovery:
             handle = await _start_workflow(workflow_env, tq)
             await _advance_to_iteration(handle)
             await handle.signal(DesignProjectWorkflow.approve_design)
-            await asyncio.sleep(2.0)
+            await asyncio.sleep(5)
 
             state = await handle.query(DesignProjectWorkflow.get_state)
             assert state.step == "shopping"
@@ -3884,7 +3884,7 @@ class TestErrorRecovery:
             handle = await _start_workflow(workflow_env, tq)
             await _advance_to_iteration(handle)
             await handle.signal(DesignProjectWorkflow.approve_design)
-            await asyncio.sleep(2.0)
+            await asyncio.sleep(5)
 
             # Should be in shopping with error
             state = await handle.query(DesignProjectWorkflow.get_state)
@@ -4145,7 +4145,7 @@ class TestEagerAnalysis:
             await handle.signal(DesignProjectWorkflow.select_option, 0)
             await asyncio.sleep(0.5)
             await handle.signal(DesignProjectWorkflow.approve_design)
-            await asyncio.sleep(2.0)
+            await asyncio.sleep(5)
 
             state = await handle.query(DesignProjectWorkflow.get_state)
             assert state.step == "completed"
@@ -4234,7 +4234,7 @@ class TestStartOverDuringEdit:
             await handle.signal(DesignProjectWorkflow.select_option, 0)
             await asyncio.sleep(0.5)
             await handle.signal(DesignProjectWorkflow.approve_design)
-            await asyncio.sleep(2.0)
+            await asyncio.sleep(5)
 
             state = await handle.query(DesignProjectWorkflow.get_state)
             assert state.step == "completed"

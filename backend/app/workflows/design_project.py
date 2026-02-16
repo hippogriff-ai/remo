@@ -39,6 +39,7 @@ with workflow.unsafe.imports_passed_through():
         RevisionRecord,
         RoomAnalysis,
         RoomContext,
+        RoomDimensions,
         ScanData,
         WorkflowError,
         WorkflowState,
@@ -277,6 +278,14 @@ class DesignProjectWorkflow:
                 self._project_id,
             )
         self.step = "shopping"
+        # Brief grace period for SSE client to claim streaming ownership
+        # before the workflow falls through to the Temporal activity path.
+        # 3s is enough for iOS polling (~2s) + network round-trip.
+        with contextlib.suppress(TimeoutError):
+            await workflow.wait_condition(
+                lambda: self._shopping_streaming,
+                timeout=timedelta(seconds=3),
+            )
         while self.shopping_list is None:
             if self._shopping_streaming:
                 # SSE endpoint claimed ownership — wait for it to deliver the result
@@ -492,6 +501,11 @@ class DesignProjectWorkflow:
         self._shopping_streaming = True
 
     @workflow.signal
+    async def release_shopping_streaming(self) -> None:
+        """SSE endpoint releases ownership (stream failed or disconnected)."""
+        self._shopping_streaming = False
+
+    @workflow.signal
     async def receive_shopping_result(self, result: GenerateShoppingListOutput) -> None:
         """SSE endpoint delivers the completed shopping result."""
         self.shopping_list = result
@@ -656,10 +670,7 @@ class DesignProjectWorkflow:
         both are optional so intake can proceed with whatever is available.
         """
         has_analysis = self.room_analysis is not None
-        has_lidar = (
-            self.scan_data is not None
-            and self.scan_data.room_dimensions is not None
-        )
+        has_lidar = self.scan_data is not None and self.scan_data.room_dimensions is not None
         if not has_analysis and not has_lidar:
             return
 

@@ -52,6 +52,8 @@ backend/tests/fixtures/real_lidar_scan.json
 
 # Maestro screenshots (test artifacts)
 *.png
+# But keep the app icon
+!ios/Remo/Assets.xcassets/AppIcon.appiconset/remo-icon.png
 
 # Playwright MCP
 .playwright-mcp/

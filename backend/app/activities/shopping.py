@@ -889,7 +889,7 @@ async def search_all_items(
             )
             for item in items
         ]
-        return await asyncio.gather(*tasks)
+        return list(await asyncio.gather(*tasks))
 
 
 # === Step 3: Rubric-Based Scoring ===

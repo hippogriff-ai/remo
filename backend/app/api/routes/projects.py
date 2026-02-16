@@ -949,7 +949,7 @@ async def stream_shopping(project_id: str, request: Request):
                     )
             yield chunk
 
-        # Signal workflow with the complete result
+        # Signal workflow with the complete result, or release ownership
         if final_result is not None:
             err = await _signal_workflow(
                 request,
@@ -963,6 +963,14 @@ async def stream_shopping(project_id: str, request: Request):
                     project_id=project_id,
                     error_status=getattr(err, "status_code", None),
                 )
+        else:
+            # Stream ended without a done event (error or disconnect) —
+            # release ownership so the workflow falls back to the activity.
+            await _signal_workflow(
+                request,
+                project_id,
+                DesignProjectWorkflow.release_shopping_streaming,
+            )
 
     from app.utils.tracing import trace_thread
 

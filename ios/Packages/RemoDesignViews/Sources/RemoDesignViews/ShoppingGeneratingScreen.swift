@@ -15,6 +15,7 @@ public struct ShoppingGeneratingScreen: View {
     @State private var streamedItems: [ProductMatch] = []
     @State private var receivedAnyEvent = false
     @State private var receivedDoneEvent = false
+    @State private var receivedTerminalError = false
 
     public init(projectState: ProjectState, client: any WorkflowClientProtocol) {
         self.projectState = projectState
@@ -86,15 +87,17 @@ public struct ShoppingGeneratingScreen: View {
                     receivedAnyEvent = true
                     handleEvent(event)
                 }
-                // Stream ended — fall back to polling if we never got a done event
-                if !receivedDoneEvent {
+                // Stream ended — fall back to polling if we never got a done
+                // event and no terminal error was already surfaced.
+                if !receivedDoneEvent && !receivedTerminalError {
                     await fallbackToPolling(projectId: projectId)
                 }
             } catch is CancellationError {
                 // View disappeared — expected
             } catch {
                 // SSE failed — fall back to polling if stream hadn't completed
-                if !receivedDoneEvent {
+                // and no terminal error was already surfaced.
+                if !receivedDoneEvent && !receivedTerminalError {
                     await fallbackToPolling(projectId: projectId)
                 } else {
                     let apiError = error as? APIError
@@ -130,6 +133,7 @@ public struct ShoppingGeneratingScreen: View {
             }
 
         case .error(let message):
+            receivedTerminalError = true
             projectState.error = WorkflowError(message: message, retryable: true)
 
         case .done(let output):

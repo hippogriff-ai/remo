@@ -282,6 +282,8 @@ public struct IntakeChatScreen: View {
         isSending = true
         defer { isSending = false }
 
+        // Capture count BEFORE optimistic append so rollback can remove the
+        // user message too if the request never reached the server.
         let messageCountBefore = projectState.chatMessages.count
         projectState.chatMessages.append(ChatMessage(role: "user", content: trimmed))
         isInputFocused = false
@@ -289,10 +291,13 @@ public struct IntakeChatScreen: View {
 
         let history = Array(projectState.chatMessages.suffix(20))
 
+        // Declared outside `do` so the `catch` block can tell whether the
+        // server already consumed the message (deltas arrived) or not.
+        var receivedAnyDelta = false
+
         do {
             // Try streaming first for progressive text rendering
             var receivedDone = false
-            var receivedAnyDelta = false
             var lastDeltaTime: ContinuousClock.Instant = .now
             let stream = client.streamIntakeMessage(
                 projectId: projectId,
@@ -368,23 +373,34 @@ public struct IntakeChatScreen: View {
         } catch is CancellationError {
             // View disappeared — do nothing
         } catch {
-            // Roll back only messages added during this send attempt
-            if projectState.chatMessages.count > messageCountBefore {
-                projectState.chatMessages.removeSubrange(messageCountBefore...)
-            }
-
-            // "wrong_step" means the workflow advanced past intake — refresh state
-            if case .httpError(409, let response) = error as? APIError,
-               response.error == "wrong_step" {
-                if let newState = try? await client.getState(projectId: projectId) {
-                    projectState.apply(newState)
-                    return
+            // If the server already processed the message (deltas arrived),
+            // keep the user message but remove any partial assistant content.
+            // Otherwise, roll back everything including the optimistic user message.
+            if receivedAnyDelta {
+                // Server consumed the message — keep user turn, remove partial assistant
+                let assistantStart = messageCountBefore + 1  // after user msg
+                if projectState.chatMessages.count > assistantStart {
+                    projectState.chatMessages.removeSubrange(assistantStart...)
                 }
-            }
+                errorMessage = error.localizedDescription
+            } else {
+                // Server never saw the message — full rollback
+                if projectState.chatMessages.count > messageCountBefore {
+                    projectState.chatMessages.removeSubrange(messageCountBefore...)
+                }
+                inputText = trimmed
+                selectedQuickReply = nil
 
-            inputText = trimmed
-            selectedQuickReply = nil
-            errorMessage = error.localizedDescription
+                // "wrong_step" means the workflow advanced past intake — refresh state
+                if case .httpError(409, let response) = error as? APIError,
+                   response.error == "wrong_step" {
+                    if let newState = try? await client.getState(projectId: projectId) {
+                        projectState.apply(newState)
+                        return
+                    }
+                }
+                errorMessage = error.localizedDescription
+            }
         }
     }
 
