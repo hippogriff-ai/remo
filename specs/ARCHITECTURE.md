@@ -18,7 +18,7 @@ graph TB
 
         subgraph Worker["Temporal Worker"]
             WF["DesignProjectWorkflow"]
-            MockStubs["Mock Activities (P0)"]
+            Activities["Real Activities<br/>(configurable via<br/>USE_MOCK_ACTIVITIES)"]
             Purge["purge_project_data"]
         end
     end
@@ -30,29 +30,23 @@ graph TB
     subgraph External["External Services"]
         R2["Cloudflare R2<br/>(images)"]
         PG["Railway PostgreSQL<br/>(metadata)"]
-        Gemini["Gemini 3 Pro Image<br/>(T2: generation + editing)"]
-        Claude["Claude Opus 4.6<br/>(T3: intake + shopping)"]
-        Exa["Exa API<br/>(T3: product search)"]
+        Gemini["Gemini 3 Pro Image<br/>(generation + editing)"]
+        Claude["Claude Opus 4.6<br/>(intake + room analysis + shopping)"]
+        Exa["Exa API<br/>(product search)"]
     end
 
-    UI -->|"HTTPS polling"| Routes
+    UI -->|"HTTPS polling + SSE"| Routes
     Routes -->|"signals / queries"| TaskQueue
     TaskQueue -->|"dispatches"| WF
-    WF -->|"execute_activity"| MockStubs
+    WF -->|"execute_activity"| Activities
     WF -->|"execute_activity"| Purge
     Routes -->|"sync call"| Validation
+    Activities -->|"API calls"| Gemini
+    Activities -->|"API calls"| Claude
+    Activities -->|"API calls"| Exa
     Purge -->|"delete_prefix"| R2
     Routes -->|"upload / read"| R2
     Routes -->|"CRUD"| PG
-
-    MockStubs -.->|"P2: replaced by"| Gemini
-    MockStubs -.->|"P2: replaced by"| Claude
-    MockStubs -.->|"P2: replaced by"| Exa
-
-    style MockStubs stroke-dasharray: 5 5
-    style Gemini stroke-dasharray: 5 5
-    style Claude stroke-dasharray: 5 5
-    style Exa stroke-dasharray: 5 5
 ```
 
 ## Workflow State Machine
@@ -64,7 +58,8 @@ stateDiagram-v2
     [*] --> photos
 
     photos --> scan : 2+ room photos added
-    scan --> intake : complete_scan / skip_scan
+    scan --> analyzing : complete_scan / skip_scan
+    analyzing --> intake : room analysis complete (90s max)
 
     state "Restart Loop" as loop {
         intake --> generation : complete_intake / skip_intake
@@ -113,9 +108,12 @@ All interactions with the workflow happen via Temporal signals (fire-and-forget)
 
 ```mermaid
 graph LR
-    subgraph Signals["Signals (12)"]
+    subgraph Signals["Signals (17)"]
         direction TB
         S1["add_photo(PhotoData)"]
+        S1a["remove_photo(photo_id)"]
+        S1b["update_photo_note(photo_id, note)"]
+        S1c["confirm_photos()"]
         S2["complete_scan(ScanData)"]
         S3["skip_scan()"]
         S4["complete_intake(DesignBrief)"]
@@ -127,6 +125,8 @@ graph LR
         S10["start_over()"]
         S11["retry_failed_step()"]
         S12["cancel_project()"]
+        S13["handle_shopping_streaming()"]
+        S14["receive_shopping_result(result)"]
     end
 
     subgraph Query["Query (1)"]
@@ -137,6 +137,7 @@ graph LR
         direction TB
         P["photos"]
         SC["scan"]
+        AN["analyzing"]
         I["intake"]
         G["generation"]
         SE["selection"]
@@ -174,6 +175,9 @@ graph LR
 
     subgraph Photos["Photos Phase"]
         POST_photo["POST /projects/{id}/photos"]
+        DELETE_photo["DELETE /projects/{id}/photos/{photo_id}"]
+        PATCH_note["PATCH /projects/{id}/photos/{photo_id}/note"]
+        POST_confirm["POST /projects/{id}/photos/confirm"]
     end
 
     subgraph Scan["Scan Phase"]
@@ -182,7 +186,10 @@ graph LR
     end
 
     subgraph Intake["Intake Phase"]
-        POST_intake["POST /projects/{id}/intake"]
+        POST_intake_start["POST /projects/{id}/intake/start"]
+        POST_intake_msg["POST /projects/{id}/intake/message"]
+        POST_intake_stream["POST /projects/{id}/intake/message/stream (SSE)"]
+        POST_intake_confirm["POST /projects/{id}/intake/confirm"]
         POST_skip_intake["POST /projects/{id}/intake/skip"]
     end
 
@@ -194,6 +201,10 @@ graph LR
         POST_annotate["POST /projects/{id}/iterate/annotate"]
         POST_feedback["POST /projects/{id}/iterate/feedback"]
         POST_approve["POST /projects/{id}/approve"]
+    end
+
+    subgraph Shopping["Shopping Phase"]
+        GET_shop_stream["GET /projects/{id}/shopping/stream (SSE)"]
     end
 
     subgraph Control["Control"]
@@ -328,7 +339,7 @@ graph TD
         Photo["RemoPhotoUpload<br/>PhotoUploadScreen<br/>CameraView"]
         Chat["RemoChatUI<br/>IntakeChatScreen<br/>ChatBubble, QuickReplyChips"]
         Annot["RemoAnnotation<br/>IterationScreen<br/>AnnotationCanvas"]
-        Design["RemoDesignViews<br/>Selection, Generating,<br/>Approval, Output"]
+        Design["RemoDesignViews<br/>Selection, Generating,<br/>Analyzing, Approval, Output"]
         Shop["RemoShoppingList<br/>ShoppingListScreen<br/>ProductCard"]
         LiDAR["RemoLiDAR<br/>LiDARScanScreen"]
     end
@@ -368,14 +379,16 @@ stateDiagram-v2
         [*] --> PhotoUploadScreen
 
         PhotoUploadScreen --> LiDARScanScreen : 2+ room photos
-        LiDARScanScreen --> IntakeChatScreen : scan / skip
+        LiDARScanScreen --> AnalyzingRoomScreen : scan / skip
+        AnalyzingRoomScreen --> IntakeChatScreen : analysis complete (90s max)
         IntakeChatScreen --> GeneratingScreen : confirm brief / skip
         GeneratingScreen --> DesignSelectionScreen : poll detects selection ready
         DesignSelectionScreen --> IterationScreen : select option
         IterationScreen --> IterationScreen : submit edit (< 5 rounds)
         IterationScreen --> ApprovalScreen : 5 rounds reached
-        IterationScreen --> OutputScreen : approve during iteration
-        ApprovalScreen --> OutputScreen : approve
+        IterationScreen --> ShoppingGeneratingScreen : approve during iteration
+        ApprovalScreen --> ShoppingGeneratingScreen : approve
+        ShoppingGeneratingScreen --> OutputScreen : shopping complete
         OutputScreen --> ShoppingListScreen : view shopping (sheet)
 
         IntakeChatScreen --> IntakeChatScreen : start_over resets here
@@ -386,7 +399,7 @@ stateDiagram-v2
 
 ### Data Flow: Polling + State Update
 
-Shows how backend state flows through the system. The `PollingManager` polls `GET /projects/{id}`, the `WorkflowState` DTO is decoded, `ProjectState.apply()` maps it into the `@Observable` state, and SwiftUI views reactively update.
+Shows how backend state flows through the system. For async steps (generation, analyzing), `PollingManager` polls `GET /projects/{id}` every 2s. For intake chat and shopping, SSE streaming delivers real-time deltas. The `WorkflowState` DTO is decoded, `ProjectState.apply()` maps it into the `@Observable` state, and SwiftUI views reactively update.
 
 ```mermaid
 sequenceDiagram
@@ -421,11 +434,11 @@ sequenceDiagram
 
 ### Protocol Injection Architecture
 
-All views depend on `WorkflowClientProtocol`, never a concrete implementation. In P1, `MockWorkflowClient` provides hardcoded responses. In P2, `RealWorkflowClient` makes actual HTTP calls. The swap happens in one line in `RemoApp`.
+All views depend on `WorkflowClientProtocol`, never a concrete implementation. `RealWorkflowClient` makes HTTP calls (+ SSE streaming) to the FastAPI backend. `MockWorkflowClient` provides hardcoded responses for SwiftUI previews and tests. The swap happens in one line in `RemoApp`.
 
 ```mermaid
 graph LR
-    subgraph Views["SwiftUI Views (10 screens)"]
+    subgraph Views["SwiftUI Views (12 screens)"]
         direction TB
         V1["PhotoUploadScreen"]
         V2["IntakeChatScreen"]
@@ -439,22 +452,21 @@ graph LR
     end
 
     subgraph Implementations["Concrete Clients"]
-        Mock["MockWorkflowClient<br/>(in-memory state,<br/>hardcoded responses)"]
-        Real["RealWorkflowClient<br/>(HTTP to FastAPI,<br/>multipart upload)"]
+        Real["RealWorkflowClient<br/>(HTTP + SSE to FastAPI,<br/>multipart upload)"]
+        Mock["MockWorkflowClient<br/>(in-memory state,<br/>previews + tests)"]
     end
 
     Views -->|"depends on"| P
-    Mock -->|"conforms to"| P
     Real -->|"conforms to"| P
+    Mock -->|"conforms to"| P
 
     subgraph App["RemoApp (entry point)"]
-        Swap["let client: any WorkflowClientProtocol<br/>= MockWorkflowClient()  // P1<br/>// = RealWorkflowClient(baseURL: ...)  // P2"]
+        Swap["let client: any WorkflowClientProtocol<br/>= RealWorkflowClient(baseURL: backendURL)"]
     end
 
     App -->|"injects"| Views
 
-    style Mock stroke-dasharray: 0
-    style Real stroke-dasharray: 5 5
+    style Mock stroke-dasharray: 5 5
 ```
 
 ### Error Handling Flow
