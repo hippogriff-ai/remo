@@ -344,8 +344,8 @@ class TestEditInstructions:
         assert "Region 2:" in result
         assert "Region 3:" in result
         # Verify position descriptions differ based on coordinates
-        assert "left side" in result   # 0.3 → left
-        assert "center" in result      # 0.6 → center
+        assert "left side" in result  # 0.3 → left
+        assert "center" in result  # 0.6 → center
         assert "right side" in result  # 0.9 → right
 
     def test_build_instructions_action_and_avoid_only(self):

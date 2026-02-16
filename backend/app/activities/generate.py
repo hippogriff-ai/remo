@@ -329,9 +329,7 @@ async def _generate_single_option(
         contents.append("ROOM PHOTOS (these show the actual room to redesign):")
         contents.extend(room_images)
     if inspiration_images:
-        contents.append(
-            "INSPIRATION PHOTOS (style reference only — do NOT redesign these rooms):"
-        )
+        contents.append("INSPIRATION PHOTOS (style reference only — do NOT redesign these rooms):")
         contents.extend(inspiration_images)
     contents.append(prompt)
 
