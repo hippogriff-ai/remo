@@ -115,20 +115,25 @@ public struct LiDARScanScreen: View {
 
                     Spacer()
 
-                    Button {
-                        sessionRef.stop()
-                    } label: {
-                        Label("Done Scanning", systemImage: "checkmark.circle.fill")
-                            .font(.headline)
-                            .frame(maxWidth: .infinity)
+                    // Bottom bar: material backdrop extends to safe area edge
+                    // so the Done button never overlaps the RoomPlan 3D rendering
+                    VStack(spacing: 0) {
+                        Button {
+                            sessionRef.stop()
+                        } label: {
+                            Label("Done Scanning", systemImage: "checkmark.circle.fill")
+                                .font(.headline)
+                                .frame(maxWidth: .infinity)
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .controlSize(.large)
+                        .tint(.green)
+                        .padding(.horizontal, 40)
+                        .padding(.top, 16)
+                        .padding(.bottom, 8)
                     }
-                    .buttonStyle(.borderedProminent)
-                    .controlSize(.large)
-                    .tint(.green)
-                    .padding(.horizontal, 40)
-                    .padding(.vertical, 16)
                     .frame(maxWidth: .infinity)
-                    .background(.ultraThinMaterial)
+                    .background(.ultraThinMaterial, ignoresSafeAreaEdges: .bottom)
                 }
             }
         }

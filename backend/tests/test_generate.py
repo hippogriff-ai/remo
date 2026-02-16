@@ -1346,11 +1346,11 @@ class TestGenerateSingleOptionWithInspiration:
                 "test prompt", room_images, inspiration_images, 0
             )
             assert isinstance(result, Image.Image)
-            # Verify content includes both room + inspiration images
+            # Verify content includes both room + inspiration images with labels
             call_args = mock_client.models.generate_content.call_args
             contents = call_args[1]["contents"]
-            # Should be: room image + inspiration image + text prompt = 3 items
-            assert len(contents) == 3
+            # room label + room img + insp label + insp img + prompt = 5
+            assert len(contents) == 5
 
 
 class TestImageCountTruncation:

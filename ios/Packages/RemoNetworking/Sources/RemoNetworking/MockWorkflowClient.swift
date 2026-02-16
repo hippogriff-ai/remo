@@ -143,7 +143,7 @@ public actor MockWorkflowClient: WorkflowClientProtocol {
         )
     }
 
-    public func sendIntakeMessage(projectId: String, message: String) async throws -> IntakeChatOutput {
+    public func sendIntakeMessage(projectId: String, message: String, conversationHistory: [ChatMessage], mode: String?) async throws -> IntakeChatOutput {
         try await simulateDelay()
         guard states[projectId] != nil else { throw notFound() }
         var messages = intakeMessages[projectId] ?? []

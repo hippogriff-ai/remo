@@ -3,11 +3,20 @@ import SwiftUI
 import RoomPlan
 
 /// Holds a reference to the active capture session so SwiftUI can call stop().
+/// Tracks whether stop() has already been called to prevent double-stop crashes
+/// in RoomPlan (dismantleUIView fires after Done button already stopped the session).
 class CaptureSessionRef {
     var session: RoomCaptureSession?
+    private var hasStopped = false
 
     func stop() {
+        guard !hasStopped else { return }
+        hasStopped = true
         session?.stop()
+    }
+
+    func reset() {
+        hasStopped = false
     }
 }
 
@@ -24,6 +33,7 @@ struct RoomCaptureViewWrapper: UIViewRepresentable {
         let view = RoomCaptureView(frame: .zero)
         view.captureSession.delegate = context.coordinator
         sessionRef.session = view.captureSession
+        sessionRef.reset()
         view.captureSession.run(configuration: RoomCaptureSession.Configuration())
         return view
     }
