@@ -20,7 +20,7 @@ public protocol WorkflowClientProtocol: Sendable {
 
     // Intake
     func startIntake(projectId: String, mode: String) async throws -> IntakeChatOutput
-    func sendIntakeMessage(projectId: String, message: String) async throws -> IntakeChatOutput
+    func sendIntakeMessage(projectId: String, message: String, conversationHistory: [ChatMessage], mode: String?) async throws -> IntakeChatOutput
     func confirmIntake(projectId: String, brief: DesignBrief) async throws
     func skipIntake(projectId: String) async throws
 

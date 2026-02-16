@@ -124,23 +124,23 @@ final class MockClientTests: XCTestCase {
         XCTAssertNotNil(start.options)
         XCTAssertEqual(start.progress, "Question 1 of 5")
 
-        let msg1 = try await client.sendIntakeMessage(projectId: id, message: "living room")
+        let msg1 = try await client.sendIntakeMessage(projectId: id, message: "living room", conversationHistory: [], mode: "full")
         XCTAssertNotNil(msg1.options)
         XCTAssertEqual(msg1.progress, "Question 2 of 5")
 
-        let msg2 = try await client.sendIntakeMessage(projectId: id, message: "modern")
+        let msg2 = try await client.sendIntakeMessage(projectId: id, message: "modern", conversationHistory: [], mode: "full")
         XCTAssertNotNil(msg2.options) // Budget question
         XCTAssertEqual(msg2.progress, "Question 3 of 5")
 
-        let msg3 = try await client.sendIntakeMessage(projectId: id, message: "Under $1,000")
+        let msg3 = try await client.sendIntakeMessage(projectId: id, message: "Under $1,000", conversationHistory: [], mode: "full")
         XCTAssertTrue(msg3.isOpenEnded) // Color preferences
         XCTAssertEqual(msg3.progress, "Question 4 of 5")
 
-        let msg4 = try await client.sendIntakeMessage(projectId: id, message: "I like warm tones")
+        let msg4 = try await client.sendIntakeMessage(projectId: id, message: "I like warm tones", conversationHistory: [], mode: "full")
         XCTAssertTrue(msg4.isOpenEnded) // Furniture to keep
         XCTAssertEqual(msg4.progress, "Question 5 of 5")
 
-        let msg5 = try await client.sendIntakeMessage(projectId: id, message: "Keep the bookshelf")
+        let msg5 = try await client.sendIntakeMessage(projectId: id, message: "Keep the bookshelf", conversationHistory: [], mode: "full")
         XCTAssertTrue(msg5.isSummary)
         XCTAssertNotNil(msg5.partialBrief)
     }

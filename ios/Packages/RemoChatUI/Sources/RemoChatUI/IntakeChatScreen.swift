@@ -157,27 +157,25 @@ public struct IntakeChatScreen: View {
                                 Task { await sendMessage(option.label) }
                             }
 
-                            // When the question also accepts free text, offer a chip to dismiss options
-                            if projectState.currentIntakeOutput?.isOpenEnded == true {
-                                Button {
-                                    selectedQuickReply = -1
-                                    isInputFocused = true
-                                } label: {
-                                    HStack {
-                                        Image(systemName: "keyboard")
-                                            .frame(width: 24, height: 24)
-                                        Text("Type my own answer...")
-                                            .font(.subheadline)
-                                        Spacer()
-                                    }
-                                    .foregroundStyle(.secondary)
-                                    .padding(.horizontal, 12)
-                                    .padding(.vertical, 10)
-                                    .background(Color.secondary.opacity(0.08))
-                                    .clipShape(RoundedRectangle(cornerRadius: 12))
+                            // Always offer free-text escape hatch — none of the options may fit
+                            Button {
+                                selectedQuickReply = -1
+                                isInputFocused = true
+                            } label: {
+                                HStack {
+                                    Image(systemName: "keyboard")
+                                        .frame(width: 24, height: 24)
+                                    Text("Type my own answer...")
+                                        .font(.subheadline)
+                                    Spacer()
                                 }
-                                .buttonStyle(.plain)
+                                .foregroundStyle(.secondary)
+                                .padding(.horizontal, 12)
+                                .padding(.vertical, 10)
+                                .background(Color.secondary.opacity(0.08))
+                                .clipShape(RoundedRectangle(cornerRadius: 12))
                             }
+                            .buttonStyle(.plain)
                         }
 
                         // Typing indicator
@@ -246,6 +244,7 @@ public struct IntakeChatScreen: View {
     }
 
     private var shouldShowTextInput: Bool {
+        if selectedQuickReply == -1 { return true }
         let output = projectState.currentIntakeOutput
         return output?.isOpenEnded == true || (output?.options == nil && !projectState.chatMessages.isEmpty && output?.isSummary != true)
     }
@@ -283,7 +282,7 @@ public struct IntakeChatScreen: View {
         inputText = ""
 
         do {
-            let output = try await client.sendIntakeMessage(projectId: projectId, message: trimmed)
+            let output = try await client.sendIntakeMessage(projectId: projectId, message: trimmed, conversationHistory: projectState.chatMessages, mode: selectedMode)
             projectState.chatMessages.append(ChatMessage(role: "assistant", content: output.agentMessage))
             projectState.currentIntakeOutput = output
         } catch {
@@ -293,6 +292,16 @@ public struct IntakeChatScreen: View {
                projectState.chatMessages[lastIndex].content == trimmed {
                 projectState.chatMessages.removeLast()
             }
+
+            // "wrong_step" means the workflow advanced past intake — refresh state
+            // so the router navigates to the correct screen instead of showing a dead-end error
+            if case .httpError(409, let response) = error as? APIError, response.error == "wrong_step" {
+                if let newState = try? await client.getState(projectId: projectId) {
+                    projectState.apply(newState)
+                    return
+                }
+            }
+
             inputText = trimmed
             selectedQuickReply = nil
             errorMessage = error.localizedDescription
@@ -307,10 +316,25 @@ public struct IntakeChatScreen: View {
         }
         do {
             try await client.confirmIntake(projectId: projectId, brief: brief)
+        } catch {
+            // 409 means the workflow already advanced (signal was received earlier)
+            // — fall through to state refresh below
+            if case .httpError(409, _) = error as? APIError {
+                // Signal already processed — continue to refresh
+            } else {
+                errorMessage = error.localizedDescription
+                return
+            }
+        }
+        // Always refresh state after confirm — the workflow may have advanced
+        // through generation quickly, so we need the latest step for navigation
+        do {
             let newState = try await client.getState(projectId: projectId)
             projectState.apply(newState)
         } catch {
-            errorMessage = error.localizedDescription
+            // Signal was sent; force step forward so the router navigates away
+            // even if the state refresh fails
+            projectState.step = .generation
         }
     }
 

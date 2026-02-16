@@ -584,22 +584,28 @@ def build_messages(
     if is_first_turn and has_photos:
         content: list[dict[str, Any]] = []
 
-        # Room photos first
-        for url in room_photo_urls or []:
-            content.append({"type": "image", "source": {"type": "url", "url": url}})
+        # Room photos first — labeled so Claude doesn't confuse with inspiration
+        if room_photo_urls:
+            content.append({"type": "text", "text": "[Room photos — the actual room to redesign:]"})
+            for url in room_photo_urls:
+                content.append({"type": "image", "source": {"type": "url", "url": url}})
 
         # Inspiration photos with user notes as context
-        for i, url in enumerate(inspiration_photo_urls or []):
-            content.append({"type": "image", "source": {"type": "url", "url": url}})
-            # Attach user note if available
-            note = _get_inspiration_note(i, inspiration_notes)
-            if note:
-                content.append(
-                    {
-                        "type": "text",
-                        "text": f"[Inspiration photo {i + 1} note: {note}]",
-                    }
-                )
+        if inspiration_photo_urls:
+            content.append(
+                {"type": "text", "text": "[Inspiration photos — style references only:]"}
+            )
+            for i, url in enumerate(inspiration_photo_urls):
+                content.append({"type": "image", "source": {"type": "url", "url": url}})
+                # Attach user note if available
+                note = _get_inspiration_note(i, inspiration_notes)
+                if note:
+                    content.append(
+                        {
+                            "type": "text",
+                            "text": f"[Inspiration photo {i + 1} note: {note}]",
+                        }
+                    )
 
         content.append({"type": "text", "text": user_message})
         messages.append({"role": "user", "content": content})

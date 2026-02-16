@@ -212,7 +212,7 @@ private actor FlakyClient: WorkflowClientProtocol {
     func startIntake(projectId: String, mode: String) async throws -> IntakeChatOutput {
         IntakeChatOutput(agentMessage: "")
     }
-    func sendIntakeMessage(projectId: String, message: String) async throws -> IntakeChatOutput {
+    func sendIntakeMessage(projectId: String, message: String, conversationHistory: [ChatMessage], mode: String?) async throws -> IntakeChatOutput {
         IntakeChatOutput(agentMessage: "")
     }
     func confirmIntake(projectId: String, brief: DesignBrief) async throws {}
@@ -258,7 +258,7 @@ private actor IncrementingClient: WorkflowClientProtocol {
     func uploadScan(projectId: String, scanData: [String: Any]) async throws {}
     func skipScan(projectId: String) async throws {}
     func startIntake(projectId: String, mode: String) async throws -> IntakeChatOutput { IntakeChatOutput(agentMessage: "") }
-    func sendIntakeMessage(projectId: String, message: String) async throws -> IntakeChatOutput { IntakeChatOutput(agentMessage: "") }
+    func sendIntakeMessage(projectId: String, message: String, conversationHistory: [ChatMessage], mode: String?) async throws -> IntakeChatOutput { IntakeChatOutput(agentMessage: "") }
     func confirmIntake(projectId: String, brief: DesignBrief) async throws {}
     func skipIntake(projectId: String) async throws {}
     func selectOption(projectId: String, index: Int) async throws {}
@@ -299,7 +299,7 @@ private actor FlakyConditionClient: WorkflowClientProtocol {
     func uploadScan(projectId: String, scanData: [String: Any]) async throws {}
     func skipScan(projectId: String) async throws {}
     func startIntake(projectId: String, mode: String) async throws -> IntakeChatOutput { IntakeChatOutput(agentMessage: "") }
-    func sendIntakeMessage(projectId: String, message: String) async throws -> IntakeChatOutput { IntakeChatOutput(agentMessage: "") }
+    func sendIntakeMessage(projectId: String, message: String, conversationHistory: [ChatMessage], mode: String?) async throws -> IntakeChatOutput { IntakeChatOutput(agentMessage: "") }
     func confirmIntake(projectId: String, brief: DesignBrief) async throws {}
     func skipIntake(projectId: String) async throws {}
     func selectOption(projectId: String, index: Int) async throws {}

@@ -322,8 +322,18 @@ async def _generate_single_option(
     client = get_client()
     config = image_config or IMAGE_CONFIG
 
-    # Build content: room photos + inspiration photos + text prompt
-    contents: list = [*room_images, *inspiration_images, prompt]
+    # Build content: labeled room photos + labeled inspiration photos + text prompt.
+    # Labels prevent Gemini from confusing inspiration images for the actual room.
+    contents: list = []
+    if room_images:
+        contents.append("ROOM PHOTOS (these show the actual room to redesign):")
+        contents.extend(room_images)
+    if inspiration_images:
+        contents.append(
+            "INSPIRATION PHOTOS (style reference only — do NOT redesign these rooms):"
+        )
+        contents.extend(inspiration_images)
+    contents.append(prompt)
 
     logger.info(
         "gemini_generate_start",
