@@ -344,12 +344,20 @@ public struct IntakeChatScreen: View {
                     projectState.currentIntakeOutput = output
                     receivedDone = true
                 case .error(let message):
-                    // Remove any partial streamed content
-                    if projectState.chatMessages.count > messageCountBefore {
-                        projectState.chatMessages.removeSubrange(messageCountBefore...)
+                    if receivedAnyDelta {
+                        // Server consumed the prompt — keep user turn, remove partial assistant
+                        let assistantStart = messageCountBefore + 1
+                        if projectState.chatMessages.count > assistantStart {
+                            projectState.chatMessages.removeSubrange(assistantStart...)
+                        }
+                    } else {
+                        // Server never processed the prompt — full rollback
+                        if projectState.chatMessages.count > messageCountBefore {
+                            projectState.chatMessages.removeSubrange(messageCountBefore...)
+                        }
+                        inputText = trimmed
+                        selectedQuickReply = nil
                     }
-                    inputText = trimmed
-                    selectedQuickReply = nil
                     errorMessage = message
                     return
                 }
