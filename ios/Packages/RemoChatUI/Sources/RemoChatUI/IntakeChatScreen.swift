@@ -282,7 +282,9 @@ public struct IntakeChatScreen: View {
         inputText = ""
 
         do {
-            let output = try await client.sendIntakeMessage(projectId: projectId, message: trimmed, conversationHistory: projectState.chatMessages, mode: selectedMode)
+            // API contract caps conversation_history at 20 items; send only the tail
+            let history = Array(projectState.chatMessages.suffix(20))
+            let output = try await client.sendIntakeMessage(projectId: projectId, message: trimmed, conversationHistory: history, mode: selectedMode)
             projectState.chatMessages.append(ChatMessage(role: "assistant", content: output.agentMessage))
             projectState.currentIntakeOutput = output
         } catch {

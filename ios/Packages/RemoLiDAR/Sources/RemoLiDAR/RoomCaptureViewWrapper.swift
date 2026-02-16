@@ -41,11 +41,16 @@ struct RoomCaptureViewWrapper: UIViewRepresentable {
     func updateUIView(_ uiView: RoomCaptureView, context: Context) {}
 
     static func dismantleUIView(_ uiView: RoomCaptureView, coordinator: RoomCaptureCoordinator) {
-        uiView.captureSession.stop()
+        // Use the guarded sessionRef instead of calling stop() directly.
+        // Done/Cancel/timeout paths may have already stopped the session;
+        // CaptureSessionRef.stop() is a no-op if already stopped.
+        coordinator.sessionRef?.stop()
     }
 
     func makeCoordinator() -> RoomCaptureCoordinator {
-        RoomCaptureCoordinator(onComplete: onComplete)
+        let coordinator = RoomCaptureCoordinator(onComplete: onComplete)
+        coordinator.sessionRef = sessionRef
+        return coordinator
     }
 }
 #endif
