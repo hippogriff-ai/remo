@@ -978,7 +978,14 @@ async def stream_shopping(project_id: str, request: Request):
                         project_id=project_id,
                         error_status=getattr(err, "status_code", None),
                     )
-                    yield "event: error\ndata: Failed to persist shopping result\n\n"
+                    # Release ownership so workflow falls back to activity
+                    await _signal_workflow(
+                        request,
+                        project_id,
+                        DesignProjectWorkflow.release_shopping_streaming,
+                    )
+                    # JSON payload so iOS ShoppingSSELineParser can parse it
+                    yield 'event: error\ndata: {"error": "Failed to persist shopping result"}\n\n'
                 else:
                     # Persistence succeeded — now safe to send done to client
                     yield done_chunk  # type: ignore[arg-type]
