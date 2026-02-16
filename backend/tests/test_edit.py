@@ -1422,6 +1422,77 @@ class TestBuildChangelog:
         assert "pendant" in result
         assert "shelf" in result
 
+    def test_extracts_additional_feedback(self):
+        """_build_changelog detects 'Additional feedback:' from combined turns."""
+        from google.genai import types
+
+        from app.activities.edit import _build_changelog
+
+        # When both annotations and feedback are sent, feedback is appended as
+        # "Additional feedback: ..." — changelog should capture this.
+        edit_text = (
+            "Region 1: left area (30% from left, 50% from top, medium area)\n"
+            "  ACTION: Replace\n"
+            "  INSTRUCTION: Replace with a modern armchair\n"
+            "\nAdditional feedback: Make it blue and cozy"
+        )
+        history = [
+            types.Content(role="user", parts=[types.Part(text="context")]),
+            types.Content(role="model", parts=[types.Part(text="ok")]),
+            types.Content(role="user", parts=[types.Part(text=edit_text)]),
+            types.Content(role="model", parts=[types.Part(text="done")]),
+        ]
+        result = _build_changelog(history)
+        assert "PREVIOUS EDITS" in result
+        assert "Region 1" in result
+        assert "Make it blue and cozy" in result
+
+    def test_extracts_feedback_from_separate_part(self):
+        """Feedback stored as a separate Part (continuation edits) is captured."""
+        from google.genai import types
+
+        from app.activities.edit import _build_changelog
+
+        # _continue_chat appends annotations and feedback as separate Parts
+        edit_part = (
+            "Region 1: left area (30% from left, 50% from top, medium area)\n"
+            "  ACTION: Replace\n"
+            "  INSTRUCTION: Replace with a modern armchair"
+        )
+        feedback_part = "\nAdditional feedback: Make it blue and cozy"
+        history = [
+            types.Content(role="user", parts=[types.Part(text="context")]),
+            types.Content(role="model", parts=[types.Part(text="ok")]),
+            types.Content(
+                role="user",
+                parts=[types.Part(text=edit_part), types.Part(text=feedback_part)],
+            ),
+            types.Content(role="model", parts=[types.Part(text="done")]),
+        ]
+        result = _build_changelog(history)
+        assert "Region 1" in result
+        assert "Make it blue and cozy" in result
+
+    def test_feedback_filter_preserves_user_instructions(self):
+        """Boilerplate filtering shouldn't catch real user instructions starting with 'Keep'."""
+        from google.genai import types
+
+        from app.activities.edit import _build_changelog
+
+        feedback_text = (
+            "Please modify this room design based on the following feedback:\n"
+            "Keep all the chairs but change the table to oak\n\n"
+            "Keep all architectural features (walls, windows, doors, ceiling, floor), "
+            "camera angle, perspective, and overall composition unchanged. "
+            "Return a clean photorealistic photograph with zero annotations or markers."
+        )
+        history = [
+            types.Content(role="user", parts=[types.Part(text=feedback_text)]),
+            types.Content(role="model", parts=[types.Part(text="done")]),
+        ]
+        result = _build_changelog(history)
+        assert "Keep all the chairs but change the table to oak" in result
+
     def test_extracts_region_edits_without_action(self):
         """_build_changelog detects edits even when ACTION field is absent."""
         from google.genai import types

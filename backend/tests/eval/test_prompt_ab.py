@@ -109,7 +109,12 @@ def _make_room_images() -> list[Image.Image]:
     return images
 
 
-def _build_prompt(gen_version: str, room_pres_version: str, room_context: str = "") -> str:
+def _build_prompt(
+    gen_version: str,
+    room_pres_version: str,
+    room_context: str = "",
+    brief: DesignBrief = TEST_BRIEF,
+) -> str:
     """Build the generation prompt using specific versions."""
     from app.activities.generate import _OPTION_VARIANTS
 
@@ -118,13 +123,13 @@ def _build_prompt(gen_version: str, room_pres_version: str, room_context: str = 
     room_pres = (Path("prompts") / f"room_preservation_{room_pres_version}.txt").read_text()
 
     # Build brief text (same logic as _build_generation_prompt)
-    parts = [f"Room type: {TEST_BRIEF.room_type}"]
-    if TEST_BRIEF.occupants:
-        parts.append(f"Occupants: {TEST_BRIEF.occupants}")
-    if TEST_BRIEF.lifestyle:
-        parts.append(f"Lifestyle: {TEST_BRIEF.lifestyle}")
-    if TEST_BRIEF.style_profile:
-        sp = TEST_BRIEF.style_profile
+    parts = [f"Room type: {brief.room_type}"]
+    if brief.occupants:
+        parts.append(f"Occupants: {brief.occupants}")
+    if brief.lifestyle:
+        parts.append(f"Lifestyle: {brief.lifestyle}")
+    if brief.style_profile:
+        sp = brief.style_profile
         if sp.mood:
             parts.append(f"Mood: {sp.mood}")
         if sp.colors:
@@ -135,12 +140,12 @@ def _build_prompt(gen_version: str, room_pres_version: str, room_context: str = 
             parts.append(f"Lighting: {sp.lighting}")
         if sp.clutter_level:
             parts.append(f"Clutter level: {sp.clutter_level}")
-    if TEST_BRIEF.pain_points:
-        parts.append(f"Pain points to address: {', '.join(TEST_BRIEF.pain_points)}")
-    if TEST_BRIEF.constraints:
-        parts.append(f"Constraints: {', '.join(TEST_BRIEF.constraints)}")
-    if TEST_BRIEF.emotional_drivers:
-        parts.append(f"Emotional drivers: {', '.join(TEST_BRIEF.emotional_drivers)}")
+    if brief.pain_points:
+        parts.append(f"Pain points to address: {', '.join(brief.pain_points)}")
+    if brief.constraints:
+        parts.append(f"Constraints: {', '.join(brief.constraints)}")
+    if brief.emotional_drivers:
+        parts.append(f"Emotional drivers: {', '.join(brief.emotional_drivers)}")
     brief_text = "\n".join(parts)
 
     return gen_template.format(
@@ -585,8 +590,10 @@ class TestPromptAB:
             "- toilet: 0.4m × 0.7m footprint, 0.4m tall\n"
         )
 
-        baseline_prompt = _build_prompt("v5", "v4")
-        candidate_prompt = _build_prompt("v5", "v5", room_context=room_context)
+        baseline_prompt = _build_prompt("v5", "v4", brief=BATHROOM_BRIEF)
+        candidate_prompt = _build_prompt(
+            "v5", "v5", room_context=room_context, brief=BATHROOM_BRIEF
+        )
 
         all_baseline, all_candidate = [], []
         for idx, room_image in enumerate(room_images):
@@ -601,6 +608,7 @@ class TestPromptAB:
                 candidate_prompt,
                 room_image,
                 brief=BATHROOM_BRIEF,
+                generation_prompt_a=baseline_prompt,
                 generation_prompt_b=candidate_prompt,
                 room_context=room_context,
             )
@@ -629,7 +637,7 @@ class TestPromptAB:
         gen_prompt = _build_prompt("v5", "v4")
 
         print("\n" + "=" * 60)
-        print("  EDIT EVAL: Text-Coordinate Approach (edit_v6)")
+        print("  EDIT EVAL: Text-Coordinate Approach")
         print("=" * 60)
 
         async def _run_edit_eval():
@@ -638,9 +646,12 @@ class TestPromptAB:
             from app.utils.gemini_chat import create_chat, extract_image, get_client
             from app.utils.image_eval import run_artifact_check
             from app.utils.prompt_versioning import (
+                get_active_version,
                 load_versioned_prompt,
                 strip_changelog_lines,
             )
+
+            edit_label = f"edit_{get_active_version('edit')}_text_coords"
 
             results = []
             edit_annotations = [
@@ -701,18 +712,18 @@ class TestPromptAB:
                     if "503" in err or "429" in err or "RESOURCE_EXHAUSTED" in err:
                         print(f"RATE LIMITED: {err[:80]}")
                         results.append({"error": "rate_limited"})
-                        _append_result("edit_v6_text_coords", {"error": "rate_limited"})
+                        _append_result(edit_label, {"error": "rate_limited"})
                         await asyncio.sleep(30)
                         continue
                     print(f"EDIT FAILED: {err[:100]}")
                     results.append({"error": err[:200]})
-                    _append_result("edit_v6_text_coords", {"error": err[:200]})
+                    _append_result(edit_label, {"error": err[:200]})
                     continue
 
                 if result_image is None:
                     print("NO IMAGE RETURNED")
                     results.append({"error": "no_image"})
-                    _append_result("edit_v6_text_coords", {"error": "no_image"})
+                    _append_result(edit_label, {"error": "no_image"})
                     continue
 
                 print("done.", end=" ", flush=True)
@@ -746,7 +757,7 @@ class TestPromptAB:
                     print(f"EVAL ERROR: {vlm_scores}")
 
                 results.append(vlm_scores)
-                _append_result("edit_v6_text_coords", vlm_scores)
+                _append_result(edit_label, vlm_scores)
 
             return results
 
