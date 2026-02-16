@@ -181,7 +181,6 @@ def _build_changelog(history: list) -> str:
                         line
                         and not line.startswith("Keep all architectural features")
                         and not line.startswith("Return a clean photorealistic")
-                        and not line.startswith("camera angle, perspective")
                         and "modify this room design" not in line.lower()
                     ):
                         edits.append(f"- Feedback: {line}")
