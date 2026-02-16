@@ -1447,6 +1447,32 @@ class TestBuildChangelog:
         assert "Region 1" in result
         assert "Make it blue and cozy" in result
 
+    def test_extracts_feedback_from_separate_part(self):
+        """Feedback stored as a separate Part (continuation edits) is captured."""
+        from google.genai import types
+
+        from app.activities.edit import _build_changelog
+
+        # _continue_chat appends annotations and feedback as separate Parts
+        edit_part = (
+            "Region 1: left area (30% from left, 50% from top, medium area)\n"
+            "  ACTION: Replace\n"
+            "  INSTRUCTION: Replace with a modern armchair"
+        )
+        feedback_part = "\nAdditional feedback: Make it blue and cozy"
+        history = [
+            types.Content(role="user", parts=[types.Part(text="context")]),
+            types.Content(role="model", parts=[types.Part(text="ok")]),
+            types.Content(
+                role="user",
+                parts=[types.Part(text=edit_part), types.Part(text=feedback_part)],
+            ),
+            types.Content(role="model", parts=[types.Part(text="done")]),
+        ]
+        result = _build_changelog(history)
+        assert "Region 1" in result
+        assert "Make it blue and cozy" in result
+
     def test_feedback_filter_preserves_user_instructions(self):
         """Boilerplate filtering shouldn't catch real user instructions starting with 'Keep'."""
         from google.genai import types

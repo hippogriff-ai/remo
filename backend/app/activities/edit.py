@@ -184,6 +184,16 @@ def _build_changelog(history: list) -> str:
                         and "modify this room design" not in line.lower()
                     ):
                         edits.append(f"- Feedback: {line}")
+            # Separate Part containing only "Additional feedback: ..."
+            # (_continue_chat appends feedback as its own Part when both
+            # annotations and feedback are present)
+            elif "Additional feedback:" in text:
+                for line in text.split("\n"):
+                    line = line.strip()
+                    if line.startswith("Additional feedback:"):
+                        fb = line.removeprefix("Additional feedback:").strip()
+                        if fb:
+                            edits.append(f"- Feedback: {fb}")
 
     if not edits:
         return ""
