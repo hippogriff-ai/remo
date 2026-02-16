@@ -58,6 +58,10 @@ logger = structlog.get_logger()
 
 router = APIRouter(tags=["projects"])
 
+# Guard against concurrent shopping streams for the same project.
+# If a stream is already running, a second request gets 409.
+_active_shopping_streams: set[str] = set()
+
 MAX_PHOTO_BYTES = 20 * 1024 * 1024  # 20 MB
 MAX_SCAN_BYTES = 1 * 1024 * 1024  # 1 MB — LiDAR JSON is typically <100 KB
 _LIDAR_FIXTURE_PATH = (
@@ -913,6 +917,11 @@ async def stream_shopping(project_id: str, request: Request):
         return err
     assert state is not None  # guaranteed by _check_step
 
+    # Reject concurrent streams for the same project
+    if project_id in _active_shopping_streams:
+        return _error(409, "stream_in_progress", "Shopping stream already active for this project")
+    _active_shopping_streams.add(project_id)
+
     # Claim streaming ownership immediately
     from app.workflows.design_project import DesignProjectWorkflow
 
@@ -920,6 +929,7 @@ async def stream_shopping(project_id: str, request: Request):
         request, project_id, DesignProjectWorkflow.handle_shopping_streaming
     )
     if err is not None:
+        _active_shopping_streams.discard(project_id)
         return err
 
     # Build the same input the workflow would build
@@ -935,42 +945,53 @@ async def stream_shopping(project_id: str, request: Request):
     from app.activities.shopping import generate_shopping_list_streaming
 
     async def _sse_with_signal():
-        final_result: GenerateShoppingListOutput | None = None
-        async for chunk in generate_shopping_list_streaming(shopping_input):
-            if chunk.startswith("event: done\n"):
-                data_line = chunk.split("data: ", 1)[1].split("\n")[0]
-                try:
-                    final_result = GenerateShoppingListOutput.model_validate_json(data_line)
-                except ValidationError:
-                    logger.error(
-                        "shopping_stream_done_parse_failed",
-                        project_id=project_id,
-                        data_preview=data_line[:200],
-                    )
-            yield chunk
+        try:
+            final_result: GenerateShoppingListOutput | None = None
+            done_chunk: str | None = None
+            async for chunk in generate_shopping_list_streaming(shopping_input):
+                if chunk.startswith("event: done\n"):
+                    # Buffer the done chunk — persist to workflow before yielding
+                    done_chunk = chunk
+                    data_line = chunk.split("data: ", 1)[1].split("\n")[0]
+                    try:
+                        final_result = GenerateShoppingListOutput.model_validate_json(data_line)
+                    except ValidationError:
+                        logger.error(
+                            "shopping_stream_done_parse_failed",
+                            project_id=project_id,
+                            data_preview=data_line[:200],
+                        )
+                else:
+                    yield chunk
 
-        # Signal workflow with the complete result, or release ownership
-        if final_result is not None:
-            err = await _signal_workflow(
-                request,
-                project_id,
-                DesignProjectWorkflow.receive_shopping_result,
-                final_result,
-            )
-            if err is not None:
-                logger.error(
-                    "shopping_stream_signal_failed",
-                    project_id=project_id,
-                    error_status=getattr(err, "status_code", None),
+            # Signal workflow with the complete result, or release ownership
+            if final_result is not None:
+                err = await _signal_workflow(
+                    request,
+                    project_id,
+                    DesignProjectWorkflow.receive_shopping_result,
+                    final_result,
                 )
-        else:
-            # Stream ended without a done event (error or disconnect) —
-            # release ownership so the workflow falls back to the activity.
-            await _signal_workflow(
-                request,
-                project_id,
-                DesignProjectWorkflow.release_shopping_streaming,
-            )
+                if err is not None:
+                    logger.error(
+                        "shopping_stream_signal_failed",
+                        project_id=project_id,
+                        error_status=getattr(err, "status_code", None),
+                    )
+                    yield "event: error\ndata: Failed to persist shopping result\n\n"
+                else:
+                    # Persistence succeeded — now safe to send done to client
+                    yield done_chunk  # type: ignore[arg-type]
+            else:
+                # Stream ended without a done event (error or disconnect) —
+                # release ownership so the workflow falls back to the activity.
+                await _signal_workflow(
+                    request,
+                    project_id,
+                    DesignProjectWorkflow.release_shopping_streaming,
+                )
+        finally:
+            _active_shopping_streams.discard(project_id)
 
     from app.utils.tracing import trace_thread
 
