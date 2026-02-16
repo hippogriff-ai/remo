@@ -169,15 +169,27 @@ def _build_changelog(history: list) -> str:
                         edits.append(f"- {line}")
                     elif line.startswith("INSTRUCTION:"):
                         edits.append(f"  {line}")
-            # Detect text feedback
+                    elif line.startswith("Additional feedback:"):
+                        fb = line.removeprefix("Additional feedback:").strip()
+                        if fb:
+                            edits.append(f"- Feedback: {fb}")
+            # Detect standalone "Additional feedback:" (shouldn't happen, but defensive)
+            elif "Additional feedback:" in text:
+                for line in text.split("\n"):
+                    line = line.strip()
+                    if line.startswith("Additional feedback:"):
+                        fb = line.removeprefix("Additional feedback:").strip()
+                        if fb:
+                            edits.append(f"- Feedback: {fb}")
+            # Detect text feedback from TEXT_FEEDBACK_TEMPLATE
             elif "modify this room design" in text.lower():
-                # Extract the user's feedback from TEXT_FEEDBACK_TEMPLATE
                 for line in text.split("\n"):
                     line = line.strip()
                     if (
                         line
-                        and not line.startswith("Keep all")
-                        and not line.startswith("Return")
+                        and not line.startswith("Keep all architectural features")
+                        and not line.startswith("Return a clean photorealistic")
+                        and not line.startswith("camera angle, perspective")
                         and "modify this room design" not in line.lower()
                     ):
                         edits.append(f"- Feedback: {line}")
