@@ -48,6 +48,7 @@ xcuserdata/
 htmlcov/
 .coverage
 .pytest_cache/
+backend/tests/fixtures/real_lidar_scan.json
 
 # Maestro screenshots (test artifacts)
 *.png

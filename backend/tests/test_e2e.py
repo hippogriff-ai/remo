@@ -15,6 +15,7 @@ Tests are skipped automatically if the Remo API is not reachable.
 
 import asyncio
 import io
+import json
 import os
 import tempfile
 import time
@@ -45,6 +46,16 @@ _SCAN_DATA = {
     "surfaces": [{"type": "floor"}],
     "floor_area_sqm": 24.36,
 }
+
+_REAL_LIDAR_FIXTURE = Path(__file__).parent / "fixtures" / "real_lidar_scan.json"
+
+
+def _get_scan_data() -> dict:
+    """Load real LiDAR fixture if available, else use synthetic."""
+    if _REAL_LIDAR_FIXTURE.exists():
+        return json.loads(_REAL_LIDAR_FIXTURE.read_text())
+    return _SCAN_DATA
+
 
 # Detect if backend is running with real AI activities (not mocks).
 # Used to enable real-mode assertions in tests that work both ways.
@@ -321,6 +332,9 @@ async def _create_project_with_photos(client: httpx.AsyncClient, room_count: int
     for _ in range(room_count):
         r = await _upload_photo(client, project_id, sharp)
         assert r.status_code == 200, f"upload failed: {r.status_code} {r.text}"
+    # Confirm photos to advance workflow from 'photos' to 'scan'
+    r = await client.post(f"/api/v1/projects/{project_id}/photos/confirm")
+    assert r.status_code == 200, f"confirm_photos failed: {r.status_code} {r.text}"
     # Wait for workflow to process signals and transition to 'scan'
     await _poll_step(client, project_id, "scan", timeout=10.0)
     return project_id
@@ -714,6 +728,8 @@ async def _advance_to_intake_with_scan(
     for _ in range(2):
         r = await _upload_photo(client, pid, sharp)
         assert r.status_code == 200, f"upload failed: {r.status_code} {r.text}"
+    r = await client.post(f"/api/v1/projects/{pid}/photos/confirm")
+    assert r.status_code == 200, f"confirm_photos failed: {r.status_code} {r.text}"
     await _poll_step(client, pid, "scan", timeout=10.0)
     r = await client.post(f"/api/v1/projects/{pid}/scan", json=scan_data or _SCAN_DATA)
     assert r.status_code == 200, f"scan submit failed: {r.status_code} {r.text}"
@@ -1716,6 +1732,8 @@ class TestWI26IntakeConversationValidation:
             photo_type="inspiration",
             note="Love the warm wood tones and cozy textiles",
         )
+        r = await client.post(f"/api/v1/projects/{pid}/photos/confirm")
+        assert r.status_code == 200
         await _poll_step(client, pid, "scan", timeout=10.0)
         await client.post(f"/api/v1/projects/{pid}/scan/skip")
         await _poll_step(client, pid, "intake", timeout=10.0)
@@ -2107,6 +2125,10 @@ class TestRapidSignalSequences:
         for r in results:
             assert r.status_code == 200
 
+        # Confirm photos to advance
+        r = await client.post(f"/api/v1/projects/{pid}/photos/confirm")
+        assert r.status_code == 200
+
         # Should eventually reach scan step
         await _poll_step(client, pid, "scan", timeout=10.0)
         state = (await client.get(f"/api/v1/projects/{pid}")).json()
@@ -2216,6 +2238,8 @@ class TestGoldenPathRealAI:
         for _ in range(2):
             r = await _upload_photo(client, pid, sharp)
             assert r.status_code == 200
+        r = await client.post(f"/api/v1/projects/{pid}/photos/confirm")
+        assert r.status_code == 200
         await _poll_step(client, pid, "scan", timeout=15.0)
 
         # --- 3. Skip scan ---
@@ -2309,5 +2333,170 @@ class TestGoldenPathRealAI:
         # A completed Temporal workflow has already terminated, so the
         # cancel signal is a no-op.  We verify the DELETE endpoint returns
         # 204 (accepted) — that's the contract the iOS app relies on.
+        r = await client.delete(f"/api/v1/projects/{pid}")
+        assert r.status_code == 204
+
+    async def test_full_pipeline_real_ai_with_lidar(self, client: httpx.AsyncClient):
+        """Complete user journey with LiDAR scan data through every AI service.
+
+        Exercises the full pipeline with real room dimensions flowing through
+        generation, editing, and shopping:
+            create (has_lidar=True) → photos → confirm → submit scan →
+            real intake (Claude Opus) → confirm → real generation (Gemini) →
+            select → real edit (Gemini, dimension-aware) → approve →
+            real shopping (Exa + Claude) → verify → delete
+        """
+        scan_data = _get_scan_data()
+        room = scan_data["room"]
+
+        # --- 1. Create project with LiDAR ---
+        resp = await client.post("/api/v1/projects", json=_NEW_PROJECT_LIDAR)
+        assert resp.status_code == 201
+        pid = resp.json()["project_id"]
+
+        # --- 2. Upload 2 room photos + confirm ---
+        sharp = _make_sharp_jpeg()
+        for _ in range(2):
+            r = await _upload_photo(client, pid, sharp)
+            assert r.status_code == 200
+        r = await client.post(f"/api/v1/projects/{pid}/photos/confirm")
+        assert r.status_code == 200
+        await _poll_step(client, pid, "scan", timeout=15.0)
+
+        # --- 3. Submit scan data (real LiDAR or synthetic fallback) ---
+        r = await client.post(f"/api/v1/projects/{pid}/scan", json=scan_data)
+        assert r.status_code == 200
+        await _poll_step(client, pid, "intake", timeout=10.0)
+
+        # Verify scan_data persisted (ScanData → room_dimensions: RoomDimensions)
+        state = (await client.get(f"/api/v1/projects/{pid}")).json()
+        sd = state["scan_data"]
+        assert sd is not None
+        rd = sd["room_dimensions"]
+        assert rd is not None
+        assert rd["width_m"] == pytest.approx(room["width"], abs=0.1)
+        assert rd["length_m"] == pytest.approx(room["length"], abs=0.1)
+        assert len(rd.get("furniture", [])) >= 1
+
+        # --- 4. Real intake conversation (Claude Opus) ---
+        r = await client.post(f"/api/v1/projects/{pid}/intake/start", json={"mode": "quick"})
+        assert r.status_code == 200
+
+        intake_messages = [
+            f"It's a bathroom, roughly {room['width']:.1f} by {room['length']:.1f} meters with a bathtub and glass panel",
+            "Modern spa-inspired with warm wood, natural stone, and soft lighting",
+            "Upgrade the vanity area, add better storage, keep the bathtub but modernize the fixtures",
+            "That covers everything, please summarize",
+        ]
+        last_response = None
+        for msg in intake_messages:
+            r = await client.post(
+                f"/api/v1/projects/{pid}/intake/message",
+                json={"message": msg},
+            )
+            assert r.status_code == 200
+            last_response = r.json()
+            assert len(last_response["agent_message"]) > 20
+
+        # Confirm the brief
+        brief_data = {"room_type": "bathroom"}
+        if last_response and last_response.get("partial_brief"):
+            brief_data = last_response["partial_brief"]
+        r = await client.post(
+            f"/api/v1/projects/{pid}/intake/confirm",
+            json={"brief": brief_data},
+        )
+        assert r.status_code == 200
+
+        # --- 5. Wait for real Gemini generation ---
+        state = await _poll_step(client, pid, "selection", timeout=180.0)
+        assert len(state["generated_options"]) == 2
+        for opt in state["generated_options"]:
+            assert "mock" not in opt["image_url"].lower()
+            assert len(opt["caption"]) > 10
+
+        # scan_data should persist through generation
+        assert state["scan_data"] is not None
+        assert state["scan_data"]["room_dimensions"]["width_m"] == pytest.approx(room["width"], abs=0.1)
+
+        # Log generated options for visibility
+        print(f"\n{'='*60}")
+        print(f"LIDAR GOLDEN PATH — Project {pid}")
+        print(f"Room: {room['width']:.1f}m x {room['length']:.1f}m x {room['height']:.1f}m")
+        print(f"Furniture: {[f['type'] for f in scan_data.get('furniture', [])]}")
+        print(f"{'='*60}")
+        for i, opt in enumerate(state["generated_options"]):
+            print(f"\n--- Design Option {i+1} ---")
+            print(f"  Caption: {opt['caption']}")
+            print(f"  Image:   {opt['image_url']}")
+
+        # --- 6. Select first option ---
+        r = await client.post(f"/api/v1/projects/{pid}/select", json={"index": 0})
+        assert r.status_code == 200
+
+        # --- 7. One real Gemini edit (dimension-aware feedback) ---
+        await _poll_iteration(client, pid, 0)
+        r = await client.post(
+            f"/api/v1/projects/{pid}/iterate/feedback",
+            json={
+                "feedback": (
+                    f"The vanity needs to fit the {room['width']:.1f}m wall. "
+                    "Add warmer lighting above the mirror and a small plant on the counter."
+                )
+            },
+        )
+        assert r.status_code == 200
+        state = await _poll_iteration(client, pid, 1, timeout=120.0)
+        assert state["iteration_count"] >= 1
+        assert len(state["revision_history"]) >= 1
+        revised_url = state["revision_history"][0]["revised_image_url"]
+        assert "mock" not in revised_url.lower()
+
+        # scan_data persists through edits
+        assert state["scan_data"] is not None
+
+        print(f"\n--- Edit Result ---")
+        print(f"  Revised: {revised_url}")
+
+        # --- 8. Approve design ---
+        r = await client.post(f"/api/v1/projects/{pid}/approve")
+        assert r.status_code == 200
+
+        # --- 9. Wait for real shopping list (Exa + Claude) ---
+        # Shopping involves Exa search + Claude scoring — can take 3-5 minutes
+        state = await _poll_step(client, pid, "completed", timeout=360.0)
+        assert state["approved"] is True
+        shopping = state["shopping_list"]
+        assert shopping is not None
+        assert len(shopping["items"]) >= 3
+
+        # Verify shopping quality
+        for item in shopping["items"]:
+            assert "Mock" not in item["product_name"]
+            assert item["product_url"].startswith("http")
+            assert 0.0 <= item["confidence_score"] <= 1.0
+
+        priced = [i for i in shopping["items"] if i.get("price_cents", 0) > 0]
+        assert len(priced) >= 1, "No items have prices"
+        assert shopping["total_estimated_cost_cents"] > 0
+
+        # scan_data persists to completion
+        assert state["scan_data"] is not None
+        assert state["scan_data"]["room_dimensions"]["width_m"] == pytest.approx(room["width"], abs=0.1)
+
+        # Log shopping list
+        print(f"\n--- Shopping List ({len(shopping['items'])} items) ---")
+        total_cents = shopping["total_estimated_cost_cents"]
+        print(f"  Total: ${total_cents / 100:.2f}")
+        for item in shopping["items"]:
+            price = item.get("price_cents", 0)
+            price_str = f"${price / 100:.2f}" if price else "no price"
+            print(f"  - {item['product_name']} ({price_str})")
+            print(f"    {item['product_url']}")
+            if item.get("reason"):
+                print(f"    Reason: {item['reason']}")
+        print(f"{'='*60}\n")
+
+        # --- 10. Delete project ---
         r = await client.delete(f"/api/v1/projects/{pid}")
         assert r.status_code == 204

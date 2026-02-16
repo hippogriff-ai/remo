@@ -147,7 +147,8 @@ public struct IntakeChatScreen: View {
 
                         // Quick reply chips — hidden once user selects one or while waiting for response
                         if let options = projectState.currentIntakeOutput?.options, !options.isEmpty,
-                           selectedQuickReply == nil, !isSending {
+                           selectedQuickReply == nil, !isSending,
+                           projectState.currentIntakeOutput?.isSummary != true {
                             QuickReplyChips(
                                 options: options,
                                 selectedId: selectedQuickReply,

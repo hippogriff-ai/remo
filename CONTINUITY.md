@@ -223,8 +223,11 @@ Edge SSIM +0.047 is the largest single-metric improvement across all loops. Dire
 - Done: Fixed `{{`/`}}` double-brace bug in all 3 VLM response format constants (generation, edit, shopping). Claude was echoing double braces from the template, causing JSON parse failures.
 - Done: Edit eval baseline established (5 runs, edit rubric, real images): total 41.6/50 (83.2%), preservation_fidelity 13.0/15, artifact_cleanliness 9.4/10. One outlier at 28/50 (Gemini model variance).
 - Done: PR #15 review fixes: (1) Presign R2 keys before VLM eval — `gen_url` and `revised_url` were raw R2 keys, eval needs presigned URLs for httpx.get(); (2) Strip `[v7: ...]` changelog headers from edit prompts — moved `strip_changelog_lines` from generate.py to prompt_versioning.py as shared utility, applied in both _bootstrap_chat and _continue_chat + A/B test; (3) Fix `prompt_version="v1"` → `get_active_version("edit")` in edit eval score tracking; (4) Fix `_build_changelog` to detect on "INSTRUCTION:" instead of "ACTION:" since action is optional on AnnotationRegion.
-- Now: Active: gen_v5 + room_v4 + edit_v7. All code improvements shipped. VLM-only eval pipeline fully operational. PR #15 review comments addressed.
-- Next: Phase B (export positions from iOS RoomPlan). Consider: improve edit_fidelity (10.8/15 has headroom), tune HoughCircles thresholds to reduce false positives on natural round objects.
+- Done: Shopping search quality fix — `_build_search_queries()` now takes `design_brief` parameter. Description is primary query (highest signal), style-contextualized query uses brief mood+room (e.g. "modern spa bathroom vanity" instead of "vanity bamboo natural"). Threaded brief through `search_products_for_item()` and `search_all_items()`. 7 new tests (266 total in test_shopping.py). 1476 unit tests pass.
+- Done: Anti-annotation preamble in `_continue_chat()` (edit.py) + test assertion fix (test_edit.py updated for new message part ordering).
+- Done: iOS IntakeChatScreen fix — hide QuickReplyChips when `isSummary == true` to prevent self-repeating content.
+- Now: Active: gen_v5 + room_v4 + edit_v7. All code improvements shipped. VLM-only eval pipeline fully operational. Device bugs #1 (circle annotations), #2 (self-repeat), #5 (search quality) fixed.
+- Next: Streaming for shopping + intake (bugs #3, #4 — requires SSE architecture). Phase B (export positions from iOS RoomPlan). Consider: improve edit_fidelity (10.8/15 has headroom).
 
 ## Prompt Version Status
 | Prompt | Active | New versions | Status |

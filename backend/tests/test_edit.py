@@ -908,10 +908,12 @@ class TestEditDesignActivity:
             assert updated_history[1].role == "model"
             assert updated_history[2].role == "user"
             assert updated_history[3].role == "model"
-            # The user turn should have: room anchor text + room image + base image + edit prompt
-            assert len(updated_history[2].parts) >= 4
-            # First part should be the room photo anchor text
-            assert "preserve this architecture" in updated_history[2].parts[0].text
+            # The user turn should have: anti-annotation preamble + room anchor text + room image + base image + edit prompt
+            assert len(updated_history[2].parts) >= 5
+            # First part is anti-annotation preamble
+            assert "clean photorealistic" in updated_history[2].parts[0].text
+            # Second part should be the room photo anchor text
+            assert "preserve this architecture" in updated_history[2].parts[1].text
 
     @pytest.mark.asyncio
     async def test_continuation_with_both_annotations_and_feedback(self):

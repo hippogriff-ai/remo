@@ -505,25 +505,23 @@ def _expand_color_synonym(color: str) -> str | None:
 def _build_search_queries(
     item: dict[str, Any],
     room_dimensions: RoomDimensions | None = None,
+    design_brief: DesignBrief | None = None,
 ) -> list[str]:
     """Build source-aware search queries for an extracted item.
 
     Uses natural product descriptions (no "buy"/"shop" prefixes) since Exa's
     neural/semantic search + useAutoprompt handles purchase intent internally.
 
-    Source tag determines query strategy:
-    - BRIEF_ANCHORED: user's own language (highest recall)
-    - ITERATION_ANCHORED: iteration instruction keywords
-    - IMAGE_ONLY: AI-described category + attributes
+    Query priority (highest signal first):
+    1. Description — the richest signal from Claude's vision extraction
+    2. Style-contextualized — combines design brief mood/room with category
+    3. Source reference — user's own language (BRIEF/ITERATION anchored)
+    4. Material-focused — targeted attribute query
+    5. Color synonym — alternative color term for broader recall
+    6. Room-constrained — size limits for primary furniture
 
-    All tags get a description-based query when available, since the
-    extraction prompt produces rich professional descriptions.
-
-    When room_dimensions are available, adds a size-constrained query for
-    primary furniture categories (sofa, table, rug, cabinet).
-
-    Color synonym expansion adds one additional query with the closest
-    synonym for the item's color, improving recall across retailers.
+    When design_brief is provided, queries incorporate the overall design
+    style (mood, room type, colors) for much better product relevance.
     """
     tag = item.get("source_tag", "IMAGE_ONLY")
     category = item.get("category", "")
@@ -533,34 +531,54 @@ def _build_search_queries(
     description = item.get("description", "")
     dims = item.get("estimated_dimensions", "")
 
-    queries = []
-    if tag == "BRIEF_ANCHORED":
-        ref = str(item.get("source_reference") or description)
-        queries.append(ref)
-        queries.append(f"{category} {style} {material} furniture")
-    elif tag == "ITERATION_ANCHORED":
-        ref = str(item.get("source_reference") or description)
-        queries.append(ref)
-        queries.append(f"{category} {material} {color} furniture")
-    else:
-        queries.append(f"{category} {material} {color}")
-        queries.append(f"{category} {style} furniture")
+    # Extract design context from brief
+    brief_mood = ""
+    brief_room = ""
+    if design_brief:
+        brief_room = design_brief.room_type or ""
+        if design_brief.style_profile:
+            brief_mood = design_brief.style_profile.mood or ""
 
-    # Description-based query for all tags — the extraction prompt produces
-    # rich descriptions like "ivory boucle sofa with down-blend cushions"
-    if description and description != item.get("source_reference", ""):
+    queries = []
+
+    # 1. Description query FIRST — highest signal, richest product language
+    # (e.g., "walnut floating vanity with soft-close drawers")
+    if description:
         queries.append(description)
 
+    # 2. Style-contextualized query — combines brief mood + room + category
+    # (e.g., "modern spa bathroom vanity" instead of just "vanity")
+    if brief_mood and brief_room:
+        queries.append(f"{brief_mood} {brief_room} {category}")
+    elif brief_mood:
+        queries.append(f"{brief_mood} {category}")
+    elif brief_room:
+        queries.append(f"{brief_room} {category} {style}")
+    elif style:
+        # No brief available — fall back to item's own style
+        queries.append(f"{category} {style} furniture")
+
+    # 3. Source reference (for anchored items — user's own words)
+    if tag in ("BRIEF_ANCHORED", "ITERATION_ANCHORED"):
+        ref = str(item.get("source_reference") or "")
+        if ref and ref != description:
+            queries.append(ref)
+
+    # 4. Material-focused query — targeted attribute combination
+    if material:
+        queries.append(f"{category} {material} {color}".strip())
+
+    # 5. Dimension query — important for rugs, tables, etc.
     if dims:
         queries.append(f"{category} {dims}")
 
-    # Color synonym expansion: add one query swapping the primary color
+    # 5. Color synonym expansion: one query swapping the primary color
     if color:
         synonym = _expand_color_synonym(color)
         if synonym:
             queries.append(f"{category} {material} {synonym}")
 
-    # Room-aware constrained query for primary furniture
+    # 6. Room-aware constrained query for primary furniture
     if room_dimensions is not None:
         constraint_key = _match_category(item)
         if constraint_key:
@@ -765,6 +783,7 @@ async def search_products_for_item(
     item: dict[str, Any],
     exa_api_key: str,
     room_dimensions: RoomDimensions | None = None,
+    design_brief: DesignBrief | None = None,
 ) -> list[dict[str, Any]]:
     """Search Exa for products matching a single extracted item.
 
@@ -776,7 +795,9 @@ async def search_products_for_item(
     HIGH-priority items use "deep" search type (query expansion);
     others use "auto" (neural + reranker).
     """
-    queries = _build_search_queries(item, room_dimensions=room_dimensions)
+    queries = _build_search_queries(
+        item, room_dimensions=room_dimensions, design_brief=design_brief,
+    )
     num_results = _num_results_for_item(item)
     priority = item.get("search_priority", "MEDIUM")
     search_type = "deep" if priority == "HIGH" else "auto"
@@ -825,12 +846,14 @@ async def search_all_items(
     items: list[dict[str, Any]],
     exa_api_key: str,
     room_dimensions: RoomDimensions | None = None,
+    design_brief: DesignBrief | None = None,
 ) -> list[list[dict[str, Any]]]:
     """Step 2: Search Exa for products for all items (parallelized)."""
     async with httpx.AsyncClient() as http_client:
         tasks = [
             search_products_for_item(
-                http_client, item, exa_api_key, room_dimensions=room_dimensions
+                http_client, item, exa_api_key, room_dimensions=room_dimensions,
+                design_brief=design_brief,
             )
             for item in items
         ]
@@ -1592,7 +1615,8 @@ async def generate_shopping_list(
     # Step 2: Search products
     try:
         search_results = await search_all_items(
-            items, exa_key, room_dimensions=input.room_dimensions
+            items, exa_key, room_dimensions=input.room_dimensions,
+            design_brief=input.design_brief,
         )
     except Exception as e:
         log.error("shopping_search_failed", error=str(e))

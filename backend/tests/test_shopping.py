@@ -471,6 +471,136 @@ class TestColorSynonymExpansion:
             assert len(synonyms) >= 2, f"{key} should have at least 2 synonyms"
 
 
+# === Design Brief Integration ===
+
+
+class TestDesignBriefInSearchQueries:
+    """Verify design brief context improves search query quality."""
+
+    def _make_brief(self, room_type="bathroom", mood="modern spa-inspired"):
+        return DesignBrief(
+            room_type=room_type,
+            style_profile=StyleProfile(mood=mood, colors=["white", "natural wood"]),
+        )
+
+    def test_brief_mood_and_room_in_queries(self):
+        """When brief has mood + room, queries include style-contextualized query."""
+        brief = self._make_brief()
+        item = {
+            "source_tag": "IMAGE_ONLY",
+            "category": "Vanity Mirror",
+            "description": "round frameless vanity mirror with LED backlight",
+            "material": "glass",
+            "color": "silver",
+            "style": "modern",
+        }
+        queries = _build_search_queries(item, design_brief=brief)
+        # Should include style-contextualized query
+        style_query = [q for q in queries if "modern spa" in q and "bathroom" in q]
+        assert len(style_query) >= 1, f"Expected brief-contextualized query. Got: {queries}"
+        # Description should be first (highest signal)
+        assert queries[0] == "round frameless vanity mirror with LED backlight"
+
+    def test_brief_mood_only(self):
+        """When brief has mood but no room_type, uses mood + category."""
+        brief = DesignBrief(
+            room_type="",
+            style_profile=StyleProfile(mood="scandinavian minimalist"),
+        )
+        item = {
+            "source_tag": "IMAGE_ONLY",
+            "category": "Floor Lamp",
+            "description": "white oak tripod floor lamp with linen shade",
+            "material": "oak",
+            "color": "white",
+            "style": "scandinavian",
+        }
+        queries = _build_search_queries(item, design_brief=brief)
+        mood_query = [q for q in queries if "scandinavian minimalist" in q]
+        assert len(mood_query) >= 1, f"Expected mood query. Got: {queries}"
+
+    def test_brief_room_only_no_mood(self):
+        """When brief has room_type but no mood, uses room + category + style."""
+        brief = DesignBrief(
+            room_type="living room",
+            style_profile=StyleProfile(mood=""),
+        )
+        item = {
+            "source_tag": "IMAGE_ONLY",
+            "category": "Sofa",
+            "description": "ivory boucle sofa",
+            "material": "boucle",
+            "color": "ivory",
+            "style": "modern",
+        }
+        queries = _build_search_queries(item, design_brief=brief)
+        room_query = [q for q in queries if "living room" in q]
+        assert len(room_query) >= 1, f"Expected room query. Got: {queries}"
+
+    def test_no_brief_falls_back_to_style(self):
+        """Without brief, falls back to item style (backward compatible)."""
+        item = {
+            "source_tag": "IMAGE_ONLY",
+            "category": "Lighting",
+            "material": "brass",
+            "color": "gold",
+            "style": "art deco",
+        }
+        queries = _build_search_queries(item, design_brief=None)
+        assert any("art deco" in q for q in queries), f"Expected style fallback. Got: {queries}"
+        assert any("furniture" in q for q in queries)
+
+    def test_description_is_first_query(self):
+        """Description should always be the first query (highest signal)."""
+        brief = self._make_brief()
+        item = {
+            "source_tag": "IMAGE_ONLY",
+            "category": "Bath Stool",
+            "description": "natural teak shower bench with slatted top",
+            "material": "teak",
+            "color": "natural",
+            "style": "modern spa",
+        }
+        queries = _build_search_queries(item, design_brief=brief)
+        assert queries[0] == "natural teak shower bench with slatted top"
+
+    def test_brief_anchored_keeps_source_ref(self):
+        """BRIEF_ANCHORED items still include source reference."""
+        brief = self._make_brief(room_type="bedroom", mood="bohemian")
+        item = {
+            "source_tag": "BRIEF_ANCHORED",
+            "source_reference": "macrame wall hanging",
+            "description": "cream cotton macrame wall hanging with fringe",
+            "category": "Wall Art",
+            "material": "cotton",
+            "color": "cream",
+            "style": "bohemian",
+        }
+        queries = _build_search_queries(item, design_brief=brief)
+        assert any(q == "macrame wall hanging" for q in queries)
+        # Description should still be first
+        assert queries[0] == "cream cotton macrame wall hanging with fringe"
+
+    def test_brief_with_room_dims(self):
+        """Brief + room dims both contribute queries."""
+        brief = self._make_brief(room_type="living room", mood="mid-century modern")
+        dims = RoomDimensions(width_m=4.0, length_m=5.0, height_m=2.7)
+        item = {
+            "source_tag": "IMAGE_ONLY",
+            "category": "Sofa",
+            "description": "olive velvet sofa with walnut legs",
+            "material": "velvet",
+            "color": "olive",
+            "style": "mid-century",
+        }
+        queries = _build_search_queries(item, room_dimensions=dims, design_brief=brief)
+        # Should have style-contextualized query
+        assert any("mid-century modern" in q and "living room" in q for q in queries)
+        # Should have room-constrained query
+        constrained = [q for q in queries if "under" in q and "inches" in q]
+        assert len(constrained) == 1
+
+
 # === B3: Retailer Domains ===
 
 
