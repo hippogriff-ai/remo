@@ -137,14 +137,16 @@ class DesignProjectWorkflow:
 
         # --- Phase: Intake -> Generation -> Selection -> Iteration (with Start Over loop) ---
         while True:
-            self.step = "intake"
             self._restart_requested = False
 
             # Re-fire analysis if needed (no-op if already running/completed)
             self._start_eager_analysis()
 
-            # Collect pending analysis with short timeout (usually done by now)
-            await self._resolve_analysis()
+            # Wait for room analysis (shown as "analyzing" on iOS)
+            if self._analysis_handle is not None:
+                self.step = "analyzing"
+                await self._resolve_analysis(timeout=90)
+            self.step = "intake"
 
             await self._wait(
                 lambda: (
@@ -603,22 +605,22 @@ class DesignProjectWorkflow:
             retry_policy=_ANALYSIS_RETRY,
         )
 
-    async def _resolve_analysis(self) -> None:
-        """Collect analysis result if available. Never blocks intake.
+    async def _resolve_analysis(self, timeout: int = 30) -> None:
+        """Collect analysis result, waiting up to `timeout` seconds.
 
         Uses asyncio.shield() so the activity continues running in the background
-        if the 30s timeout expires — a slow model response can still be collected
+        if the timeout expires — a slow model response can still be collected
         later (e.g., before shopping) instead of being cancelled.
 
-        Called twice: once at intake start (line 134) and once before shopping
-        (line 258). The second call collects late-arriving results from slow
-        analyses. After success or terminal failure, the handle is cleared so
+        Called twice: once before intake (with 90s timeout so the iOS
+        "Analyzing" screen shows) and once before shopping (30s fallback).
+        After success or terminal failure, the handle is cleared so
         subsequent calls are no-ops.
         """
         if self._analysis_handle is None:
             return
         try:
-            result = await asyncio.wait_for(asyncio.shield(self._analysis_handle), timeout=30)
+            result = await asyncio.wait_for(asyncio.shield(self._analysis_handle), timeout=timeout)
             self.room_analysis = result.analysis
             self._build_room_context()
             self._analysis_handle = None
@@ -649,24 +651,37 @@ class DesignProjectWorkflow:
         - After scan completes (line 123): merges early analysis with LiDAR
         - After _resolve_analysis (line 580): merges late analysis with LiDAR
         Idempotent — safe to call multiple times with the same state.
+
+        Either source (photos or LiDAR) is sufficient to build context;
+        both are optional so intake can proceed with whatever is available.
         """
-        if self.room_analysis is None:
+        has_analysis = self.room_analysis is not None
+        has_lidar = (
+            self.scan_data is not None
+            and self.scan_data.room_dimensions is not None
+        )
+        if not has_analysis and not has_lidar:
             return
-        if self.scan_data and self.scan_data.room_dimensions:
+
+        sources: list[str] = []
+        dims: RoomDimensions | None = None
+
+        if has_analysis:
+            sources.append("photos")
+        if has_lidar:
+            assert self.scan_data is not None  # for type narrowing
             dims = self.scan_data.room_dimensions
-            self.room_analysis.estimated_dimensions = (
-                f"{dims.width_m:.1f}m x {dims.length_m:.1f}m (ceiling {dims.height_m:.1f}m)"
-            )
-            self.room_context = RoomContext(
-                photo_analysis=self.room_analysis,
-                room_dimensions=dims,
-                enrichment_sources=["photos", "lidar"],
-            )
-        else:
-            self.room_context = RoomContext(
-                photo_analysis=self.room_analysis,
-                enrichment_sources=["photos"],
-            )
+            sources.append("lidar")
+            if self.room_analysis is not None and dims is not None:
+                self.room_analysis.estimated_dimensions = (
+                    f"{dims.width_m:.1f}m x {dims.length_m:.1f}m (ceiling {dims.height_m:.1f}m)"
+                )
+
+        self.room_context = RoomContext(
+            photo_analysis=self.room_analysis,
+            room_dimensions=dims,
+            enrichment_sources=sources,
+        )
 
     def _analysis_input(self) -> AnalyzeRoomPhotosInput:
         """Build input for the read_the_room activity."""

@@ -287,7 +287,7 @@ final class ModelsTests: XCTestCase {
 
     func testProjectStepIsTerminal() {
         // Non-terminal steps
-        let nonTerminal: [ProjectStep] = [.photoUpload, .scan, .intake, .generation, .selection, .iteration, .approval, .shopping]
+        let nonTerminal: [ProjectStep] = [.photoUpload, .scan, .analyzing, .intake, .generation, .selection, .iteration, .approval, .shopping]
         for step in nonTerminal {
             XCTAssertFalse(step.isTerminal, "\(step) should not be terminal")
         }
@@ -388,7 +388,7 @@ final class ModelsTests: XCTestCase {
     // MARK: - ProjectStep ordering (Comparable)
 
     func testProjectStepOrderingFollowsWorkflow() {
-        let steps: [ProjectStep] = [.photoUpload, .scan, .intake, .generation, .selection, .iteration, .approval, .shopping, .completed, .abandoned, .cancelled]
+        let steps: [ProjectStep] = [.photoUpload, .scan, .analyzing, .intake, .generation, .selection, .iteration, .approval, .shopping, .completed, .abandoned, .cancelled]
         // Each step should be less than the next
         for i in 0..<steps.count - 1 {
             XCTAssertTrue(steps[i] < steps[i + 1], "\(steps[i]) should be < \(steps[i + 1])")
@@ -985,5 +985,33 @@ final class ModelsTests: XCTestCase {
         } else {
             XCTFail("Expected .delta after comment line")
         }
+    }
+
+    func testSSEParserErrorEvent() {
+        var parser = SSELineParser()
+        _ = parser.feed("event: error")
+        _ = parser.feed("data: {\"error\": \"Claude rate limited\", \"retryable\": true}")
+        let event = parser.feed("")
+        if case .error(let message) = event {
+            XCTAssertEqual(message, "Claude rate limited")
+        } else {
+            XCTFail("Expected .error, got \(String(describing: event))")
+        }
+    }
+
+    func testSSEParserErrorAfterDeltas() {
+        var parser = SSELineParser()
+        // First get a delta
+        _ = parser.feed("event: delta")
+        _ = parser.feed("data: {\"text\": \"partial\"}")
+        let e1 = parser.feed("")
+        if case .delta(let t) = e1 { XCTAssertEqual(t, "partial") }
+        else { XCTFail("Expected .delta") }
+        // Then get an error
+        _ = parser.feed("event: error")
+        _ = parser.feed("data: {\"error\": \"API failed\", \"retryable\": false}")
+        let e2 = parser.feed("")
+        if case .error(let msg) = e2 { XCTAssertEqual(msg, "API failed") }
+        else { XCTFail("Expected .error, got \(String(describing: e2))") }
     }
 }

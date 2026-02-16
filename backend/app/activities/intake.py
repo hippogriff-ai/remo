@@ -20,6 +20,7 @@ from temporalio import activity
 from temporalio.exceptions import ApplicationError
 
 from app.activities import skill_loader
+from app.config import settings
 from app.models.contracts import (
     ChatMessage,
     DesignBrief,
@@ -817,7 +818,7 @@ def _prepare_intake_call(input: IntakeChatInput) -> _IntakeCallParams:
     if not input.user_message.strip():
         raise ApplicationError("User message cannot be empty", non_retryable=True)
 
-    api_key = os.environ.get("ANTHROPIC_API_KEY")
+    api_key = settings.anthropic_api_key or os.environ.get("ANTHROPIC_API_KEY", "")
     if not api_key:
         raise ApplicationError("ANTHROPIC_API_KEY not set", non_retryable=True)
 

@@ -265,6 +265,10 @@ public struct IntakeChatScreen: View {
         }
     }
 
+    /// Minimum interval between UI updates when streaming deltas, so text
+    /// appears as a readable typing effect instead of a sudden wall of text.
+    private static let minDeltaInterval: Duration = .milliseconds(30)
+
     private func sendMessage(_ message: String) async {
         guard !isSending else { return }
         guard let projectId = projectState.projectId else {
@@ -278,17 +282,18 @@ public struct IntakeChatScreen: View {
         isSending = true
         defer { isSending = false }
 
+        let messageCountBefore = projectState.chatMessages.count
         projectState.chatMessages.append(ChatMessage(role: "user", content: trimmed))
         isInputFocused = false
         inputText = ""
 
         let history = Array(projectState.chatMessages.suffix(20))
-        let messageCountBefore = projectState.chatMessages.count
 
         do {
             // Try streaming first for progressive text rendering
             var receivedDone = false
             var receivedAnyDelta = false
+            var lastDeltaTime: ContinuousClock.Instant = .now
             let stream = client.streamIntakeMessage(
                 projectId: projectId,
                 message: trimmed,
@@ -308,10 +313,23 @@ public struct IntakeChatScreen: View {
                         let idx = projectState.chatMessages.count - 1
                         projectState.chatMessages[idx].content += text
                     }
+                    // Throttle: ensure minimum interval between UI updates so
+                    // deltas that arrive in a burst appear as gradual typing
+                    let elapsed = ContinuousClock.now - lastDeltaTime
+                    if elapsed < Self.minDeltaInterval {
+                        try await Task.sleep(for: Self.minDeltaInterval - elapsed)
+                    }
+                    lastDeltaTime = .now
                 case .done(let output):
-                    // Replace streamed text with final authoritative message
-                    if let idx = projectState.chatMessages.indices.last,
-                       projectState.chatMessages[idx].role == "assistant" {
+                    if !receivedAnyDelta {
+                        // No streaming occurred — reveal text with typewriter effect
+                        await revealTextProgressively(
+                            output.agentMessage,
+                            messageCountBefore: messageCountBefore
+                        )
+                    } else if let idx = projectState.chatMessages.indices.last,
+                              projectState.chatMessages[idx].role == "assistant" {
+                        // Replace streamed text with final authoritative message
                         projectState.chatMessages[idx].content = output.agentMessage
                     } else {
                         projectState.chatMessages.append(
@@ -320,6 +338,15 @@ public struct IntakeChatScreen: View {
                     }
                     projectState.currentIntakeOutput = output
                     receivedDone = true
+                case .error(let message):
+                    // Remove any partial streamed content
+                    if projectState.chatMessages.count > messageCountBefore {
+                        projectState.chatMessages.removeSubrange(messageCountBefore...)
+                    }
+                    inputText = trimmed
+                    selectedQuickReply = nil
+                    errorMessage = message
+                    return
                 }
             }
             // Only fall back to non-streaming if we never got any data from
@@ -332,11 +359,14 @@ public struct IntakeChatScreen: View {
                     conversationHistory: history,
                     mode: selectedMode
                 )
-                projectState.chatMessages.append(
-                    ChatMessage(role: "assistant", content: output.agentMessage)
+                await revealTextProgressively(
+                    output.agentMessage,
+                    messageCountBefore: messageCountBefore
                 )
                 projectState.currentIntakeOutput = output
             }
+        } catch is CancellationError {
+            // View disappeared — do nothing
         } catch {
             // Roll back only messages added during this send attempt
             if projectState.chatMessages.count > messageCountBefore {
@@ -355,6 +385,28 @@ public struct IntakeChatScreen: View {
             inputText = trimmed
             selectedQuickReply = nil
             errorMessage = error.localizedDescription
+        }
+    }
+
+    /// Reveal text progressively for a natural typing effect when streaming
+    /// produced no deltas (e.g. non-streaming fallback or tool-use JSON delay).
+    private func revealTextProgressively(
+        _ text: String,
+        messageCountBefore: Int
+    ) async {
+        if projectState.chatMessages.last?.role != "assistant"
+            || projectState.chatMessages.count <= messageCountBefore {
+            projectState.chatMessages.append(ChatMessage(role: "assistant", content: ""))
+        }
+        let idx = projectState.chatMessages.count - 1
+        // Reveal ~4 characters per frame at 30ms intervals (~130 chars/sec)
+        let chunkSize = 4
+        var offset = text.startIndex
+        while offset < text.endIndex {
+            let end = text.index(offset, offsetBy: chunkSize, limitedBy: text.endIndex) ?? text.endIndex
+            projectState.chatMessages[idx].content += text[offset..<end]
+            offset = end
+            try? await Task.sleep(for: Self.minDeltaInterval)
         }
     }
 

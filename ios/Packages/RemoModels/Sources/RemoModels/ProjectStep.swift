@@ -6,6 +6,7 @@ import Foundation
 public enum ProjectStep: String, Codable, Hashable, CaseIterable, Sendable, Comparable {
     case photoUpload = "photos"
     case scan = "scan"
+    case analyzing = "analyzing"
     case intake = "intake"
     case generation = "generation"
     case selection = "selection"
@@ -30,15 +31,16 @@ public enum ProjectStep: String, Codable, Hashable, CaseIterable, Sendable, Comp
         switch self {
         case .photoUpload: 0
         case .scan: 1
-        case .intake: 2
-        case .generation: 3
-        case .selection: 4
-        case .iteration: 5
-        case .approval: 6
-        case .shopping: 7
-        case .completed: 8
-        case .abandoned: 9
-        case .cancelled: 10
+        case .analyzing: 2
+        case .intake: 3
+        case .generation: 4
+        case .selection: 5
+        case .iteration: 6
+        case .approval: 7
+        case .shopping: 8
+        case .completed: 9
+        case .abandoned: 10
+        case .cancelled: 11
         }
     }
 

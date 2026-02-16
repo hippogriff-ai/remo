@@ -45,6 +45,11 @@ public final class ProjectState {
                 PhotoData(photoId: "r1", storageKey: "photos/room_0.jpg", photoType: "room", note: nil),
                 PhotoData(photoId: "r2", storageKey: "photos/room_1.jpg", photoType: "room", note: nil),
             ]
+        case .analyzing:
+            state.photos = [
+                PhotoData(photoId: "r1", storageKey: "photos/room_0.jpg", photoType: "room", note: nil),
+                PhotoData(photoId: "r2", storageKey: "photos/room_0.jpg", photoType: "room", note: nil),
+            ]
         case .intake:
             state.photos = [
                 PhotoData(photoId: "r1", storageKey: "photos/room_0.jpg", photoType: "room", note: nil),

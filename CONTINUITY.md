@@ -317,6 +317,14 @@ Edge SSIM +0.047 is the largest single-metric improvement across all loops. Dire
     - All results recorded in prompt_ab_history.jsonl.
     - Calibration test threshold adjusted (70→65) for Opus judge stricter scoring.
     - 1512 backend tests pass (excluding eval). Ruff clean.
+  - Done: Ralph Loop iteration 6 — API key resolution fix + real E2E verification:
+    - Production bug: SSE streaming endpoints (intake + shopping) used `os.environ.get("ANTHROPIC_API_KEY")` which returns None when key is only in `.env` file (pydantic-settings loads `.env` into `Settings` object, not into `os.environ`). SSE endpoints run in API server process, not Temporal worker.
+    - Fix: `settings.anthropic_api_key or os.environ.get(...)` in both `_prepare_intake_call()` (intake.py) and `generate_shopping_list[_streaming]()` (shopping.py). Also fixed `exa_api_key` the same way.
+    - Updated 4 unit tests to also mock `settings` alongside `os.environ` patching.
+    - Real E2E SSE tests (4 tests, 14m 17s total):
+      - Intake SSE: 207 deltas, 1444 chars streamed (single-turn), multi-turn reaches summary in 3 turns, session persistence works
+      - Shopping SSE: full pipeline (photos→scan→intake→gen→select→approve→shopping), 10 items streamed progressively, 0 errors. Products from Amazon, Home Depot, Walmart, Macy's, Target, Etsy.
+    - 460 intake+shopping unit tests pass. E2E all green.
 - Next: Phase B (export positions from iOS RoomPlan). Consider: improve edit_fidelity (10.8/15 has headroom).
 
 ## Prompt Version Status

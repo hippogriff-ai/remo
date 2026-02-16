@@ -83,6 +83,9 @@ schemes:
         - variable: BACKEND_URL
           value: "http://localhost:8001"
           isEnabled: false
+        - variable: MTL_DEBUG_LAYER
+          value: "0"
+          isEnabled: true
     test:
       config: Debug
     profile:

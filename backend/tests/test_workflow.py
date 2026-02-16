@@ -493,8 +493,18 @@ class TestBuildRoomContext:
         assert wf.room_context.enrichment_sources == first_context.enrichment_sources
         assert wf.room_context.room_dimensions == first_context.room_dimensions
 
-    def test_noop_when_no_analysis(self) -> None:
-        """_build_room_context() is a no-op when room_analysis is None."""
+    def test_noop_when_no_analysis_and_no_lidar(self) -> None:
+        """_build_room_context() is a no-op when both analysis and LiDAR are None."""
+        wf = self._make_workflow()
+        wf.room_analysis = None
+        wf.scan_data = None
+        wf.room_context = None
+
+        wf._build_room_context()
+        assert wf.room_context is None  # Still None — nothing to merge
+
+    def test_lidar_only_builds_context(self) -> None:
+        """_build_room_context() builds context with LiDAR even without photo analysis."""
         wf = self._make_workflow()
         wf.room_analysis = None
         wf.scan_data = ScanData(
@@ -504,7 +514,11 @@ class TestBuildRoomContext:
         wf.room_context = None
 
         wf._build_room_context()
-        assert wf.room_context is None  # Still None — early return
+        assert wf.room_context is not None
+        assert wf.room_context.photo_analysis is None
+        assert wf.room_context.room_dimensions is not None
+        assert wf.room_context.room_dimensions.width_m == 4.0
+        assert wf.room_context.enrichment_sources == ["lidar"]
 
     def test_lidar_updates_estimated_dimensions(self) -> None:
         """_build_room_context() overwrites estimated_dimensions with precise LiDAR values."""

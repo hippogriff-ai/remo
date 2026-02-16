@@ -2208,8 +2208,11 @@ class TestGenerateShoppingListMocked:
 
         with (
             patch.dict("os.environ", {}, clear=True),
+            patch("app.activities.shopping.settings") as mock_settings,
             pytest.raises(ApplicationError, match="ANTHROPIC_API_KEY"),
         ):
+            mock_settings.anthropic_api_key = ""
+            mock_settings.exa_api_key = ""
             asyncio.run(generate_shopping_list(input_data))
 
     def test_missing_exa_key_raises(self):
@@ -2224,8 +2227,11 @@ class TestGenerateShoppingListMocked:
 
         with (
             patch.dict("os.environ", {"ANTHROPIC_API_KEY": "test-key"}, clear=True),
+            patch("app.activities.shopping.settings") as mock_settings,
             pytest.raises(ApplicationError, match="EXA_API_KEY"),
         ):
+            mock_settings.anthropic_api_key = ""
+            mock_settings.exa_api_key = ""
             asyncio.run(generate_shopping_list(input_data))
 
 
@@ -3314,7 +3320,10 @@ class TestGenerateShoppingListStreaming:
         monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
         monkeypatch.delenv("EXA_API_KEY", raising=False)
 
-        events = asyncio.run(self._collect_events())
+        with patch("app.activities.shopping.settings") as mock_settings:
+            mock_settings.anthropic_api_key = ""
+            mock_settings.exa_api_key = ""
+            events = asyncio.run(self._collect_events())
         assert len(events) == 1
         assert "event: error" in events[0]
         assert "ANTHROPIC_API_KEY" in events[0]
@@ -3324,7 +3333,10 @@ class TestGenerateShoppingListStreaming:
         monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
         monkeypatch.delenv("EXA_API_KEY", raising=False)
 
-        events = asyncio.run(self._collect_events())
+        with patch("app.activities.shopping.settings") as mock_settings:
+            mock_settings.anthropic_api_key = ""
+            mock_settings.exa_api_key = ""
+            events = asyncio.run(self._collect_events())
         assert len(events) == 1
         assert "event: error" in events[0]
         assert "EXA_API_KEY" in events[0]

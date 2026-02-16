@@ -29,6 +29,7 @@ import structlog
 from temporalio import activity
 from temporalio.exceptions import ApplicationError
 
+from app.config import settings
 from app.models.contracts import (
     DesignBrief,
     GenerateShoppingListInput,
@@ -1564,11 +1565,11 @@ async def generate_shopping_list(
 
     Stateless: all data passed via input, output returned.
     """
-    anthropic_key = os.environ.get("ANTHROPIC_API_KEY")
+    anthropic_key = settings.anthropic_api_key or os.environ.get("ANTHROPIC_API_KEY", "")
     if not anthropic_key:
         raise ApplicationError("ANTHROPIC_API_KEY not set", non_retryable=True)
 
-    exa_key = os.environ.get("EXA_API_KEY")
+    exa_key = settings.exa_api_key or os.environ.get("EXA_API_KEY", "")
     if not exa_key:
         raise ApplicationError("EXA_API_KEY not set", non_retryable=True)
 
@@ -1700,12 +1701,12 @@ async def generate_shopping_list_streaming(
     Reuses all existing functions; searches items sequentially for
     streaming progress, then batch-scores for quality.
     """
-    anthropic_key = os.environ.get("ANTHROPIC_API_KEY")
+    anthropic_key = settings.anthropic_api_key or os.environ.get("ANTHROPIC_API_KEY", "")
     if not anthropic_key:
         yield f"event: error\ndata: {json.dumps({'error': 'ANTHROPIC_API_KEY not set'})}\n\n"
         return
 
-    exa_key = os.environ.get("EXA_API_KEY")
+    exa_key = settings.exa_api_key or os.environ.get("EXA_API_KEY", "")
     if not exa_key:
         yield f"event: error\ndata: {json.dumps({'error': 'EXA_API_KEY not set'})}\n\n"
         return

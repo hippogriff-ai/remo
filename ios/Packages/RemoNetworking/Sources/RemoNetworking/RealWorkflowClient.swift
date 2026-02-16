@@ -157,10 +157,11 @@ public final class RealWorkflowClient: WorkflowClientProtocol, @unchecked Sendab
                     }
 
                     var parser = SSELineParser()
-                    for try await line in bytes.lines {
+                    streamLoop: for try await line in bytes.lines {
                         if let event = parser.feed(line) {
                             continuation.yield(event)
-                            if case .done = event { break }
+                            if case .done = event { break streamLoop }
+                            if case .error = event { break streamLoop }
                         }
                     }
                     // Feed an empty line to flush any buffered event

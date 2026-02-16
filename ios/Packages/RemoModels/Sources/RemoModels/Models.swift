@@ -643,6 +643,8 @@ public enum IntakeSSEEvent: Sendable {
     case delta(String)
     /// Final response with full output (options, brief, etc.).
     case done(IntakeChatOutput)
+    /// Error from the backend (API failure, rate limit, processing error).
+    case error(String)
 }
 
 /// Parses raw SSE lines (from `text/event-stream`) into typed events.
@@ -698,6 +700,14 @@ public struct SSELineParser: Sendable {
                 return nil
             }
             return .done(output)
+        case "error":
+            // data: {"error": "message", "retryable": bool}
+            guard let jsonData = data.data(using: .utf8),
+                  let obj = try? JSONSerialization.jsonObject(with: jsonData) as? [String: Any],
+                  let message = obj["error"] as? String else {
+                return nil
+            }
+            return .error(message)
         default:
             return nil
         }
