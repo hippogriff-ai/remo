@@ -383,13 +383,14 @@ class TestBuildMessages:
         content = messages[0]["content"]
         # Should be a list of content blocks (multimodal)
         assert isinstance(content, list)
-        assert len(content) == 3  # 2 images + 1 text
-        assert content[0]["type"] == "image"
-        assert content[0]["source"]["url"] == photos[0]
+        assert len(content) == 4  # room label + 2 images + 1 text
+        assert content[0]["type"] == "text"  # room photos label
         assert content[1]["type"] == "image"
-        assert content[1]["source"]["url"] == photos[1]
-        assert content[2]["type"] == "text"
-        assert content[2]["text"] == "My kitchen needs help"
+        assert content[1]["source"]["url"] == photos[0]
+        assert content[2]["type"] == "image"
+        assert content[2]["source"]["url"] == photos[1]
+        assert content[3]["type"] == "text"
+        assert content[3]["text"] == "My kitchen needs help"
 
     def test_second_turn_no_photo_injection(self):
         """Photos should only be injected on first turn (empty history)."""
@@ -426,23 +427,25 @@ class TestBuildMessages:
         )
         content = messages[0]["content"]
         assert isinstance(content, list)
-        # room photo + inspo photo 1 + note text + inspo photo 2 + user text = 5
-        assert len(content) == 5
-        # Room photo first
-        assert content[0]["type"] == "image"
-        assert content[0]["source"]["url"] == room[0]
-        # Inspo photo 1 + note
+        # room label + room photo + inspo label + inspo 1 + note + inspo 2 + text = 7
+        assert len(content) == 7
+        # Room label + photo
+        assert content[0]["type"] == "text"  # room label
         assert content[1]["type"] == "image"
-        assert content[1]["source"]["url"] == inspo[0]
-        assert content[2]["type"] == "text"
-        assert "Inspiration photo 1 note" in content[2]["text"]
-        assert "Love the warm lighting" in content[2]["text"]
-        # Inspo photo 2 (no note)
+        assert content[1]["source"]["url"] == room[0]
+        # Inspiration label + photo 1 + note
+        assert content[2]["type"] == "text"  # inspiration label
         assert content[3]["type"] == "image"
-        assert content[3]["source"]["url"] == inspo[1]
-        # User text last
+        assert content[3]["source"]["url"] == inspo[0]
         assert content[4]["type"] == "text"
-        assert content[4]["text"] == "Help me redesign"
+        assert "Inspiration photo 1 note" in content[4]["text"]
+        assert "Love the warm lighting" in content[4]["text"]
+        # Inspo photo 2 (no note)
+        assert content[5]["type"] == "image"
+        assert content[5]["source"]["url"] == inspo[1]
+        # User text last
+        assert content[6]["type"] == "text"
+        assert content[6]["text"] == "Help me redesign"
 
     def test_inspiration_only_no_room_photos(self):
         """Inspiration photos work without room photos."""
@@ -454,9 +457,10 @@ class TestBuildMessages:
         )
         content = messages[0]["content"]
         assert isinstance(content, list)
-        assert len(content) == 2  # inspo image + user text
-        assert content[0]["type"] == "image"
-        assert content[1]["type"] == "text"
+        assert len(content) == 3  # inspo label + inspo image + user text
+        assert content[0]["type"] == "text"  # inspiration label
+        assert content[1]["type"] == "image"
+        assert content[2]["type"] == "text"
 
     def test_inspiration_with_no_notes(self):
         """Inspiration photos without notes should not add text annotations."""
@@ -469,10 +473,10 @@ class TestBuildMessages:
         )
         content = messages[0]["content"]
         assert isinstance(content, list)
-        # Just 1 image + 1 text (no note annotation)
-        assert len(content) == 2
+        # inspo label + 1 image + 1 text (no note annotation)
+        assert len(content) == 3
         text_blocks = [b for b in content if b["type"] == "text"]
-        assert len(text_blocks) == 1  # only user message
+        assert len(text_blocks) == 2  # inspiration label + user message
 
 
 # === Inspiration Note Helper Tests ===
