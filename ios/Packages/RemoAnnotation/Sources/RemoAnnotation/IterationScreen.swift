@@ -342,8 +342,13 @@ public struct IterationScreen: View {
     private var textControls: some View {
         VStack(alignment: .leading, spacing: 4) {
             TextField("Describe what you'd like changed...", text: $textFeedback, axis: .vertical)
-                .textFieldStyle(.roundedBorder)
-                .lineLimit(2...6)
+                .textFieldStyle(.plain)
+                .padding(8)
+                .background(
+                    RoundedRectangle(cornerRadius: 6)
+                        .stroke(Color.secondary.opacity(0.4), lineWidth: 1)
+                )
+                .lineLimit(3...12)
                 .accessibilityIdentifier("iteration_text_input")
 
             let trimmedCount = textFeedback.trimmingCharacters(in: .whitespaces).count

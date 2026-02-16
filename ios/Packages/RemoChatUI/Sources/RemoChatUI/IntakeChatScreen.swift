@@ -282,23 +282,70 @@ public struct IntakeChatScreen: View {
         isInputFocused = false
         inputText = ""
 
+        let history = Array(projectState.chatMessages.suffix(20))
+        let messageCountBefore = projectState.chatMessages.count
+
         do {
-            // API contract caps conversation_history at 20 items; send only the tail
-            let history = Array(projectState.chatMessages.suffix(20))
-            let output = try await client.sendIntakeMessage(projectId: projectId, message: trimmed, conversationHistory: history, mode: selectedMode)
-            projectState.chatMessages.append(ChatMessage(role: "assistant", content: output.agentMessage))
-            projectState.currentIntakeOutput = output
+            // Try streaming first for progressive text rendering
+            var receivedDone = false
+            var receivedAnyDelta = false
+            let stream = client.streamIntakeMessage(
+                projectId: projectId,
+                message: trimmed,
+                conversationHistory: history,
+                mode: selectedMode
+            )
+            for try await event in stream {
+                switch event {
+                case .delta(let text):
+                    receivedAnyDelta = true
+                    if projectState.chatMessages.last?.role != "assistant"
+                        || projectState.chatMessages.count == messageCountBefore {
+                        projectState.chatMessages.append(
+                            ChatMessage(role: "assistant", content: text)
+                        )
+                    } else {
+                        let idx = projectState.chatMessages.count - 1
+                        projectState.chatMessages[idx].content += text
+                    }
+                case .done(let output):
+                    // Replace streamed text with final authoritative message
+                    if let idx = projectState.chatMessages.indices.last,
+                       projectState.chatMessages[idx].role == "assistant" {
+                        projectState.chatMessages[idx].content = output.agentMessage
+                    } else {
+                        projectState.chatMessages.append(
+                            ChatMessage(role: "assistant", content: output.agentMessage)
+                        )
+                    }
+                    projectState.currentIntakeOutput = output
+                    receivedDone = true
+                }
+            }
+            // Only fall back to non-streaming if we never got any data from
+            // the stream. If deltas arrived, the server already processed the
+            // message — re-sending would duplicate it.
+            if !receivedDone && !receivedAnyDelta {
+                let output = try await client.sendIntakeMessage(
+                    projectId: projectId,
+                    message: trimmed,
+                    conversationHistory: history,
+                    mode: selectedMode
+                )
+                projectState.chatMessages.append(
+                    ChatMessage(role: "assistant", content: output.agentMessage)
+                )
+                projectState.currentIntakeOutput = output
+            }
         } catch {
-            // Roll back optimistic message so chat isn't polluted with unsent text
-            if let lastIndex = projectState.chatMessages.indices.last,
-               projectState.chatMessages[lastIndex].role == "user",
-               projectState.chatMessages[lastIndex].content == trimmed {
-                projectState.chatMessages.removeLast()
+            // Roll back only messages added during this send attempt
+            if projectState.chatMessages.count > messageCountBefore {
+                projectState.chatMessages.removeSubrange(messageCountBefore...)
             }
 
             // "wrong_step" means the workflow advanced past intake — refresh state
-            // so the router navigates to the correct screen instead of showing a dead-end error
-            if case .httpError(409, let response) = error as? APIError, response.error == "wrong_step" {
+            if case .httpError(409, let response) = error as? APIError,
+               response.error == "wrong_step" {
                 if let newState = try? await client.getState(projectId: projectId) {
                     projectState.apply(newState)
                     return

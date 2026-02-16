@@ -709,4 +709,281 @@ final class ModelsTests: XCTestCase {
         XCTAssertTrue(state.approved)
         XCTAssertEqual(state.chatHistoryKey, "chat-key-123")
     }
+
+    // MARK: - SSE Line Parser
+
+    func testSSEParserDeltaEvent() {
+        var parser = SSELineParser()
+        XCTAssertNil(parser.feed("event: delta"))
+        XCTAssertNil(parser.feed("data: {\"text\": \"hello\"}"))
+        let event = parser.feed("")
+        if case .delta(let text) = event {
+            XCTAssertEqual(text, "hello")
+        } else {
+            XCTFail("Expected .delta, got \(String(describing: event))")
+        }
+    }
+
+    func testSSEParserDoneEvent() {
+        var parser = SSELineParser()
+        _ = parser.feed("event: done")
+        let json = """
+        {"agent_message":"Hi","options":null,"is_open_ended":true,"progress":null,"is_summary":false,"partial_brief":null}
+        """
+        _ = parser.feed("data: \(json)")
+        let event = parser.feed("")
+        if case .done(let output) = event {
+            XCTAssertEqual(output.agentMessage, "Hi")
+            XCTAssertTrue(output.isOpenEnded)
+            XCTAssertFalse(output.isSummary)
+        } else {
+            XCTFail("Expected .done, got \(String(describing: event))")
+        }
+    }
+
+    func testSSEParserIgnoresUnknownEvents() {
+        var parser = SSELineParser()
+        _ = parser.feed("event: heartbeat")
+        _ = parser.feed("data: {}")
+        XCTAssertNil(parser.feed(""))
+    }
+
+    func testSSEParserIgnoresMalformedDelta() {
+        var parser = SSELineParser()
+        _ = parser.feed("event: delta")
+        _ = parser.feed("data: not-json")
+        XCTAssertNil(parser.feed(""))
+    }
+
+    func testSSEParserMultipleEvents() {
+        var parser = SSELineParser()
+        // First delta
+        _ = parser.feed("event: delta")
+        _ = parser.feed("data: {\"text\": \"a\"}")
+        let e1 = parser.feed("")
+        if case .delta(let t) = e1 { XCTAssertEqual(t, "a") }
+        else { XCTFail("Expected .delta") }
+
+        // Second delta
+        _ = parser.feed("event: delta")
+        _ = parser.feed("data: {\"text\": \"b\"}")
+        let e2 = parser.feed("")
+        if case .delta(let t) = e2 { XCTAssertEqual(t, "b") }
+        else { XCTFail("Expected .delta") }
+    }
+
+    func testSSEParserIgnoresCommentLines() {
+        var parser = SSELineParser()
+        _ = parser.feed(": this is a comment")
+        _ = parser.feed("event: delta")
+        _ = parser.feed("data: {\"text\": \"ok\"}")
+        let event = parser.feed("")
+        if case .delta(let text) = event {
+            XCTAssertEqual(text, "ok")
+        } else {
+            XCTFail("Expected .delta")
+        }
+    }
+
+    func testSSEParserEmptyBlockReturnsNil() {
+        var parser = SSELineParser()
+        // Empty line without any event/data
+        XCTAssertNil(parser.feed(""))
+    }
+
+    // MARK: - Shopping SSE Line Parser
+
+    func testShoppingSSEParserStatusEvent() {
+        var parser = ShoppingSSELineParser()
+        _ = parser.feed("event: status")
+        _ = parser.feed("data: {\"phase\": \"Extracting items\", \"item_count\": 5}")
+        let event = parser.feed("")
+        if case .status(let phase, let itemCount) = event {
+            XCTAssertEqual(phase, "Extracting items")
+            XCTAssertEqual(itemCount, 5)
+        } else {
+            XCTFail("Expected .status, got \(String(describing: event))")
+        }
+    }
+
+    func testShoppingSSEParserStatusWithoutItemCount() {
+        var parser = ShoppingSSELineParser()
+        _ = parser.feed("event: status")
+        _ = parser.feed("data: {\"phase\": \"Analyzing design\"}")
+        let event = parser.feed("")
+        if case .status(let phase, let itemCount) = event {
+            XCTAssertEqual(phase, "Analyzing design")
+            XCTAssertNil(itemCount)
+        } else {
+            XCTFail("Expected .status, got \(String(describing: event))")
+        }
+    }
+
+    func testShoppingSSEParserItemSearchEvent() {
+        var parser = ShoppingSSELineParser()
+        _ = parser.feed("event: item_search")
+        _ = parser.feed("data: {\"item\": \"accent chair\", \"candidates\": 3}")
+        let event = parser.feed("")
+        if case .itemSearch(let name, let candidates) = event {
+            XCTAssertEqual(name, "accent chair")
+            XCTAssertEqual(candidates, 3)
+        } else {
+            XCTFail("Expected .itemSearch, got \(String(describing: event))")
+        }
+    }
+
+    func testShoppingSSEParserItemSearchWithoutCandidates() {
+        var parser = ShoppingSSELineParser()
+        _ = parser.feed("event: item_search")
+        _ = parser.feed("data: {\"item\": \"floor lamp\"}")
+        let event = parser.feed("")
+        if case .itemSearch(let name, let candidates) = event {
+            XCTAssertEqual(name, "floor lamp")
+            XCTAssertNil(candidates)
+        } else {
+            XCTFail("Expected .itemSearch, got \(String(describing: event))")
+        }
+    }
+
+    func testShoppingSSEParserItemEvent() {
+        var parser = ShoppingSSELineParser()
+        let json = """
+        {"category_group":"Furniture","product_name":"Chair","retailer":"West Elm","price_cents":24999,"product_url":"https://example.com/chair","image_url":null,"confidence_score":0.92,"why_matched":"Style match","fit_status":"fits","fit_detail":null,"dimensions":"32\\"W"}
+        """
+        _ = parser.feed("event: item")
+        _ = parser.feed("data: \(json)")
+        let event = parser.feed("")
+        if case .item(let product) = event {
+            XCTAssertEqual(product.productName, "Chair")
+            XCTAssertEqual(product.priceCents, 24999)
+            XCTAssertEqual(product.confidenceScore, 0.92)
+        } else {
+            XCTFail("Expected .item, got \(String(describing: event))")
+        }
+    }
+
+    func testShoppingSSEParserDoneEvent() {
+        var parser = ShoppingSSELineParser()
+        let json = """
+        {"items":[],"unmatched":[],"total_estimated_cost_cents":0}
+        """
+        _ = parser.feed("event: done")
+        _ = parser.feed("data: \(json)")
+        let event = parser.feed("")
+        if case .done(let output) = event {
+            XCTAssertTrue(output.items.isEmpty)
+            XCTAssertEqual(output.totalEstimatedCostCents, 0)
+        } else {
+            XCTFail("Expected .done, got \(String(describing: event))")
+        }
+    }
+
+    func testShoppingSSEParserErrorEvent() {
+        var parser = ShoppingSSELineParser()
+        _ = parser.feed("event: error")
+        _ = parser.feed("data: {\"error\": \"ANTHROPIC_API_KEY not set\"}")
+        let event = parser.feed("")
+        if case .error(let message) = event {
+            XCTAssertEqual(message, "ANTHROPIC_API_KEY not set")
+        } else {
+            XCTFail("Expected .error, got \(String(describing: event))")
+        }
+    }
+
+    func testShoppingSSEParserIgnoresUnknownEvents() {
+        var parser = ShoppingSSELineParser()
+        _ = parser.feed("event: heartbeat")
+        _ = parser.feed("data: {}")
+        XCTAssertNil(parser.feed(""))
+    }
+
+    func testShoppingSSEParserMultipleEvents() {
+        var parser = ShoppingSSELineParser()
+        // Status event
+        _ = parser.feed("event: status")
+        _ = parser.feed("data: {\"phase\": \"Searching\"}")
+        let e1 = parser.feed("")
+        if case .status(let phase, _) = e1 { XCTAssertEqual(phase, "Searching") }
+        else { XCTFail("Expected .status") }
+
+        // Item search event
+        _ = parser.feed("event: item_search")
+        _ = parser.feed("data: {\"item\": \"lamp\", \"candidates\": 2}")
+        let e2 = parser.feed("")
+        if case .itemSearch(let name, let candidates) = e2 {
+            XCTAssertEqual(name, "lamp")
+            XCTAssertEqual(candidates, 2)
+        } else { XCTFail("Expected .itemSearch") }
+    }
+
+    func testShoppingSSEParserMalformedData() {
+        var parser = ShoppingSSELineParser()
+        _ = parser.feed("event: status")
+        _ = parser.feed("data: not-json")
+        XCTAssertNil(parser.feed(""))
+    }
+
+    func testShoppingSSEParserEmptyData() {
+        var parser = ShoppingSSELineParser()
+        _ = parser.feed("event: status")
+        _ = parser.feed("data: ")
+        XCTAssertNil(parser.feed(""))
+    }
+
+    func testShoppingSSEParserMissingDataLine() {
+        var parser = ShoppingSSELineParser()
+        _ = parser.feed("event: status")
+        // Empty line triggers parse with no data buffered
+        XCTAssertNil(parser.feed(""))
+    }
+
+    func testShoppingSSEParserEmptyEventType() {
+        var parser = ShoppingSSELineParser()
+        _ = parser.feed("event: ")
+        _ = parser.feed("data: {\"phase\": \"test\"}")
+        // Empty event type should be treated as unknown
+        XCTAssertNil(parser.feed(""))
+    }
+
+    func testShoppingSSEParserCommentLinesIgnored() {
+        var parser = ShoppingSSELineParser()
+        _ = parser.feed(": this is a heartbeat comment")
+        _ = parser.feed("event: status")
+        _ = parser.feed("data: {\"phase\": \"Searching\", \"item_count\": 5}")
+        let event = parser.feed("")
+        if case .status(let phase, let count) = event {
+            XCTAssertEqual(phase, "Searching")
+            XCTAssertEqual(count, 5)
+        } else {
+            XCTFail("Expected .status after comment line")
+        }
+    }
+
+    // MARK: - Intake SSE Parser Edge Cases
+
+    func testSSEParserEmptyData() {
+        var parser = SSELineParser()
+        _ = parser.feed("event: delta")
+        _ = parser.feed("data: ")
+        XCTAssertNil(parser.feed(""))
+    }
+
+    func testSSEParserMissingDataLine() {
+        var parser = SSELineParser()
+        _ = parser.feed("event: delta")
+        XCTAssertNil(parser.feed(""))
+    }
+
+    func testSSEParserCommentLinesIgnored() {
+        var parser = SSELineParser()
+        _ = parser.feed(": keepalive")
+        _ = parser.feed("event: delta")
+        _ = parser.feed("data: {\"text\": \"hello\"}")
+        let event = parser.feed("")
+        if case .delta(let text) = event {
+            XCTAssertEqual(text, "hello")
+        } else {
+            XCTFail("Expected .delta after comment line")
+        }
+    }
 }

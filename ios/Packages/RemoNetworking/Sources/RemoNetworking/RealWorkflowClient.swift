@@ -106,12 +106,160 @@ public final class RealWorkflowClient: WorkflowClientProtocol, @unchecked Sendab
         try await post("/api/v1/projects/\(projectId)/intake/message", body: IntakeMessageRequest(message: message, conversationHistory: conversationHistory, mode: mode))
     }
 
+    public func streamIntakeMessage(projectId: String, message: String, conversationHistory: [ChatMessage], mode: String?) -> AsyncThrowingStream<IntakeSSEEvent, Error> {
+        let url = baseURL.appendingPathComponent(
+            "/api/v1/projects/\(projectId)/intake/message/stream"
+        )
+        let body = IntakeMessageRequest(
+            message: message,
+            conversationHistory: conversationHistory,
+            mode: mode
+        )
+        let encoder = self.encoder
+        let session = self.session
+        let decoder = self.decoder
+
+        return AsyncThrowingStream { continuation in
+            let task = Task {
+                do {
+                    var request = URLRequest(url: url)
+                    request.httpMethod = "POST"
+                    request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+                    request.setValue("text/event-stream", forHTTPHeaderField: "Accept")
+                    request.httpBody = try encoder.encode(body)
+
+                    let (bytes, response) = try await session.bytes(for: request)
+
+                    if let httpResponse = response as? HTTPURLResponse,
+                       !(200...299).contains(httpResponse.statusCode) {
+                        // Read the error body to get the backend's ErrorResponse
+                        var errorBody = Data()
+                        for try await byte in bytes { errorBody.append(byte) }
+                        let reqId = httpResponse.value(forHTTPHeaderField: "X-Request-ID")
+                        if var errResp = try? decoder.decode(
+                            ErrorResponse.self, from: errorBody
+                        ) {
+                            errResp.requestId = reqId
+                            throw APIError.httpError(
+                                statusCode: httpResponse.statusCode,
+                                response: errResp
+                            )
+                        }
+                        throw APIError.httpError(
+                            statusCode: httpResponse.statusCode,
+                            response: ErrorResponse(
+                                error: "http_\(httpResponse.statusCode)",
+                                message: "Streaming request failed",
+                                retryable: httpResponse.statusCode >= 500,
+                                requestId: reqId
+                            )
+                        )
+                    }
+
+                    var parser = SSELineParser()
+                    for try await line in bytes.lines {
+                        if let event = parser.feed(line) {
+                            continuation.yield(event)
+                            if case .done = event { break }
+                        }
+                    }
+                    // Feed an empty line to flush any buffered event
+                    if let event = parser.feed("") {
+                        continuation.yield(event)
+                    }
+                    continuation.finish()
+                } catch is CancellationError {
+                    continuation.finish(throwing: CancellationError())
+                } catch let error as APIError {
+                    continuation.finish(throwing: error)
+                } catch let error as URLError {
+                    continuation.finish(throwing: APIError.networkError(error))
+                } catch {
+                    continuation.finish(throwing: APIError.unknown(error))
+                }
+            }
+
+            continuation.onTermination = { _ in
+                task.cancel()
+            }
+        }
+    }
+
     public func confirmIntake(projectId: String, brief: DesignBrief) async throws {
         let _: ActionResponse = try await post("/api/v1/projects/\(projectId)/intake/confirm", body: IntakeConfirmRequest(brief: brief))
     }
 
     public func skipIntake(projectId: String) async throws {
         let _: ActionResponse = try await post("/api/v1/projects/\(projectId)/intake/skip")
+    }
+
+    public func streamShopping(projectId: String) -> AsyncThrowingStream<ShoppingSSEEvent, Error> {
+        let url = baseURL.appendingPathComponent(
+            "/api/v1/projects/\(projectId)/shopping/stream"
+        )
+        let session = self.session
+        let decoder = self.decoder
+
+        return AsyncThrowingStream { continuation in
+            let task = Task {
+                do {
+                    var request = URLRequest(url: url)
+                    request.httpMethod = "GET"
+                    request.setValue("text/event-stream", forHTTPHeaderField: "Accept")
+
+                    let (bytes, response) = try await session.bytes(for: request)
+
+                    if let httpResponse = response as? HTTPURLResponse,
+                       !(200...299).contains(httpResponse.statusCode) {
+                        var errorBody = Data()
+                        for try await byte in bytes { errorBody.append(byte) }
+                        let reqId = httpResponse.value(forHTTPHeaderField: "X-Request-ID")
+                        if var errResp = try? decoder.decode(
+                            ErrorResponse.self, from: errorBody
+                        ) {
+                            errResp.requestId = reqId
+                            throw APIError.httpError(
+                                statusCode: httpResponse.statusCode,
+                                response: errResp
+                            )
+                        }
+                        throw APIError.httpError(
+                            statusCode: httpResponse.statusCode,
+                            response: ErrorResponse(
+                                error: "http_\(httpResponse.statusCode)",
+                                message: "Shopping stream request failed",
+                                retryable: httpResponse.statusCode >= 500,
+                                requestId: reqId
+                            )
+                        )
+                    }
+
+                    var parser = ShoppingSSELineParser()
+                    for try await line in bytes.lines {
+                        if let event = parser.feed(line) {
+                            continuation.yield(event)
+                            if case .done = event { break }
+                        }
+                    }
+                    if let event = parser.feed("") {
+                        continuation.yield(event)
+                    }
+                    continuation.finish()
+                } catch is CancellationError {
+                    continuation.finish(throwing: CancellationError())
+                } catch let error as APIError {
+                    continuation.finish(throwing: error)
+                } catch let error as URLError {
+                    continuation.finish(throwing: APIError.networkError(error))
+                } catch {
+                    continuation.finish(throwing: APIError.unknown(error))
+                }
+            }
+
+            continuation.onTermination = { _ in
+                task.cancel()
+            }
+        }
     }
 
     // MARK: - Selection

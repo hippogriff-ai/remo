@@ -33,6 +33,7 @@ with workflow.unsafe.imports_passed_through():
         EditDesignInput,
         GenerateDesignsInput,
         GenerateShoppingListInput,
+        GenerateShoppingListOutput,
         InspirationNote,
         PhotoData,
         RevisionRecord,
@@ -75,7 +76,8 @@ class DesignProjectWorkflow:
         self.current_image: str | None = None
         self.revision_history: list[RevisionRecord] = []
         self.iteration_count = 0
-        self.shopping_list = None
+        self.shopping_list: GenerateShoppingListOutput | None = None
+        self._shopping_streaming = False
         self.approved = False
         self.error: WorkflowError | None = None
         self.chat_history_key: str | None = None
@@ -274,6 +276,21 @@ class DesignProjectWorkflow:
             )
         self.step = "shopping"
         while self.shopping_list is None:
+            if self._shopping_streaming:
+                # SSE endpoint claimed ownership — wait for it to deliver the result
+                with contextlib.suppress(TimeoutError):
+                    await workflow.wait_condition(
+                        lambda: self.shopping_list is not None,
+                        timeout=timedelta(seconds=300),
+                    )
+                if self.shopping_list is not None:
+                    break
+                # SSE timed out, fall back to activity
+                self._shopping_streaming = False
+                workflow.logger.warning(
+                    "SSE streaming timed out for project %s, falling back to activity",
+                    self._project_id,
+                )
             try:
                 self.shopping_list = await workflow.execute_activity(
                     generate_shopping_list,
@@ -466,6 +483,16 @@ class DesignProjectWorkflow:
             )
             return
         self.approved = True
+
+    @workflow.signal
+    async def handle_shopping_streaming(self) -> None:
+        """SSE endpoint claims ownership of the shopping pipeline."""
+        self._shopping_streaming = True
+
+    @workflow.signal
+    async def receive_shopping_result(self, result: GenerateShoppingListOutput) -> None:
+        """SSE endpoint delivers the completed shopping result."""
+        self.shopping_list = result
 
     @workflow.signal
     async def retry_failed_step(self) -> None:

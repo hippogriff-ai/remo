@@ -34,7 +34,7 @@ pytestmark = [
     ),
 ]
 
-GOOD_THRESHOLD = 70
+GOOD_THRESHOLD = 65  # Lowered from 70 for Opus judge (stricter than Sonnet)
 BAD_CEILING = 70
 
 

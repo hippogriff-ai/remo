@@ -17,6 +17,7 @@ import asyncio
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
+import pytest
 
 from app.activities import skill_loader
 from app.activities.intake import (
@@ -378,7 +379,8 @@ class TestRoomDimensionsInjection:
 
     def test_with_openings(self):
         dims = {
-            "width_m": 3.0, "length_m": 4.0,
+            "width_m": 3.0,
+            "length_m": 4.0,
             "openings": [
                 {"type": "door", "width": 0.9},
                 {"type": "window", "width": 1.5},
@@ -390,7 +392,8 @@ class TestRoomDimensionsInjection:
 
     def test_with_furniture(self):
         dims = {
-            "width_m": 3.0, "length_m": 4.0,
+            "width_m": 3.0,
+            "length_m": 4.0,
             "furniture": [
                 {"type": "sofa", "width": 2.1, "depth": 0.9},
                 {"type": "table", "width": 1.2, "depth": 0.8},
@@ -402,7 +405,8 @@ class TestRoomDimensionsInjection:
 
     def test_with_walls_and_surfaces(self):
         dims = {
-            "width_m": 3.0, "length_m": 4.0,
+            "width_m": 3.0,
+            "length_m": 4.0,
             "walls": [{"id": "w0"}, {"id": "w1"}, {"id": "w2"}, {"id": "w3"}],
             "surfaces": [{"type": "floor"}, {"type": "ceiling"}],
         }
@@ -414,7 +418,8 @@ class TestRoomDimensionsInjection:
     def test_missing_optional_fields(self):
         """Furniture/openings without dimensions still format gracefully."""
         dims = {
-            "width_m": 3.0, "length_m": 4.0,
+            "width_m": 3.0,
+            "length_m": 4.0,
             "furniture": [{"type": "chair"}],
             "openings": [{"type": "door"}],
         }
@@ -425,7 +430,9 @@ class TestRoomDimensionsInjection:
     def test_real_lidar_data(self):
         """Test with the real captured LiDAR data structure."""
         dims = {
-            "width_m": 2.39, "length_m": 2.78, "height_m": 2.73,
+            "width_m": 2.39,
+            "length_m": 2.78,
+            "height_m": 2.73,
             "walls": [{"id": f"wall_{i}"} for i in range(4)],
             "openings": [{"type": "door", "width": 0.84}],
             "furniture": [
@@ -2131,3 +2138,329 @@ class TestSkillLoader:
             call_args = mock_log.warning.call_args
             assert call_args[0][0] == "skills_capped"
             assert call_args[1]["dropped"] == ["scandinavian"]
+
+
+# === Streaming Infrastructure Tests ===
+
+
+class TestPrepareIntakeCall:
+    """Tests for _prepare_intake_call shared setup."""
+
+    def test_returns_params(self, monkeypatch):
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+        from app.activities.intake import _prepare_intake_call
+
+        inp = IntakeChatInput(
+            mode="quick",
+            project_context={},
+            conversation_history=[],
+            user_message="Hello",
+        )
+        params = _prepare_intake_call(inp)
+        assert params.turn_number == 1
+        assert params.mode == "quick"
+        assert params.client is not None
+
+    def test_counts_turns(self, monkeypatch):
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+        from app.activities.intake import _prepare_intake_call
+
+        history = [
+            ChatMessage(role="user", content="hi"),
+            ChatMessage(role="assistant", content="hello"),
+            ChatMessage(role="user", content="more"),
+            ChatMessage(role="assistant", content="ok"),
+        ]
+        inp = IntakeChatInput(
+            mode="quick",
+            project_context={},
+            conversation_history=history,
+            user_message="third",
+        )
+        params = _prepare_intake_call(inp)
+        assert params.turn_number == 3
+
+    def test_extracts_context(self, monkeypatch):
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+        from app.activities.intake import _prepare_intake_call
+
+        brief = {"room_type": "bedroom", "mood": "cozy"}
+        inp = IntakeChatInput(
+            mode="quick",
+            project_context={"previous_brief": brief, "loaded_skill_ids": ["cozy"]},
+            conversation_history=[],
+            user_message="Hi",
+        )
+        params = _prepare_intake_call(inp)
+        assert params.previous_brief == brief
+        assert params.loaded_skill_ids == ["cozy"]
+
+    def test_empty_message_raises(self, monkeypatch):
+        import pytest
+
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+        from temporalio.exceptions import ApplicationError
+
+        from app.activities.intake import _prepare_intake_call
+
+        inp = IntakeChatInput(
+            mode="quick",
+            project_context={},
+            conversation_history=[],
+            user_message="   ",
+        )
+        with pytest.raises(ApplicationError, match="empty"):
+            _prepare_intake_call(inp)
+
+
+class TestMessageExtractor:
+    """Tests for _MessageExtractor incremental JSON parser."""
+
+    def test_simple_message(self):
+        from app.activities.intake import _MessageExtractor
+
+        ext = _MessageExtractor()
+        result = ext.feed('{"message": "hello world"}')
+        assert result == "hello world"
+
+    def test_message_not_first_field(self):
+        from app.activities.intake import _MessageExtractor
+
+        ext = _MessageExtractor()
+        result = ext.feed('{"options": null, "message": "hi"}')
+        assert result == "hi"
+
+    def test_escaped_chars(self):
+        from app.activities.intake import _MessageExtractor
+
+        ext = _MessageExtractor()
+        result = ext.feed('{"message": "line1\\nline2\\ttab"}')
+        assert result == "line1\nline2\ttab"
+
+    def test_escaped_quotes(self):
+        from app.activities.intake import _MessageExtractor
+
+        ext = _MessageExtractor()
+        result = ext.feed('{"message": "say \\"hello\\""}')
+        assert result == 'say "hello"'
+
+    def test_unicode_escape(self):
+        from app.activities.intake import _MessageExtractor
+
+        ext = _MessageExtractor()
+        result = ext.feed('{"message": "caf\\u00e9"}')
+        assert result == "caf\u00e9"
+
+    def test_incremental_feeding(self):
+        from app.activities.intake import _MessageExtractor
+
+        ext = _MessageExtractor()
+        # Feed in chunks like streaming
+        r1 = ext.feed('{"mess')
+        assert r1 == ""
+        r2 = ext.feed('{"message": "hel')
+        assert r2 == "hel"
+        r3 = ext.feed('{"message": "hello w')
+        assert r3 == "lo w"
+        r4 = ext.feed('{"message": "hello world"}')
+        assert r4 == "orld"
+
+    def test_no_message_field(self):
+        from app.activities.intake import _MessageExtractor
+
+        ext = _MessageExtractor()
+        result = ext.feed('{"options": [1, 2, 3]}')
+        assert result == ""
+
+    def test_incomplete_escape_waits(self):
+        from app.activities.intake import _MessageExtractor
+
+        ext = _MessageExtractor()
+        r1 = ext.feed('{"message": "test\\')
+        assert r1 == "test"
+        r2 = ext.feed('{"message": "test\\n more"}')
+        assert r2 == "\n more"
+
+    def test_unicode_escape_at_buffer_boundary(self):
+        """Unicode escape split across feed() calls should not corrupt output."""
+        from app.activities.intake import _MessageExtractor
+
+        ext = _MessageExtractor()
+        # Feed stops mid-unicode escape: \u00 (missing last 2 hex digits)
+        r1 = ext.feed('{"message": "caf\\u00')
+        assert r1 == "caf"  # "caf" extracted, unicode waits
+        # Complete the unicode escape
+        r2 = ext.feed('{"message": "caf\\u00e9 latte"}')
+        assert "\u00e9" in r2  # e-acute appears in the delta
+        assert "latte" in r2
+
+    def test_multiple_unicode_escapes(self):
+        """Multiple unicode escapes in a single message parse correctly."""
+        from app.activities.intake import _MessageExtractor
+
+        ext = _MessageExtractor()
+        result = ext.feed('{"message": "\\u00e9\\u00e8\\u00ea"}')
+        assert result == "\u00e9\u00e8\u00ea"
+
+
+class TestStreamIntakeSSE:
+    """Tests for _stream_intake_sse async generator."""
+
+    @pytest.mark.asyncio
+    async def test_yields_delta_and_done(self, monkeypatch):
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+        from unittest.mock import AsyncMock, MagicMock
+
+        from app.activities.intake import _IntakeCallParams, _stream_intake_sse
+
+        # Mock the streaming context manager
+        mock_event = MagicMock()
+        mock_event.type = "content_block_delta"
+        mock_event.delta = MagicMock()
+        mock_event.delta.partial_json = '{"message": "Hi!"}'
+
+        mock_response = MagicMock()
+        mock_tool_block = MagicMock()
+        mock_tool_block.type = "tool_use"
+        mock_tool_block.name = "interview_client"
+        mock_tool_block.input = {"message": "Hi!"}
+        mock_response.content = [mock_tool_block]
+        mock_response.usage = MagicMock(input_tokens=100, output_tokens=50)
+
+        async def mock_iter(self):
+            yield mock_event
+
+        mock_stream_ctx = MagicMock()
+        mock_stream_obj = MagicMock()
+        mock_stream_obj.__aiter__ = mock_iter
+        mock_stream_obj.get_final_message = AsyncMock(return_value=mock_response)
+        mock_stream_ctx.__aenter__ = AsyncMock(return_value=mock_stream_obj)
+        mock_stream_ctx.__aexit__ = AsyncMock(return_value=False)
+
+        mock_client = MagicMock()
+        mock_client.messages.stream = MagicMock(return_value=mock_stream_ctx)
+
+        params = _IntakeCallParams(
+            client=mock_client,
+            system_prompt="test",
+            messages=[{"role": "user", "content": "hi"}],
+            turn_number=1,
+            previous_brief=None,
+            loaded_skill_ids=[],
+            mode="quick",
+        )
+
+        events = []
+        async for chunk in _stream_intake_sse(params):
+            events.append(chunk)
+
+        assert any("event: delta" in e for e in events)
+        assert any("event: done" in e for e in events)
+
+    @pytest.mark.asyncio
+    async def test_yields_error_on_rate_limit(self, monkeypatch):
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+        from unittest.mock import MagicMock
+
+        import anthropic
+
+        from app.activities.intake import _IntakeCallParams, _stream_intake_sse
+
+        mock_stream_ctx = MagicMock()
+        mock_stream_ctx.__aenter__ = MagicMock(
+            side_effect=anthropic.RateLimitError(
+                message="rate limited",
+                response=MagicMock(status_code=429),
+                body=None,
+            )
+        )
+
+        mock_client = MagicMock()
+        mock_client.messages.stream = MagicMock(return_value=mock_stream_ctx)
+
+        params = _IntakeCallParams(
+            client=mock_client,
+            system_prompt="test",
+            messages=[{"role": "user", "content": "hi"}],
+            turn_number=1,
+            previous_brief=None,
+            loaded_skill_ids=[],
+            mode="quick",
+        )
+
+        events = []
+        async for chunk in _stream_intake_sse(params):
+            events.append(chunk)
+
+        assert len(events) == 1
+        assert "event: error" in events[0]
+        assert "retryable" in events[0]
+
+
+class TestProcessIntakeResponse:
+    """Tests for _process_intake_response shared post-processing."""
+
+    def test_interview_skill_produces_output(self):
+        from unittest.mock import MagicMock
+
+        from app.activities.intake import _IntakeCallParams, _process_intake_response
+
+        mock_block = MagicMock()
+        mock_block.type = "tool_use"
+        mock_block.name = "interview_client"
+        mock_block.input = {
+            "message": "Great choice!",
+            "options": [{"number": 1, "label": "Modern", "value": "modern"}],
+            "is_open_ended": False,
+            "domains_covered": ["style"],
+        }
+
+        response = MagicMock()
+        response.content = [mock_block]
+        response.usage = MagicMock(input_tokens=100, output_tokens=50)
+
+        params = _IntakeCallParams(
+            client=None,
+            system_prompt="test",
+            messages=[],
+            turn_number=1,
+            previous_brief=None,
+            loaded_skill_ids=[],
+            mode="quick",
+        )
+
+        result = _process_intake_response(response, params)
+        assert result.agent_message == "Great choice!"
+        assert not result.is_summary
+        assert result.options is not None
+
+    def test_forced_summary_on_max_turns(self):
+        from unittest.mock import MagicMock
+
+        from app.activities.intake import _IntakeCallParams, _process_intake_response
+
+        mock_block = MagicMock()
+        mock_block.type = "tool_use"
+        mock_block.name = "interview_client"
+        mock_block.input = {
+            "message": "Still asking...",
+            "is_open_ended": True,
+            "domains_covered": [],
+        }
+
+        response = MagicMock()
+        response.content = [mock_block]
+        response.usage = MagicMock(input_tokens=100, output_tokens=50)
+
+        params = _IntakeCallParams(
+            client=None,
+            system_prompt="test",
+            messages=[],
+            turn_number=4,  # >= max_turns for quick mode
+            previous_brief={"room_type": "bedroom"},
+            loaded_skill_ids=[],
+            mode="quick",
+        )
+
+        result = _process_intake_response(response, params)
+        assert result.is_summary is True

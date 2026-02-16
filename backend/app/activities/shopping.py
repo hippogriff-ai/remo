@@ -18,7 +18,10 @@ import os
 import re
 import urllib.parse
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from collections.abc import AsyncGenerator
 
 import anthropic
 import httpx
@@ -36,6 +39,7 @@ from app.models.contracts import (
     RoomDimensions,
     UnmatchedItem,
 )
+from app.utils.tracing import traceable
 
 log = structlog.get_logger("shopping")
 
@@ -502,6 +506,7 @@ def _expand_color_synonym(color: str) -> str | None:
     return None
 
 
+@traceable(name="exa.build_queries", run_type="chain")
 def _build_search_queries(
     item: dict[str, Any],
     room_dimensions: RoomDimensions | None = None,
@@ -633,6 +638,7 @@ def _exa_cache_path(
     return cache_dir / f"exa_{key}.json"
 
 
+@traceable(name="exa.search_request", run_type="tool")
 async def _search_exa(
     http_client: httpx.AsyncClient,
     query: str,
@@ -730,6 +736,25 @@ async def _search_exa(
                     log.info("exa_cache_saved", query=query[:80])
                 except OSError:
                     pass
+            # Best-effort LangSmith metadata for filtering/debugging
+            try:
+                from langsmith import get_current_run_tree
+
+                rt = get_current_run_tree()
+                if rt:
+                    rt.add_metadata(
+                        {
+                            "exa_query": query,
+                            "exa_search_type": search_type,
+                            "exa_num_results": num_results,
+                            "exa_domains": include_domains or "open_web",
+                            "exa_text_filter": include_text or "none",
+                            "exa_response_count": len(results),
+                            "exa_response_urls": [r.get("url", "") for r in results],
+                        }
+                    )
+            except (ImportError, AttributeError, TypeError):
+                pass
             return results
 
         # Retry on transient errors (429 rate limit, 500+ server errors)
@@ -778,6 +803,7 @@ _RETAILER_DOMAINS: list[str] = [
 ]
 
 
+@traceable(name="exa.search_item", run_type="chain")
 async def search_products_for_item(
     http_client: httpx.AsyncClient,
     item: dict[str, Any],
@@ -796,7 +822,9 @@ async def search_products_for_item(
     others use "auto" (neural + reranker).
     """
     queries = _build_search_queries(
-        item, room_dimensions=room_dimensions, design_brief=design_brief,
+        item,
+        room_dimensions=room_dimensions,
+        design_brief=design_brief,
     )
     num_results = _num_results_for_item(item)
     priority = item.get("search_priority", "MEDIUM")
@@ -852,7 +880,10 @@ async def search_all_items(
     async with httpx.AsyncClient() as http_client:
         tasks = [
             search_products_for_item(
-                http_client, item, exa_api_key, room_dimensions=room_dimensions,
+                http_client,
+                item,
+                exa_api_key,
+                room_dimensions=room_dimensions,
                 design_brief=design_brief,
             )
             for item in items
@@ -1071,19 +1102,6 @@ async def score_product(
         cached["product_name"] = product.get("title", "Unknown")
         cached["image_url"] = product.get("image")
         cached["dimensions"] = product.get("text", "")
-        if "price_cents" not in cached:
-            cached["price_cents"] = _price_to_cents(_extract_price_text(product))
-        return cached  # type: ignore[no-any-return]
-
-    # Dev/test cache: avoid redundant Claude scoring calls when prompt
-    # hasn't changed. Will be removed in production.
-    cache_key = [prompt]
-    cached = get_cached("claude_scoring", cache_key)
-    if cached and isinstance(cached, dict):
-        # Restore product metadata (not included in scored output)
-        cached["product_url"] = product.get("url", "")
-        cached["product_name"] = product.get("title", "Unknown")
-        cached["image_url"] = product.get("image")
         if "price_cents" not in cached:
             cached["price_cents"] = _price_to_cents(_extract_price_text(product))
         return cached  # type: ignore[no-any-return]
@@ -1614,10 +1632,13 @@ async def generate_shopping_list(
 
     # Step 2: Search products
     try:
-        search_results = await search_all_items(
-            items, exa_key, room_dimensions=input.room_dimensions,
-            design_brief=input.design_brief,
-        )
+        with trace_thread(_project_id, "shopping_search"):
+            search_results = await search_all_items(
+                items,
+                exa_key,
+                room_dimensions=input.room_dimensions,
+                design_brief=input.design_brief,
+            )
     except Exception as e:
         log.error("shopping_search_failed", error=str(e))
         raise ApplicationError(f"Exa search failed: {e}", non_retryable=False) from e
@@ -1668,3 +1689,132 @@ async def generate_shopping_list(
         unmatched=unmatched,
         total_estimated_cost_cents=total_cost,
     )
+
+
+async def generate_shopping_list_streaming(
+    input: GenerateShoppingListInput,
+) -> AsyncGenerator[str, None]:
+    """Streaming version of shopping pipeline — yields SSE events.
+
+    NOT a Temporal activity (runs in API process, not worker).
+    Reuses all existing functions; searches items sequentially for
+    streaming progress, then batch-scores for quality.
+    """
+    anthropic_key = os.environ.get("ANTHROPIC_API_KEY")
+    if not anthropic_key:
+        yield f"event: error\ndata: {json.dumps({'error': 'ANTHROPIC_API_KEY not set'})}\n\n"
+        return
+
+    exa_key = os.environ.get("EXA_API_KEY")
+    if not exa_key:
+        yield f"event: error\ndata: {json.dumps({'error': 'EXA_API_KEY not set'})}\n\n"
+        return
+
+    from app.utils.tracing import trace_thread, wrap_anthropic
+
+    client = wrap_anthropic(anthropic.AsyncAnthropic(api_key=anthropic_key))
+
+    _pid_match = re.search(r"projects/([a-zA-Z0-9_-]+)/", input.design_image_url)
+    _project_id = _pid_match.group(1) if _pid_match else "unknown"
+
+    from app.utils.r2 import resolve_url, resolve_urls
+
+    try:
+        design_image_url = resolve_url(input.design_image_url)
+        original_room_photo_urls = resolve_urls(input.original_room_photo_urls)
+    except Exception as e:
+        log.error("shopping_stream_url_resolve_error", error=str(e))
+        yield f"event: error\ndata: {json.dumps({'error': f'URL resolution failed: {e}'})}\n\n"
+        return
+
+    # Step 1: Extract items
+    try:
+        with trace_thread(_project_id, "shopping"):
+            items = await extract_items(
+                client,
+                design_image_url,
+                original_room_photo_urls,
+                input.design_brief,
+                input.revision_history,
+                source_urls=[input.design_image_url, *input.original_room_photo_urls],
+                room_context=input.room_context,
+                room_dimensions=input.room_dimensions,
+            )
+    except Exception as e:
+        log.error("shopping_stream_extraction_error", error=str(e))
+        yield f"event: error\ndata: {json.dumps({'error': f'Extraction failed: {e}'})}\n\n"
+        return
+
+    yield (
+        f"event: status\ndata: {json.dumps({'phase': 'extracting', 'item_count': len(items)})}\n\n"
+    )
+
+    if not items:
+        result = GenerateShoppingListOutput(items=[], unmatched=[], total_estimated_cost_cents=0)
+        yield f"event: done\ndata: {result.model_dump_json()}\n\n"
+        return
+
+    # Step 2: Search items sequentially for streaming progress
+    search_results: list[list[dict[str, Any]]] = []
+    with trace_thread(_project_id, "shopping_search"):
+        async with httpx.AsyncClient() as http_client:
+            for item in items:
+                try:
+                    results = await search_products_for_item(
+                        http_client,
+                        item,
+                        exa_key,
+                        room_dimensions=input.room_dimensions,
+                        design_brief=input.design_brief,
+                    )
+                except Exception as e:
+                    log.warning(
+                        "shopping_stream_search_error",
+                        item=item.get("description"),
+                        error=str(e),
+                    )
+                    results = []
+
+                search_results.append(results)
+                payload = json.dumps(
+                    {
+                        "item": item.get("description", ""),
+                        "candidates": len(results),
+                    }
+                )
+                yield f"event: item_search\ndata: {payload}\n\n"
+
+    # Step 3: Score products (batch for quality)
+    try:
+        with trace_thread(_project_id, "shopping"):
+            scored = await score_all_products(
+                client,
+                items,
+                search_results,
+                input.design_brief,
+                room_dimensions=input.room_dimensions,
+            )
+    except Exception as e:
+        log.error("shopping_stream_scoring_error", error=str(e))
+        yield f"event: error\ndata: {json.dumps({'error': f'Scoring failed: {e}'})}\n\n"
+        return
+
+    # Step 4-5: Dimension + confidence filtering
+    try:
+        scored = filter_by_dimensions(items, scored, input.room_dimensions)
+        matched, unmatched, total_cost = apply_confidence_filtering(items, scored)
+    except Exception as e:
+        log.error("shopping_stream_filtering_error", error=str(e))
+        yield f"event: error\ndata: {json.dumps({'error': f'Filtering failed: {e}'})}\n\n"
+        return
+
+    # Yield each matched product individually
+    for product in matched:
+        yield f"event: item\ndata: {product.model_dump_json()}\n\n"
+
+    result = GenerateShoppingListOutput(
+        items=matched,
+        unmatched=unmatched,
+        total_estimated_cost_cents=total_cost,
+    )
+    yield f"event: done\ndata: {result.model_dump_json()}\n\n"

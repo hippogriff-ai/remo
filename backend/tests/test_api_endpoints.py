@@ -3814,3 +3814,91 @@ class TestEdgeCases:
         assert len(body["photos"]) == 2
         room_count = sum(1 for p in body["photos"] if p["photo_type"] == "room")
         assert room_count == 1
+
+
+class TestSSEStreamingEndpoints:
+    """SSE streaming endpoints for intake and shopping."""
+
+    @pytest.mark.asyncio
+    async def test_intake_stream_mock_mode(self, client, project_id):
+        """In mock mode, streaming intake returns a single done SSE event."""
+        _mock_states[project_id].step = "intake"
+        await client.post(
+            f"/api/v1/projects/{project_id}/intake/start",
+            json={"mode": "quick"},
+        )
+        resp = await client.post(
+            f"/api/v1/projects/{project_id}/intake/message/stream",
+            json={"message": "living room"},
+        )
+        assert resp.status_code == 200
+        assert resp.headers["content-type"].startswith("text/event-stream")
+        # Parse SSE events properly (not just substring matching)
+        events = [e for e in resp.text.strip().split("\n\n") if e.strip()]
+        assert len(events) >= 1
+        done_event = events[-1]
+        lines = done_event.strip().split("\n")
+        assert lines[0] == "event: done"
+        assert lines[1].startswith("data: ")
+        import json as _json
+
+        data = _json.loads(lines[1][6:])
+        assert "agent_message" in data
+        assert isinstance(data["agent_message"], str)
+        assert len(data["agent_message"]) > 0
+
+    @pytest.mark.asyncio
+    async def test_intake_stream_wrong_step(self, client, project_id):
+        """Streaming intake rejects when not in intake step."""
+        _mock_states[project_id].step = "photos"
+        resp = await client.post(
+            f"/api/v1/projects/{project_id}/intake/message/stream",
+            json={"message": "hello"},
+        )
+        assert resp.status_code == 409
+        body = resp.json()
+        assert body["error"] == "wrong_step"
+        assert body["retryable"] is False
+
+    @pytest.mark.asyncio
+    async def test_intake_stream_no_session(self, client, project_id):
+        """Streaming intake rejects when start_intake hasn't been called."""
+        _mock_states[project_id].step = "intake"
+        resp = await client.post(
+            f"/api/v1/projects/{project_id}/intake/message/stream",
+            json={"message": "hello"},
+        )
+        assert resp.status_code == 409
+        assert "start_intake" in resp.json()["message"]
+
+    @pytest.mark.asyncio
+    async def test_shopping_stream_requires_temporal(self, client, project_id):
+        """Shopping streaming requires Temporal mode (not available in mock)."""
+        _mock_states[project_id].step = "shopping"
+        resp = await client.get(f"/api/v1/projects/{project_id}/shopping/stream")
+        assert resp.status_code == 409
+        assert "Temporal" in resp.json()["message"]
+
+    @pytest.mark.asyncio
+    async def test_intake_stream_updates_session(self, client, project_id):
+        """Streaming intake updates session history (message appears in follow-up)."""
+        _mock_states[project_id].step = "intake"
+        await client.post(
+            f"/api/v1/projects/{project_id}/intake/start",
+            json={"mode": "quick"},
+        )
+        # Stream first message — verify response before checking session
+        stream_resp = await client.post(
+            f"/api/v1/projects/{project_id}/intake/message/stream",
+            json={"message": "living room"},
+        )
+        assert stream_resp.status_code == 200
+        assert "event: done" in stream_resp.text
+        # Non-streaming follow-up should work (session state updated)
+        resp = await client.post(
+            f"/api/v1/projects/{project_id}/intake/message",
+            json={"message": "modern style"},
+        )
+        assert resp.status_code == 200
+        body = resp.json()
+        assert "agent_message" in body

@@ -28,7 +28,7 @@ from app.activities.shopping import _extract_json
 if TYPE_CHECKING:
     from app.models.contracts import DesignBrief
 
-EVAL_MODEL = "claude-sonnet-4-5-20250929"
+EVAL_MODEL = "claude-opus-4-6"
 EVAL_MAX_TOKENS = 2048
 
 _RUBRIC_CRITERIA = """\

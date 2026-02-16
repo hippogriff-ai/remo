@@ -21,8 +21,12 @@ public protocol WorkflowClientProtocol: Sendable {
     // Intake
     func startIntake(projectId: String, mode: String) async throws -> IntakeChatOutput
     func sendIntakeMessage(projectId: String, message: String, conversationHistory: [ChatMessage], mode: String?) async throws -> IntakeChatOutput
+    func streamIntakeMessage(projectId: String, message: String, conversationHistory: [ChatMessage], mode: String?) -> AsyncThrowingStream<IntakeSSEEvent, Error>
     func confirmIntake(projectId: String, brief: DesignBrief) async throws
     func skipIntake(projectId: String) async throws
+
+    // Shopping
+    func streamShopping(projectId: String) -> AsyncThrowingStream<ShoppingSSEEvent, Error>
 
     // Selection
     func selectOption(projectId: String, index: Int) async throws
@@ -35,4 +39,44 @@ public protocol WorkflowClientProtocol: Sendable {
     func approveDesign(projectId: String) async throws
     func startOver(projectId: String) async throws
     func retryFailedStep(projectId: String) async throws
+}
+
+/// Default streaming fallbacks — MockWorkflowClient inherits these automatically.
+extension WorkflowClientProtocol {
+    /// Intake streaming fallback: wraps the non-streaming response in a `.done` event.
+    public func streamIntakeMessage(
+        projectId: String,
+        message: String,
+        conversationHistory: [ChatMessage],
+        mode: String?
+    ) -> AsyncThrowingStream<IntakeSSEEvent, Error> {
+        AsyncThrowingStream { continuation in
+            let task = Task {
+                do {
+                    let output = try await self.sendIntakeMessage(
+                        projectId: projectId,
+                        message: message,
+                        conversationHistory: conversationHistory,
+                        mode: mode
+                    )
+                    continuation.yield(.done(output))
+                    continuation.finish()
+                } catch {
+                    continuation.finish(throwing: error)
+                }
+            }
+            continuation.onTermination = { _ in
+                task.cancel()
+            }
+        }
+    }
+
+    /// Shopping streaming fallback: returns an empty stream (callers fall back to polling).
+    public func streamShopping(
+        projectId: String
+    ) -> AsyncThrowingStream<ShoppingSSEEvent, Error> {
+        AsyncThrowingStream { continuation in
+            continuation.finish()
+        }
+    }
 }

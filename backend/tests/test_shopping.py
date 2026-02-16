@@ -54,6 +54,7 @@ from app.activities.shopping import (
     extract_items,
     filter_by_dimensions,
     generate_shopping_list,
+    generate_shopping_list_streaming,
     score_all_products,
     score_product,
     search_products_for_item,
@@ -3293,3 +3294,206 @@ class TestScoringCachePaths:
         mock_client.messages.create.assert_called_once()
         mock_set.assert_called_once()
         assert result["weighted_total"] == 0.9
+
+
+# === Streaming Shopping Tests ===
+
+
+class TestGenerateShoppingListStreaming:
+    """Tests for generate_shopping_list_streaming async generator."""
+
+    def _make_input(self) -> GenerateShoppingListInput:
+        return GenerateShoppingListInput(
+            design_image_url="https://r2.example.com/projects/test-123/generated/opt0.png",
+            original_room_photo_urls=["https://r2.example.com/projects/test-123/photos/room.jpg"],
+            design_brief=DesignBrief(room_type="bathroom", mood="modern spa"),
+        )
+
+    def test_missing_api_key_yields_error(self, monkeypatch):
+        """Missing ANTHROPIC_API_KEY should yield an error event, not crash."""
+        monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+        monkeypatch.delenv("EXA_API_KEY", raising=False)
+
+        events = asyncio.run(self._collect_events())
+        assert len(events) == 1
+        assert "event: error" in events[0]
+        assert "ANTHROPIC_API_KEY" in events[0]
+
+    def test_missing_exa_key_yields_error(self, monkeypatch):
+        """Missing EXA_API_KEY should yield an error event."""
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+        monkeypatch.delenv("EXA_API_KEY", raising=False)
+
+        events = asyncio.run(self._collect_events())
+        assert len(events) == 1
+        assert "event: error" in events[0]
+        assert "EXA_API_KEY" in events[0]
+
+    @patch("app.activities.shopping.extract_items", new_callable=AsyncMock)
+    @patch("app.activities.shopping.search_products_for_item", new_callable=AsyncMock)
+    @patch("app.activities.shopping.score_all_products", new_callable=AsyncMock)
+    def test_yields_status_search_and_done(
+        self,
+        mock_score,
+        mock_search,
+        mock_extract,
+        monkeypatch,
+    ):
+        """Full pipeline should yield status → item_search → item → done events."""
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+        monkeypatch.setenv("EXA_API_KEY", "test-key")
+
+        # Mock extraction returns 2 items
+        mock_extract.return_value = [
+            {"description": "Vanity", "category": "Vanity", "search_priority": "HIGH"},
+            {"description": "Mirror", "category": "Mirror", "search_priority": "MEDIUM"},
+        ]
+        # Mock search returns 1 product per item
+        mock_search.return_value = [
+            {
+                "product_name": "Test Vanity",
+                "product_url": "https://amazon.com/vanity",
+                "price_cents": 29900,
+            }
+        ]
+        # Mock scoring returns scored products
+        mock_score.return_value = [
+            [
+                {
+                    "product_name": "Test Vanity",
+                    "product_url": "https://amazon.com/vanity",
+                    "image_url": "https://img.com/v.jpg",
+                    "weighted_total": 0.85,
+                    "price_cents": 29900,
+                    "why_matched": "Good match",
+                }
+            ],
+            [],  # Mirror has no scored results
+        ]
+
+        events = asyncio.run(self._collect_events())
+
+        # Check event types present
+        event_types = [e.split("\n")[0] for e in events]
+        assert "event: status" in event_types
+        assert event_types.count("event: item_search") == 2  # One per item
+        assert "event: item" in event_types  # At least one matched product
+        assert "event: done" in event_types
+
+        # The done event should contain valid GenerateShoppingListOutput
+        done_events = [e for e in events if e.startswith("event: done")]
+        assert len(done_events) == 1
+        import json
+
+        data_line = done_events[0].split("data: ", 1)[1].split("\n")[0]
+        output = json.loads(data_line)
+        assert "items" in output
+        assert "unmatched" in output
+
+    @patch("app.activities.shopping.extract_items", new_callable=AsyncMock)
+    def test_empty_extraction_yields_done_immediately(
+        self,
+        mock_extract,
+        monkeypatch,
+    ):
+        """No items extracted should yield status then done with empty list."""
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+        monkeypatch.setenv("EXA_API_KEY", "test-key")
+        mock_extract.return_value = []
+
+        events = asyncio.run(self._collect_events())
+
+        event_types = [e.split("\n")[0] for e in events]
+        assert "event: status" in event_types
+        assert "event: done" in event_types
+        assert "event: item_search" not in event_types
+
+    @patch("app.activities.shopping.extract_items", new_callable=AsyncMock)
+    def test_extraction_error_yields_error_event(
+        self,
+        mock_extract,
+        monkeypatch,
+    ):
+        """Extraction failure should yield an error SSE event."""
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+        monkeypatch.setenv("EXA_API_KEY", "test-key")
+        mock_extract.side_effect = anthropic.RateLimitError(
+            message="rate limited",
+            response=_make_httpx_response(429),
+            body=None,
+        )
+
+        events = asyncio.run(self._collect_events())
+
+        assert len(events) == 1
+        assert "event: error" in events[0]
+        assert "Extraction failed" in events[0]
+
+    def test_url_resolution_failure_yields_error(self, monkeypatch):
+        """resolve_url failure should yield error event, not crash."""
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+        monkeypatch.setenv("EXA_API_KEY", "test-key")
+
+        # Use R2 storage keys (not https:// URLs) to trigger resolve_url
+        inp = GenerateShoppingListInput(
+            design_image_url="projects/test-123/generated/opt0.png",
+            original_room_photo_urls=["projects/test-123/photos/room.jpg"],
+            design_brief=DesignBrief(room_type="bathroom", mood="modern spa"),
+        )
+
+        with patch(
+            "app.utils.r2.resolve_url",
+            side_effect=Exception("R2 connection failed"),
+        ):
+            events = asyncio.run(self._collect_events(inp))
+
+        assert len(events) == 1
+        assert "event: error" in events[0]
+        assert "URL resolution failed" in events[0]
+
+    async def _collect_events(self, inp=None) -> list[str]:
+        if inp is None:
+            inp = self._make_input()
+        events = []
+        async for chunk in generate_shopping_list_streaming(inp):
+            events.append(chunk)
+        return events
+
+
+class TestExaTracingDecorators:
+    """Verify @traceable decorators don't alter function behavior."""
+
+    def test_build_search_queries_returns_list(self):
+        """Decorated _build_search_queries still returns a list of strings."""
+        item = {"category": "sofa", "style": "modern", "description": "gray modern sofa"}
+        result = _build_search_queries(item)
+        assert isinstance(result, list)
+        assert all(isinstance(q, str) for q in result)
+        assert len(result) >= 1
+
+    def test_build_search_queries_with_brief(self):
+        """Decorated function handles DesignBrief parameter correctly."""
+        from app.models.contracts import DesignBrief, StyleProfile
+
+        brief = DesignBrief(
+            room_type="living room",
+            style_profile=StyleProfile(mood="contemporary"),
+        )
+        item = {"category": "coffee table", "description": "round oak coffee table"}
+        result = _build_search_queries(item, design_brief=brief)
+        assert isinstance(result, list)
+        assert any("contemporary" in q or "living room" in q for q in result)
+
+    def test_search_exa_decorated_callable(self):
+        """_search_exa is still an async callable after decoration."""
+        import inspect
+
+        assert inspect.iscoroutinefunction(_search_exa) or callable(_search_exa)
+
+    def test_search_products_for_item_decorated_callable(self):
+        """search_products_for_item is still async callable after decoration."""
+        import inspect
+
+        assert inspect.iscoroutinefunction(search_products_for_item) or callable(
+            search_products_for_item
+        )

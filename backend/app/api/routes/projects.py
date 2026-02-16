@@ -18,8 +18,8 @@ from typing import Literal
 
 import structlog
 from fastapi import APIRouter, Form, Request, UploadFile
-from fastapi.responses import JSONResponse
-from pydantic import BaseModel
+from fastapi.responses import JSONResponse, StreamingResponse
+from pydantic import BaseModel, ValidationError
 
 from app.activities.validation import validate_photo
 from app.config import settings
@@ -32,6 +32,7 @@ from app.models.contracts import (
     DesignBrief,
     DesignOption,
     ErrorResponse,
+    GenerateShoppingListInput,
     GenerateShoppingListOutput,
     IntakeChatInput,
     IntakeChatOutput,
@@ -59,7 +60,9 @@ router = APIRouter(tags=["projects"])
 
 MAX_PHOTO_BYTES = 20 * 1024 * 1024  # 20 MB
 MAX_SCAN_BYTES = 1 * 1024 * 1024  # 1 MB — LiDAR JSON is typically <100 KB
-_LIDAR_FIXTURE_PATH = Path(__file__).resolve().parents[3] / "tests" / "fixtures" / "real_lidar_scan.json"
+_LIDAR_FIXTURE_PATH = (
+    Path(__file__).resolve().parents[3] / "tests" / "fixtures" / "real_lidar_scan.json"
+)
 MAX_INSPIRATION_PHOTOS = 3
 
 
@@ -773,6 +776,198 @@ async def send_intake_message(project_id: str, body: IntakeMessageRequest, reque
         return await _real_intake_message(project_id, state, body.message)
 
     return _mock_intake_message(project_id, body.message)
+
+
+@router.post("/projects/{project_id}/intake/message/stream")
+async def stream_intake_message(project_id: str, body: IntakeMessageRequest, request: Request):
+    """Stream intake agent response via SSE (text/event-stream).
+
+    Same logic as send_intake_message, but yields incremental text deltas.
+    Falls back to a single done event in mock mode.
+    """
+    state = await _resolve_state(request, project_id)
+    if err := _check_step(state, "intake", "stream intake message"):
+        return err
+    assert state is not None
+
+    # Reconstruct session from client-provided history if API restarted
+    if project_id not in _intake_sessions and body.conversation_history:
+        _intake_sessions[project_id] = _IntakeSession(
+            mode=body.mode or "quick",
+            history=list(body.conversation_history),
+        )
+
+    session = _intake_sessions.get(project_id)
+    if session is None:
+        return _error(409, "wrong_step", "Call start_intake first")
+
+    if settings.use_mock_activities:
+        mock_result = _mock_intake_message(project_id, body.message)
+        if isinstance(mock_result, JSONResponse):
+            return mock_result
+
+        async def _mock_sse():
+            data = mock_result.model_dump_json()
+            yield f"event: done\ndata: {data}\n\n"
+
+        return StreamingResponse(_mock_sse(), media_type="text/event-stream")
+
+    # Real streaming path
+    from app.activities.intake import (
+        _prepare_intake_call,
+        _stream_intake_sse,
+    )
+    from app.utils.r2 import generate_presigned_url
+
+    inspiration_photos = [p for p in state.photos if p.photo_type == "inspiration"]
+    room_keys = [p.storage_key for p in state.photos if p.photo_type == "room"]
+    inspo_keys = [p.storage_key for p in inspiration_photos]
+
+    try:
+        room_urls = [await asyncio.to_thread(generate_presigned_url, k) for k in room_keys]
+        inspo_urls = [await asyncio.to_thread(generate_presigned_url, k) for k in inspo_keys]
+    except Exception:
+        logger.exception("presign_error_stream", project_id=project_id)
+        return _error(500, "presign_error", "Failed to prepare photos", retryable=True)
+
+    project_context: dict = {
+        "room_photos": room_urls,
+        "inspiration_photos": inspo_urls,
+        "inspiration_notes": [
+            {"photo_index": i, "note": p.note} for i, p in enumerate(inspiration_photos) if p.note
+        ],
+    }
+    if session.last_partial_brief is not None:
+        project_context["previous_brief"] = session.last_partial_brief.model_dump()
+    if state.room_analysis is not None:
+        project_context["room_analysis"] = state.room_analysis.model_dump()
+    if state.room_context is not None:
+        project_context["room_context"] = state.room_context.model_dump()
+    if session.loaded_skill_ids:
+        project_context["loaded_skill_ids"] = session.loaded_skill_ids
+
+    intake_input = IntakeChatInput(
+        mode=session.mode,
+        project_context=project_context,
+        conversation_history=session.history,
+        user_message=body.message,
+    )
+
+    try:
+        params = _prepare_intake_call(intake_input)
+    except Exception as e:
+        logger.error("intake_stream_prepare_error", project_id=project_id, error=str(e))
+        return _error(500, "intake_error", "Failed to prepare intake call", retryable=False)
+
+    async def _sse_with_state_update():
+        final_result: IntakeChatOutput | None = None
+        async for chunk in _stream_intake_sse(params):
+            # Parse the done event before yielding to extract the result
+            if chunk.startswith("event: done\n"):
+                data_line = chunk.split("data: ", 1)[1].split("\n")[0]
+                try:
+                    final_result = IntakeChatOutput.model_validate_json(data_line)
+                except ValidationError:
+                    logger.error(
+                        "stream_done_parse_failed",
+                        project_id=project_id,
+                        data_preview=data_line[:200],
+                    )
+            yield chunk
+
+        # Update session state after streaming completes
+        if final_result is not None:
+            session.history.append(ChatMessage(role="user", content=body.message))
+            session.history.append(
+                ChatMessage(role="assistant", content=final_result.agent_message)
+            )
+            if final_result.partial_brief is not None:
+                session.last_partial_brief = final_result.partial_brief
+            if final_result.requested_skills:
+                from app.activities.skill_loader import cap_skills
+
+                combined = session.loaded_skill_ids + final_result.requested_skills
+                session.loaded_skill_ids = cap_skills(combined)
+        else:
+            logger.warning("stream_no_final_result", project_id=project_id)
+
+    from app.utils.tracing import trace_thread
+
+    with trace_thread(project_id, "intake"):
+        return StreamingResponse(_sse_with_state_update(), media_type="text/event-stream")
+
+
+@router.get("/projects/{project_id}/shopping/stream")
+async def stream_shopping(project_id: str, request: Request):
+    """Stream shopping list generation via SSE (text/event-stream).
+
+    Runs the shopping pipeline in the API process (not as Temporal activity)
+    and streams incremental results. Signals the workflow on connect
+    (claims ownership) and on completion (delivers result).
+    """
+    if not settings.use_temporal:
+        return _error(409, "not_supported", "Shopping streaming requires Temporal mode")
+
+    state = await _resolve_state(request, project_id)
+    if err := _check_step(state, "shopping", "stream shopping"):
+        return err
+    assert state is not None  # guaranteed by _check_step
+
+    # Claim streaming ownership immediately
+    from app.workflows.design_project import DesignProjectWorkflow
+
+    err = await _signal_workflow(
+        request, project_id, DesignProjectWorkflow.handle_shopping_streaming
+    )
+    if err is not None:
+        return err
+
+    # Build the same input the workflow would build
+    shopping_input = GenerateShoppingListInput(
+        design_image_url=state.current_image or "",
+        original_room_photo_urls=[p.storage_key for p in state.photos if p.photo_type == "room"],
+        design_brief=state.design_brief,
+        revision_history=state.revision_history,
+        room_dimensions=state.scan_data.room_dimensions if state.scan_data else None,
+        room_context=state.room_context,
+    )
+
+    from app.activities.shopping import generate_shopping_list_streaming
+
+    async def _sse_with_signal():
+        final_result: GenerateShoppingListOutput | None = None
+        async for chunk in generate_shopping_list_streaming(shopping_input):
+            if chunk.startswith("event: done\n"):
+                data_line = chunk.split("data: ", 1)[1].split("\n")[0]
+                try:
+                    final_result = GenerateShoppingListOutput.model_validate_json(data_line)
+                except ValidationError:
+                    logger.error(
+                        "shopping_stream_done_parse_failed",
+                        project_id=project_id,
+                        data_preview=data_line[:200],
+                    )
+            yield chunk
+
+        # Signal workflow with the complete result
+        if final_result is not None:
+            err = await _signal_workflow(
+                request,
+                project_id,
+                DesignProjectWorkflow.receive_shopping_result,
+                final_result,
+            )
+            if err is not None:
+                logger.error(
+                    "shopping_stream_signal_failed",
+                    project_id=project_id,
+                    error_status=getattr(err, "status_code", None),
+                )
+
+    from app.utils.tracing import trace_thread
+
+    with trace_thread(project_id, "shopping"):
+        return StreamingResponse(_sse_with_signal(), media_type="text/event-stream")
 
 
 def _mock_intake_message(project_id: str, message: str) -> IntakeChatOutput | JSONResponse:

@@ -908,7 +908,7 @@ class TestEditDesignActivity:
             assert updated_history[1].role == "model"
             assert updated_history[2].role == "user"
             assert updated_history[3].role == "model"
-            # The user turn should have: anti-annotation preamble + room anchor text + room image + base image + edit prompt
+            # User turn: preamble + room anchor text + room img + base img + edit
             assert len(updated_history[2].parts) >= 5
             # First part is anti-annotation preamble
             assert "clean photorealistic" in updated_history[2].parts[0].text

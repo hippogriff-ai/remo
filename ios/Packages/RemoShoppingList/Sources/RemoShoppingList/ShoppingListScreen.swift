@@ -187,10 +187,14 @@ struct ShoppingContent: View {
 
 // MARK: - Product Card
 
-struct ProductCard: View {
-    let item: ProductMatch
+public struct ProductCard: View {
+    public let item: ProductMatch
 
-    var body: some View {
+    public init(item: ProductMatch) {
+        self.item = item
+    }
+
+    public var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(alignment: .top) {
                 // Product image (falls back to bag icon when no URL or load fails)
@@ -302,10 +306,14 @@ struct ProductCard: View {
 
 // MARK: - Confidence Badge
 
-struct ConfidenceBadge: View {
-    let score: Double
+public struct ConfidenceBadge: View {
+    public let score: Double
 
-    var body: some View {
+    public init(score: Double) {
+        self.score = score
+    }
+
+    public var body: some View {
         Text(label)
             .font(.caption2.bold())
             .padding(.horizontal, 8)
@@ -326,11 +334,16 @@ struct ConfidenceBadge: View {
 
 // MARK: - Fit Badge
 
-struct FitBadge: View {
-    let status: String
-    let detail: String?
+public struct FitBadge: View {
+    public let status: String
+    public let detail: String?
 
-    var body: some View {
+    public init(status: String, detail: String?) {
+        self.status = status
+        self.detail = detail
+    }
+
+    public var body: some View {
         HStack(spacing: 4) {
             Image(systemName: status == "fits" ? "checkmark.circle" : "exclamationmark.triangle")
                 .font(.caption2)

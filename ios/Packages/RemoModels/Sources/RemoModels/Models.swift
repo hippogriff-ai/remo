@@ -635,6 +635,158 @@ public struct IntakeChatOutput: Codable, Sendable {
     }
 }
 
+// MARK: - SSE Streaming Types
+
+/// Events received from the intake chat SSE stream.
+public enum IntakeSSEEvent: Sendable {
+    /// Incremental text chunk from the assistant.
+    case delta(String)
+    /// Final response with full output (options, brief, etc.).
+    case done(IntakeChatOutput)
+}
+
+/// Parses raw SSE lines (from `text/event-stream`) into typed events.
+/// SSE format: `event: <type>\ndata: <json>\n\n`
+public struct SSELineParser: Sendable {
+    private var currentEvent: String?
+    private var dataBuffer: String = ""
+
+    public init() {}
+
+    /// Feed one line (without trailing newline). Returns a parsed event if a
+    /// complete SSE block was received, or `nil` if more lines are needed.
+    public mutating func feed(_ line: String) -> IntakeSSEEvent? {
+        if line.isEmpty {
+            // Empty line = end of SSE block
+            defer {
+                currentEvent = nil
+                dataBuffer = ""
+            }
+            guard let event = currentEvent, !dataBuffer.isEmpty else { return nil }
+            return parse(event: event, data: dataBuffer)
+        }
+
+        if line.hasPrefix("event:") {
+            currentEvent = line.dropFirst(6).trimmingCharacters(in: .whitespaces)
+        } else if line.hasPrefix("data:") {
+            let data = line.dropFirst(5).trimmingCharacters(in: .whitespaces)
+            if dataBuffer.isEmpty {
+                dataBuffer = data
+            } else {
+                dataBuffer += "\n" + data
+            }
+        }
+        // Ignore comments (lines starting with ':') and unknown fields
+        return nil
+    }
+
+    private func parse(event: String, data: String) -> IntakeSSEEvent? {
+        switch event {
+        case "delta":
+            // data: {"text": "..."}
+            guard let jsonData = data.data(using: .utf8),
+                  let obj = try? JSONSerialization.jsonObject(with: jsonData) as? [String: Any],
+                  let text = obj["text"] as? String else {
+                return nil
+            }
+            return .delta(text)
+        case "done":
+            // data: full IntakeChatOutput JSON
+            guard let jsonData = data.data(using: .utf8) else { return nil }
+            let decoder = JSONDecoder()
+            guard let output = try? decoder.decode(IntakeChatOutput.self, from: jsonData) else {
+                return nil
+            }
+            return .done(output)
+        default:
+            return nil
+        }
+    }
+}
+
+// MARK: - Shopping SSE Streaming Types
+
+/// Events received from the shopping list SSE stream.
+public enum ShoppingSSEEvent: Sendable {
+    /// Status update (e.g. "Analyzing design... found N items").
+    case status(phase: String, itemCount: Int?)
+    /// Progress update for individual item search.
+    case itemSearch(itemName: String, candidates: Int?)
+    /// A single product match found.
+    case item(ProductMatch)
+    /// Final complete shopping list output.
+    case done(ShoppingListOutput)
+    /// Error from the backend (missing API key, extraction/scoring failure).
+    case error(String)
+}
+
+/// Parses raw SSE lines into shopping-specific events.
+public struct ShoppingSSELineParser: Sendable {
+    private var currentEvent: String?
+    private var dataBuffer: String = ""
+
+    public init() {}
+
+    /// Feed one line. Returns a parsed event on empty-line boundaries.
+    public mutating func feed(_ line: String) -> ShoppingSSEEvent? {
+        if line.isEmpty {
+            defer {
+                currentEvent = nil
+                dataBuffer = ""
+            }
+            guard let event = currentEvent, !dataBuffer.isEmpty else { return nil }
+            return parse(event: event, data: dataBuffer)
+        }
+
+        if line.hasPrefix("event:") {
+            currentEvent = line.dropFirst(6).trimmingCharacters(in: .whitespaces)
+        } else if line.hasPrefix("data:") {
+            let data = line.dropFirst(5).trimmingCharacters(in: .whitespaces)
+            if dataBuffer.isEmpty {
+                dataBuffer = data
+            } else {
+                dataBuffer += "\n" + data
+            }
+        }
+        return nil
+    }
+
+    private func parse(event: String, data: String) -> ShoppingSSEEvent? {
+        guard let jsonData = data.data(using: .utf8) else { return nil }
+        let decoder = JSONDecoder()
+
+        switch event {
+        case "status":
+            guard let obj = try? JSONSerialization.jsonObject(with: jsonData) as? [String: Any],
+                  let phase = obj["phase"] as? String else { return nil }
+            let itemCount = obj["item_count"] as? Int
+            return .status(phase: phase, itemCount: itemCount)
+
+        case "item_search":
+            guard let obj = try? JSONSerialization.jsonObject(with: jsonData) as? [String: Any],
+                  let name = obj["item"] as? String else { return nil }
+            let candidates = obj["candidates"] as? Int
+            return .itemSearch(itemName: name, candidates: candidates)
+
+        case "item":
+            guard let product = try? decoder.decode(ProductMatch.self, from: jsonData) else { return nil }
+            return .item(product)
+
+        case "done":
+            guard let output = try? decoder.decode(ShoppingListOutput.self, from: jsonData) else { return nil }
+            return .done(output)
+
+        case "error":
+            guard let obj = try? JSONSerialization.jsonObject(with: jsonData) as? [String: Any],
+                  let message = obj["error"] as? String else { return nil }
+            return .error(message)
+
+        default:
+            return nil
+        }
+    }
+}
+
 public struct ActionResponse: Codable, Sendable {
     public var status: String
 

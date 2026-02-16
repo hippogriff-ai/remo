@@ -167,7 +167,7 @@ Edge SSIM +0.047 is the largest single-metric improvement across all loops. Dire
 **Bootstrap (10 runs)**: CI [-0.2, +0.6], P(better)=0.714 → **INCONCLUSIVE**
 **Decision**: **SHIP** — deep eval INCONCLUSIVE but fast eval strongly favors candidate (3/4 LIKELY_BETTER, P>0.98). Edge SSIM +0.047 proves structural improvement below judge detection threshold. Zero regressions. Code change needed for Phase B infrastructure regardless.
 
-### Current Baseline Scores (v5+v4, real room photo)
+### Current Baseline Scores (v5+v4, real room photo, Sonnet judge)
 | Metric | Mean | Notes |
 |--------|------|-------|
 | VLM eval total | 91.8 | 10 runs, std=1.2 |
@@ -175,6 +175,46 @@ Edge SSIM +0.047 is the largest single-metric improvement across all loops. Dire
 | Style Adherence | 14.0/15 | 1pt headroom |
 | Room Preservation | 18.0/20 | 2pt headroom (near Gemini's 53% spatial IoU ceiling) |
 | Design Coherence | 9.3/10 | near ceiling |
+
+### Test 12: Opus Judge Baseline (v5+v4 vs v2+v2, synthetic test image)
+**5 runs, Opus judge**
+
+| Criterion | v2+v2 (baseline) | v5+v4 (candidate) | Delta | Verdict |
+|-----------|-----------------|-------------------|-------|---------|
+| Total (0-100) | 73.4 (±1.0) | 72.2 (±5.8) | -1.2 | INCONCLUSIVE (P=0.312) |
+| Photorealism (0-15) | 12.4 (±0.8) | 12.0 | -0.4 | INCONCLUSIVE |
+| Style Adherence (0-15) | 12.8 (±2.4) | 11.2 (±1.9) | -1.6 | INCONCLUSIVE |
+| Room Preservation (0-20) | 3.6 (±7.2) | 7.2 (±8.8) | +3.6 | INCONCLUSIVE |
+| Furniture Scale (0-10) | 9.0 | 8.4 (±0.5) | -0.6 | ROLLBACK |
+| Design Coherence (0-10) | 9.6 (±0.8) | 8.8 (±0.4) | -0.8 | ROLLBACK |
+| Brief Compliance (0-5) | 3.4 (±1.7) | 2.2 (±1.6) | -1.2 | INCONCLUSIVE |
+| instruction_adherence | 1.8 (±1.0) | 2.4 (±0.5) | +0.6 | INCONCLUSIVE |
+| spatial_accuracy | 1.4 (±1.5) | 2.0 (±1.7) | +0.6 | INCONCLUSIVE |
+
+**Note**: Opus is dramatically stricter than Sonnet (73/100 vs 91/100). Room preservation highly variable (0-18) because the synthetic test image lacks clear room structure. Real-photo eval needed for meaningful room_preservation comparison. Opus is more discriminative but noisier — better for future A/B testing.
+
+### Test 13: Opus Judge Real-Photo Baseline (v5+v4 vs v5+v5, 2 photos × 5 runs)
+**10 runs pooled, Opus judge, real bathroom photos**
+
+| Criterion | v5+room_v4 (baseline) | v5+room_v5 (candidate) | Delta | CI | P | Verdict |
+|-----------|----------------------|----------------------|-------|-----|------|---------|
+| Total (0-100) | 86.4 | 88.1 | +1.7 | [-2.2, +5.6] | 0.759 | INCONCLUSIVE |
+| Photorealism (0-15) | 12.9 | 13.1 | +0.2 | [0.0, +0.4] | 0.879 | INCONCLUSIVE |
+| Style Adherence (0-15) | 14.0 | 14.1 | +0.1 | [0.0, +0.3] | 0.650 | INCONCLUSIVE |
+| Room Preservation (0-20) | 13.6 | 14.0 | +0.4 | [-3.0, +3.8] | 0.549 | INCONCLUSIVE |
+| Furniture Scale (0-10) | 8.8 | 8.9 | +0.1 | [-0.2, +0.4] | 0.622 | INCONCLUSIVE |
+| instruction_adherence | 7.3 | 7.5 | +0.2 | [-0.9, +1.3] | 0.585 | INCONCLUSIVE |
+| spatial_accuracy | 4.2 | 4.3 | +0.1 | [-0.5, +0.7] | 0.554 | INCONCLUSIVE |
+
+**Per-photo breakdown:**
+- Photo 1: baseline=91.6, candidate=92.2 (+0.6) — both EXCELLENT
+- Photo 2: baseline=81.2, candidate=84.0 (+2.8) — Opus sees quality differences between photos
+
+**Key observations:**
+- Opus baseline (real photos): 86.4/100 vs Sonnet: 91.8/100 — ~5 points stricter
+- Room preservation drops from 18/20 (Sonnet) to 13.6/20 (Opus) — Opus penalizes structural issues Sonnet ignores
+- All metrics trend positive for scene data (+1.7 total) but wide CI makes everything INCONCLUSIVE
+- Photo 2 shows high variance (77-92 range) — Opus is capturing Gemini's inconsistent spatial accuracy
 
 ### Key Insights
 1. Baseline (v5+v5) is EXCELLENT quality (91.7/100) — limited headroom
@@ -187,6 +227,7 @@ Edge SSIM +0.047 is the largest single-metric improvement across all loops. Dire
 8. All prompt-only generation improvements have been exhausted. Further quality gains require model improvements (Gemini upgrades), code-level changes (T2: #6 edit changelog, #9 room photo re-inclusion), or switching to a different generation model.
 9. **LiDAR scene data improves structural preservation** — edge SSIM +0.047 (LIKELY_BETTER, P=0.981) is the largest single-metric gain across all loops. The Claude Vision judge can't detect this improvement (18/20 → 18/20) because it's below the 1pt detection threshold, but automated metrics prove it.
 10. **CLIP/SSIM fast eval was unreliable** — gave false positives on room_v5 (LIKELY_BETTER P>0.98 on synthetic, but ROLLBACK -25.0 on real photos). VLM is now the single authoritative eval signal. Fast eval layer removed entirely; only artifact detection (OpenCV) retained.
+11. **Opus judge is better for A/B testing** — 86.4/100 baseline (vs Sonnet's 91.8) gives more headroom for improvements. Room preservation 13.6/20 (vs 18/20) reveals structural issues Sonnet missed. Photo-to-photo discrimination (91.6 vs 81.2) proves Opus captures real quality variance.
 
 ## State
 - Done: Loops 1-9 — All immediate improvements created and evaluated
@@ -227,7 +268,56 @@ Edge SSIM +0.047 is the largest single-metric improvement across all loops. Dire
 - Done: Anti-annotation preamble in `_continue_chat()` (edit.py) + test assertion fix (test_edit.py updated for new message part ordering).
 - Done: iOS IntakeChatScreen fix — hide QuickReplyChips when `isSummary == true` to prevent self-repeating content.
 - Now: Active: gen_v5 + room_v4 + edit_v7. All code improvements shipped. VLM-only eval pipeline fully operational. Device bugs #1 (circle annotations), #2 (self-repeat), #5 (search quality) fixed.
-- Next: Streaming for shopping + intake (bugs #3, #4 — requires SSE architecture). Phase B (export positions from iOS RoomPlan). Consider: improve edit_fidelity (10.8/15 has headroom).
+- **SSE Streaming (branch test-2, Ralph Loop):**
+  - Done: TODO 0.1 — Text input truncation fix
+  - Done: TODOs 1.1-1.4 — Intake SSE backend (16 new tests)
+  - Done: TODOs 2.1-2.4 — Intake SSE iOS (7 new SSE parser tests, 130 Swift tests pass)
+  - Done: TODOs 3.1-3.4 — Shopping SSE backend (signals, streaming generator, endpoint, 8 new tests)
+  - Done: TODOs 4.1-4.4 — Shopping SSE iOS (`ShoppingSSEEvent`/`ShoppingSSELineParser`, `streamShopping()` client, progressive product list UI, 10 new parser tests, review fixes: `receivedDoneEvent` tracking, structured `APIError` error messages, backend contract alignment for `item_search`/`error` events. 147 Swift tests pass)
+  - Done: TODOs 5.1-5.4 — Exa tracing (`@traceable` on `_build_search_queries`/`_search_exa`/`search_products_for_item`, `trace_thread` for search phase, LangSmith `add_metadata()` for query/response details, 4 new tests, 275 shopping tests pass, ruff/mypy clean)
+  - Done: TODO 6.1 — E2E verification: 1504 backend tests + 147 Swift tests pass (1651 total). Ruff clean, mypy clean. 19 files changed, +1967/-127 lines. All unstaged.
+  - All SSE TODOs complete. Manual device testing with real API keys pending.
+  - Done: Ralph Loop iteration 2 — Code quality + test coverage quick wins:
+    - Removed duplicate cache check in `score_product()` (shopping.py) — second block was dead code missing `dimensions` field
+    - 7 SSE parser edge case tests (ModelsTests.swift): empty data, missing data line, empty event type, comment lines for both parsers. 90 RemoModels tests pass.
+    - 5 SSE endpoint tests (test_api_endpoints.py): mock mode SSE parsing, wrong step 409, no session 409, shopping requires Temporal, session state persistence. Strengthened with proper SSE format parsing per review.
+    - 1509 backend + 154 Swift = 1663 total tests pass. Ruff/mypy clean.
+  - Done: Ralph Loop iteration 3 — E2E SSE streaming verification with real API calls:
+    - Added `TestSSEIntakeStreamingE2E` (3 tests): single-turn SSE with real Claude (206 deltas, 1432 chars), multi-turn SSE conversation (summary reached in 3 turns), SSE↔non-streaming session persistence.
+    - Added `TestSSEShoppingStreamingE2E` (1 test): full pipeline with real AI (photos→scan→intake→gen→select→approve→shopping SSE). 10 status + 10 item_search + 10 item + 1 done events. Real products found (vanity, mirror, faucet, etc). 10min 16s total pipeline time.
+    - Added `_parse_sse_events()` helper for SSE event parsing in E2E tests.
+    - Key finding: Claude tool-use streaming produces variable delta counts (0-206 per turn). `_MessageExtractor` can't always parse incremental JSON. Done event always has complete response — graceful degradation from streaming to all-at-once.
+    - Pre-existing bug found: inspiration photo max-3 limit not enforced in Temporal mode (race condition, unrelated to SSE).
+    - 1509 backend + 154 Swift = 1663 total tests pass. Ruff clean (only pre-existing violations in existing code).
+  - Done: Ralph Loop iteration 4 — Review fixes + VLM judge upgrade:
+    - Fixed 10 issues from silent failure hunter + code reviewer:
+      - `_parse_sse_events` hardened: raises ValueError on malformed blocks, accumulates multi-line data, handles SSE comments
+      - Shopping SSE test: `pytest.skip` on race-lost (not silent return), hard assertions (errors==0, dones==1, items>=1), cleanup on both paths
+      - Intake SSE tests: added project cleanup to all 3 tests
+      - Delta-vs-done prefix comparison: when deltas present, asserts concatenated text is prefix of done message
+      - Production: narrowed `except Exception` to `ValidationError` in both SSE endpoints (projects.py), preventing silent orphaned workflows
+      - Production: protected `_prepare_intake_call` with try/except in streaming path
+      - Production: wrapped `filter_by_dimensions`/`apply_confidence_filtering` in try/except with error SSE event (shopping.py)
+      - Production: improved logging (error level instead of warning, includes data preview and error details)
+    - Fixed 3 pre-existing lint violations (E501, F541)
+    - VLM judge upgraded from Claude Sonnet to Claude Opus (design_eval.py)
+    - Opus judge eval complete (5 runs, v5+v4 vs v2+v2):
+      - Baseline (v2+v2): total=73.4 (±1.0), candidate (v5+v4): total=72.2 (±5.8), delta=-1.2 → INCONCLUSIVE
+      - furniture_scale: ROLLBACK (-0.6, CI[-1.0,-0.2]). design_coherence: ROLLBACK (-0.8, CI[-1.4,-0.2])
+      - room_preservation highly variable (0-18) due to synthetic test image — real photo eval needed for meaningful comparison
+      - Opus dramatically stricter than Sonnet: 73.4/100 vs 91.0/100. More discriminative but noisier.
+      - All results recorded in prompt_ab_history.jsonl
+    - 1509 backend tests pass. Ruff clean. Mypy clean (no new errors).
+  - Done: Ralph Loop iteration 5 — Opus real-photo eval + edge case hardening:
+    - Real-photo Opus eval (Test 13): 2 photos × 5 runs, v5+room_v4 vs v5+room_v5. Baseline=86.4, candidate=88.1, delta=+1.7. All INCONCLUSIVE (P=0.759). Opus is 5pts stricter than Sonnet (86.4 vs 91.8), discriminates between photos (91.6 vs 81.2).
+    - Production fix: wrapped `resolve_url()`/`resolve_urls()` in try/except in `generate_shopping_list_streaming()` — was uncaught, would crash generator if R2 down.
+    - New test: `test_url_resolution_failure_yields_error` (shopping streaming). 6 streaming tests pass.
+    - New tests: `test_unicode_escape_at_buffer_boundary` + `test_multiple_unicode_escapes` (_MessageExtractor). 10 extractor tests pass.
+    - Intake eval judge also upgraded to Opus (intake_eval.py).
+    - All results recorded in prompt_ab_history.jsonl.
+    - Calibration test threshold adjusted (70→65) for Opus judge stricter scoring.
+    - 1512 backend tests pass (excluding eval). Ruff clean.
+- Next: Phase B (export positions from iOS RoomPlan). Consider: improve edit_fidelity (10.8/15 has headroom).
 
 ## Prompt Version Status
 | Prompt | Active | New versions | Status |

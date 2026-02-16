@@ -458,6 +458,7 @@ class TestOpenAPISchema:
             "/api/v1/projects/{project_id}/scan/skip",
             "/api/v1/projects/{project_id}/intake/start",
             "/api/v1/projects/{project_id}/intake/message",
+            "/api/v1/projects/{project_id}/intake/message/stream",
             "/api/v1/projects/{project_id}/intake/confirm",
             "/api/v1/projects/{project_id}/intake/skip",
             "/api/v1/projects/{project_id}/select",
@@ -466,6 +467,7 @@ class TestOpenAPISchema:
             "/api/v1/projects/{project_id}/iterate/feedback",
             "/api/v1/projects/{project_id}/approve",
             "/api/v1/projects/{project_id}/retry",
+            "/api/v1/projects/{project_id}/shopping/stream",
             "/api/v1/debug/force-failure",
         }
         assert expected_paths == paths
@@ -527,6 +529,7 @@ class TestOpenAPISchema:
             "/api/v1/projects/{project_id}/scan/skip": {"post"},
             "/api/v1/projects/{project_id}/intake/start": {"post"},
             "/api/v1/projects/{project_id}/intake/message": {"post"},
+            "/api/v1/projects/{project_id}/intake/message/stream": {"post"},
             "/api/v1/projects/{project_id}/intake/confirm": {"post"},
             "/api/v1/projects/{project_id}/intake/skip": {"post"},
             "/api/v1/projects/{project_id}/select": {"post"},
@@ -535,6 +538,7 @@ class TestOpenAPISchema:
             "/api/v1/projects/{project_id}/iterate/feedback": {"post"},
             "/api/v1/projects/{project_id}/approve": {"post"},
             "/api/v1/projects/{project_id}/retry": {"post"},
+            "/api/v1/projects/{project_id}/shopping/stream": {"get"},
         }
 
         for path, methods in expected_methods.items():

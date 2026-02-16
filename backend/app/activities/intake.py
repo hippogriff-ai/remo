@@ -7,9 +7,12 @@ in the system prompt (backend/prompts/intake_system.txt).
 
 from __future__ import annotations
 
+import contextlib
+import json
 import os
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import anthropic
 import structlog
@@ -26,6 +29,9 @@ from app.models.contracts import (
     QuickReplyOption,
     StyleProfile,
 )
+
+if TYPE_CHECKING:
+    from collections.abc import AsyncGenerator
 
 log = structlog.get_logger("intake")
 
@@ -793,12 +799,21 @@ def build_options(options_raw: list[dict[str, Any]] | None) -> list[QuickReplyOp
     ]
 
 
-async def _run_intake_core(input: IntakeChatInput) -> IntakeChatOutput:
-    """Core intake logic — callable from both the Temporal activity and tests.
+@dataclass
+class _IntakeCallParams:
+    """Shared parameters for both streaming and non-streaming intake calls."""
 
-    Server-side turn counter prevents the model from miscounting.
-    The model calls exactly one skill tool per turn: interview_client or draft_design_brief.
-    """
+    client: Any  # wrapped AsyncAnthropic
+    system_prompt: str | list[Any]
+    messages: list[dict[str, Any]]
+    turn_number: int
+    previous_brief: dict[str, Any] | None
+    loaded_skill_ids: list[str]
+    mode: str
+
+
+def _prepare_intake_call(input: IntakeChatInput) -> _IntakeCallParams:
+    """Extract shared setup from _run_intake_core for reuse by streaming."""
     if not input.user_message.strip():
         raise ApplicationError("User message cannot be empty", non_retryable=True)
 
@@ -806,15 +821,12 @@ async def _run_intake_core(input: IntakeChatInput) -> IntakeChatOutput:
     if not api_key:
         raise ApplicationError("ANTHROPIC_API_KEY not set", non_retryable=True)
 
-    # Server-side turn counter (count user messages in history + this one)
     turn_number = len([m for m in input.conversation_history if m.role == "user"]) + 1
 
-    # Extract previous brief and room analysis from project context
     previous_brief: dict[str, Any] | None = input.project_context.get("previous_brief")
     room_analysis: dict[str, Any] | None = input.project_context.get("room_analysis")
     loaded_skill_ids: list[str] = input.project_context.get("loaded_skill_ids", [])
 
-    # Extract LiDAR room dimensions from room_context if available
     room_context: dict[str, Any] | None = input.project_context.get("room_context")
     room_dimensions: dict[str, Any] | None = None
     if room_context and room_context.get("room_dimensions"):
@@ -829,18 +841,11 @@ async def _run_intake_core(input: IntakeChatInput) -> IntakeChatOutput:
         room_dimensions,
     )
 
-    # Skip room photos when room analysis exists: the analyze_room activity (same
-    # model) already extracted structured observations, so re-sending raw images
-    # would duplicate work and add ~3-6k tokens/turn of cognitive load. Fallback
-    # to raw photos if analysis is absent. May revisit if intake needs visual detail
-    # beyond what the analysis schema captures.
     room_photo_urls: list[str] = (
         input.project_context.get("room_photos", []) if not room_analysis else []
     )
     inspo_photo_urls: list[str] = input.project_context.get("inspiration_photos", [])
     inspo_notes: list[dict[str, Any]] | None = input.project_context.get("inspiration_notes")
-    # On first turn with room analysis, prefix user message with room type context
-    # so the model never asks "which room" when we already know
     user_message = input.user_message
     if turn_number == 1 and room_analysis and room_analysis.get("room_type"):
         user_message = f"[Context: Room type: {room_analysis['room_type']}] {user_message}"
@@ -868,39 +873,28 @@ async def _run_intake_core(input: IntakeChatInput) -> IntakeChatOutput:
 
     client = wrap_anthropic(anthropic.AsyncAnthropic(api_key=api_key))
 
-    try:
-        response = await client.messages.create(  # type: ignore[call-overload]
-            model=MODEL,
-            max_tokens=MAX_TOKENS,
-            system=system_prompt,
-            tools=INTAKE_TOOLS,
-            tool_choice={"type": "any"},
-            messages=messages,
-        )
-    except anthropic.RateLimitError as e:
-        log.warning("intake_rate_limited", turn=turn_number, mode=input.mode)
-        raise ApplicationError(f"Claude rate limited: {e}", non_retryable=False) from e
-    except anthropic.APIStatusError as e:
-        if e.status_code == 400 and "content policy" in str(e).lower():
-            log.error("intake_content_policy", turn=turn_number)
-            raise ApplicationError(f"Content policy violation: {e}", non_retryable=True) from e
-        log.error("intake_api_error", status=e.status_code, turn=turn_number)
-        non_retryable = 400 <= e.status_code < 500
-        raise ApplicationError(
-            f"Claude API error ({e.status_code}): {e}", non_retryable=non_retryable
-        ) from e
+    return _IntakeCallParams(
+        client=client,
+        system_prompt=system_prompt,
+        messages=messages,
+        turn_number=turn_number,
+        previous_brief=previous_brief,
+        loaded_skill_ids=loaded_skill_ids,
+        mode=input.mode,
+    )
 
+
+def _process_intake_response(response: Any, params: _IntakeCallParams) -> IntakeChatOutput:
+    """Shared post-processing for both streaming and non-streaming paths."""
     skill_name, skill_data = extract_skill_call(response)
 
-    # Fallback: if the model didn't call a skill tool, extract text from content blocks
     if skill_name is None:
-        log.warning("intake_no_skill_called", turn=turn_number, mode=input.mode)
+        log.warning("intake_no_skill_called", turn=params.turn_number, mode=params.mode)
         text_parts = [b.text for b in response.content if hasattr(b, "text")]
         fallback = "I'm here to help with your room design. Tell me about the room?"
         agent_message = " ".join(text_parts) if text_parts else fallback
         skill_data = {"message": agent_message}
 
-    # Extract requested_skills from interview_client calls
     requested_skills: list[str] = []
     if skill_name == "interview_client":
         raw_skills = skill_data.get("requested_skills", [])
@@ -915,39 +909,37 @@ async def _run_intake_core(input: IntakeChatInput) -> IntakeChatOutput:
             log.warning("intake_requested_skills_invalid", invalid=invalid, valid=validated)
         requested_skills = skill_loader.cap_skills(validated)
 
-    # Build output based on which skill was chosen
-    max_turns = MAX_TURNS.get(input.mode, 4)
+    max_turns = MAX_TURNS.get(params.mode, 4)
 
     if skill_name == "draft_design_brief":
-        # Draft skill: complete brief required, this is the summary turn
         is_summary = True
         brief_data = skill_data.get("design_brief")
         domains_covered = brief_data.get("domains_covered", []) if brief_data else []
     elif skill_name == "interview_client":
-        # Interview skill: optional partial brief, not a summary
         is_summary = False
         brief_data = skill_data.get("partial_brief_update")
         domains_covered = skill_data.get("domains_covered", [])
     else:
-        # No skill called (fallback path)
         is_summary = False
         brief_data = None
         domains_covered = []
 
-    # Server-side enforcement: force summary on final turn even if model chose interview
-    if turn_number >= max_turns and not is_summary:
-        log.warning("intake_forced_summary", turn=turn_number, max_turns=max_turns)
+    if params.turn_number >= max_turns and not is_summary:
+        log.warning(
+            "intake_forced_summary",
+            turn=params.turn_number,
+            max_turns=max_turns,
+        )
         is_summary = True
 
-    # Safety net: if forced summary but no brief data, use accumulated previous_brief
-    if is_summary and brief_data is None and previous_brief is not None:
-        log.info("intake_using_previous_brief", turn=turn_number)
-        brief_data = previous_brief
+    if is_summary and brief_data is None and params.previous_brief is not None:
+        log.info("intake_using_previous_brief", turn=params.turn_number)
+        brief_data = params.previous_brief
 
     log.info(
         "intake_turn_complete",
-        mode=input.mode,
-        turn=turn_number,
+        mode=params.mode,
+        turn=params.turn_number,
         skill=skill_name,
         domains_covered=len(domains_covered),
         has_brief=brief_data is not None,
@@ -956,14 +948,11 @@ async def _run_intake_core(input: IntakeChatInput) -> IntakeChatOutput:
         output_tokens=response.usage.output_tokens,
     )
 
-    # Build partial/complete brief and stamp loaded skills
     partial_brief = build_brief(brief_data) if brief_data else None
     if partial_brief:
-        if loaded_skill_ids:
-            partial_brief.style_skills_used = loaded_skill_ids
+        if params.loaded_skill_ids:
+            partial_brief.style_skills_used = params.loaded_skill_ids
         elif brief_data and isinstance(brief_data.get("style_skills_used"), list):
-            # Validate model-emitted skill IDs against manifest to prevent
-            # hallucinated IDs from corrupting provenance.
             manifest = skill_loader.load_manifest()
             valid_ids = {s.skill_id for s in manifest.skills}
             partial_brief.style_skills_used = [
@@ -974,11 +963,183 @@ async def _run_intake_core(input: IntakeChatInput) -> IntakeChatOutput:
         agent_message=skill_data.get("message", ""),
         options=build_options(skill_data.get("options")),
         is_open_ended=skill_data.get("is_open_ended", False),
-        progress=f"Question {turn_number} of ~{max_turns}",
+        progress=f"Question {params.turn_number} of ~{max_turns}",
         is_summary=is_summary,
         partial_brief=partial_brief,
         requested_skills=requested_skills,
     )
+
+
+class _MessageExtractor:
+    """Incremental parser for the "message" field in streaming JSON tool input.
+
+    Claude with tool_choice="any" streams input_json_delta events building a
+    JSON object. This class watches the accumulating buffer for the "message"
+    field and yields new characters as they arrive.
+    """
+
+    def __init__(self) -> None:
+        self._found_key = False
+        self._in_value = False
+        self._last_pos = 0
+
+    def feed(self, buffer: str) -> str:
+        """Feed the accumulated JSON buffer, return new message characters."""
+        new_chars: list[str] = []
+        i = self._last_pos
+
+        if not self._found_key:
+            key_marker = '"message"'
+            idx = buffer.find(key_marker, i)
+            if idx == -1:
+                self._last_pos = max(0, len(buffer) - len(key_marker))
+                return ""
+            # Skip past key + colon + optional whitespace + opening quote
+            i = idx + len(key_marker)
+            while i < len(buffer) and buffer[i] in ": \t\n\r":
+                i += 1
+            if i < len(buffer) and buffer[i] == '"':
+                i += 1
+                self._found_key = True
+                self._in_value = True
+            else:
+                self._last_pos = i
+                return ""
+
+        if self._in_value:
+            while i < len(buffer):
+                ch = buffer[i]
+                if ch == "\\":
+                    # Escape sequence
+                    if i + 1 >= len(buffer):
+                        break  # Wait for more data
+                    esc = buffer[i + 1]
+                    if esc == '"':
+                        new_chars.append('"')
+                        i += 2
+                    elif esc == "n":
+                        new_chars.append("\n")
+                        i += 2
+                    elif esc == "t":
+                        new_chars.append("\t")
+                        i += 2
+                    elif esc == "\\":
+                        new_chars.append("\\")
+                        i += 2
+                    elif esc == "/":
+                        new_chars.append("/")
+                        i += 2
+                    elif esc == "u":
+                        if i + 5 < len(buffer):
+                            hex_str = buffer[i + 2 : i + 6]
+                            with contextlib.suppress(ValueError):
+                                new_chars.append(chr(int(hex_str, 16)))
+                            i += 6
+                        else:
+                            break  # Wait for full escape
+                    else:
+                        new_chars.append(esc)
+                        i += 2
+                elif ch == '"':
+                    self._in_value = False
+                    i += 1
+                    break
+                else:
+                    new_chars.append(ch)
+                    i += 1
+
+        self._last_pos = i
+        return "".join(new_chars)
+
+
+async def _stream_intake_sse(
+    params: _IntakeCallParams,
+) -> AsyncGenerator[str, None]:
+    """Yield SSE events from a streaming Claude intake call.
+
+    Events: delta (text chunks), done (full IntakeChatOutput), error.
+    """
+    try:
+        accumulated_json = ""
+        extractor = _MessageExtractor()
+
+        async with params.client.messages.stream(
+            model=MODEL,
+            max_tokens=MAX_TOKENS,
+            system=params.system_prompt,
+            tools=INTAKE_TOOLS,
+            tool_choice={"type": "any"},
+            messages=params.messages,
+        ) as stream:
+            async for event in stream:
+                if event.type == "content_block_delta" and hasattr(event.delta, "partial_json"):
+                    accumulated_json += event.delta.partial_json
+                    new_text = extractor.feed(accumulated_json)
+                    if new_text:
+                        data = json.dumps({"text": new_text})
+                        yield f"event: delta\ndata: {data}\n\n"
+
+            response = await stream.get_final_message()
+
+    except anthropic.RateLimitError as e:
+        msg = f"Claude rate limited: {e}"
+        log.warning("intake_stream_rate_limited", turn=params.turn_number)
+        yield f"event: error\ndata: {json.dumps({'error': msg, 'retryable': True})}\n\n"
+        return
+    except anthropic.APIStatusError as e:
+        msg = f"Claude API error ({e.status_code}): {e}"
+        log.error(
+            "intake_stream_api_error",
+            status=e.status_code,
+            turn=params.turn_number,
+        )
+        payload = json.dumps({"error": msg, "retryable": e.status_code >= 500})
+        yield f"event: error\ndata: {payload}\n\n"
+        return
+
+    # Process the complete response (same as non-streaming path)
+    try:
+        result = _process_intake_response(response, params)
+    except Exception as e:
+        log.error("intake_stream_process_error", error=str(e))
+        yield f"event: error\ndata: {json.dumps({'error': str(e), 'retryable': False})}\n\n"
+        return
+
+    yield f"event: done\ndata: {result.model_dump_json()}\n\n"
+
+
+async def _run_intake_core(input: IntakeChatInput) -> IntakeChatOutput:
+    """Core intake logic — callable from both the Temporal activity and tests.
+
+    Server-side turn counter prevents the model from miscounting.
+    The model calls exactly one skill tool per turn: interview_client or draft_design_brief.
+    """
+    params = _prepare_intake_call(input)
+
+    try:
+        response = await params.client.messages.create(  # type: ignore[call-overload]
+            model=MODEL,
+            max_tokens=MAX_TOKENS,
+            system=params.system_prompt,
+            tools=INTAKE_TOOLS,
+            tool_choice={"type": "any"},
+            messages=params.messages,
+        )
+    except anthropic.RateLimitError as e:
+        log.warning("intake_rate_limited", turn=params.turn_number, mode=params.mode)
+        raise ApplicationError(f"Claude rate limited: {e}", non_retryable=False) from e
+    except anthropic.APIStatusError as e:
+        if e.status_code == 400 and "content policy" in str(e).lower():
+            log.error("intake_content_policy", turn=params.turn_number)
+            raise ApplicationError(f"Content policy violation: {e}", non_retryable=True) from e
+        log.error("intake_api_error", status=e.status_code, turn=params.turn_number)
+        non_retryable = 400 <= e.status_code < 500
+        raise ApplicationError(
+            f"Claude API error ({e.status_code}): {e}",
+            non_retryable=non_retryable,
+        ) from e
+
+    return _process_intake_response(response, params)
 
 
 @activity.defn

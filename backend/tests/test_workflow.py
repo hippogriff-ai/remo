@@ -4397,3 +4397,60 @@ class TestRapidFireSignals:
             assert state.revision_history[0].type == "annotation"
             assert state.revision_history[1].type == "feedback"
             assert state.revision_history[2].type == "annotation"
+
+
+# === Shopping Streaming Signals ===
+
+
+class TestShoppingStreamingSignals:
+    """Unit tests for handle_shopping_streaming and receive_shopping_result signals."""
+
+    def _make_workflow(self) -> DesignProjectWorkflow:
+        wf = DesignProjectWorkflow.__new__(DesignProjectWorkflow)
+        wf.__init__()
+        wf._project_id = "test-proj"
+        return wf
+
+    @pytest.mark.asyncio
+    async def test_handle_shopping_streaming_sets_flag(self):
+        wf = self._make_workflow()
+        assert wf._shopping_streaming is False
+        await wf.handle_shopping_streaming()
+        assert wf._shopping_streaming is True
+
+    @pytest.mark.asyncio
+    async def test_receive_shopping_result_sets_list(self):
+        wf = self._make_workflow()
+        assert wf.shopping_list is None
+        result = GenerateShoppingListOutput(
+            items=[
+                ProductMatch(
+                    category_group="Vanity",
+                    product_name="Test Vanity",
+                    retailer="Amazon",
+                    price_cents=29900,
+                    product_url="https://amazon.com/vanity",
+                    confidence_score=0.85,
+                    why_matched="Good match",
+                )
+            ],
+            unmatched=[],
+            total_estimated_cost_cents=29900,
+        )
+        await wf.receive_shopping_result(result)
+        assert wf.shopping_list is not None
+        assert len(wf.shopping_list.items) == 1
+        assert wf.shopping_list.items[0].product_name == "Test Vanity"
+
+    @pytest.mark.asyncio
+    async def test_streaming_flag_independent_of_result(self):
+        """Streaming flag and result are independent — both can be set."""
+        wf = self._make_workflow()
+        await wf.handle_shopping_streaming()
+        assert wf._shopping_streaming is True
+        assert wf.shopping_list is None
+
+        result = GenerateShoppingListOutput(items=[], unmatched=[], total_estimated_cost_cents=0)
+        await wf.receive_shopping_result(result)
+        assert wf._shopping_streaming is True
+        assert wf.shopping_list is not None
