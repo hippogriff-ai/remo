@@ -274,6 +274,7 @@ struct ProjectRow: View {
         switch step {
         case .photoUpload: return "camera"
         case .scan: return "cube.transparent"
+        case .analyzing: return "eye.circle"
         case .intake: return "bubble.left.and.bubble.right"
         case .generation: return "wand.and.stars"
         case .selection: return "photo.on.rectangle.angled"
@@ -290,6 +291,7 @@ struct ProjectRow: View {
         switch step {
         case .photoUpload: return "Upload Photos"
         case .scan: return "Room Scan"
+        case .analyzing: return "Analyzing Room"
         case .intake: return "Design Chat"
         case .generation: return "Generating..."
         case .selection: return "Choose Design"
@@ -306,6 +308,7 @@ struct ProjectRow: View {
         switch step {
         case .photoUpload: return "Take photos of your room"
         case .scan: return "Scan room dimensions"
+        case .analyzing: return "Understanding your space..."
         case .intake: return "Tell us your style"
         case .generation: return "Creating your designs..."
         case .selection: return "Pick your favorite"

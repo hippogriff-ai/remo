@@ -26,7 +26,7 @@ flowchart TD
     end
 
     subgraph "Phase 3: Intake Conversation"
-        F --> H["_resolve_analysis()<br/>30s timeout with asyncio.shield()"]
+        F --> H["_resolve_analysis(timeout=90)<br/>with asyncio.shield()"]
         G --> H
         H -->|RoomContext available| I["Intake Agent<br/>with hypothesis injection"]
         H -->|No context| J["Intake Agent<br/>from blank slate"]
@@ -57,8 +57,10 @@ flowchart TD
 |----------|-----------|
 | `workflow.start_activity()` for eager launch | Replay-safe Temporal pattern; records scheduling in event history |
 | `asyncio.shield()` in `_resolve_analysis` | Prevents `asyncio.wait_for` from cancelling the activity on timeout; slow responses can still be collected later |
+| 90s analysis timeout before intake | iOS shows "Analyzing Room" screen while waiting; matches activity's `start_to_close_timeout` |
+| `_build_room_context()` LiDAR-only fallback | If analysis fails, LiDAR dimensions still reach intake as a safety net |
 | Analysis errors are silent | Never set `self.error`, never show error UI to user — graceful degradation |
-| `_enrich_context()` is a workflow method, not activity | Deterministic merge of photo analysis + LiDAR; no I/O, no serialization overhead |
+| `_build_room_context()` is a workflow method, not activity | Deterministic merge of photo analysis + LiDAR; no I/O, no serialization overhead |
 
 ---
 
@@ -334,10 +336,10 @@ flowchart TD
 
 | Failure | User Impact | Recovery |
 |---------|-------------|----------|
-| `read_the_room` retries exhausted | None (silent) | Intake starts from blank slate |
-| Analysis still running at intake start | None (30s shield timeout) | Intake starts immediately |
+| `read_the_room` retries exhausted | None (silent) | Intake starts from blank slate; LiDAR still passes through |
+| Analysis still running at intake start | iOS shows "Analyzing Room" (90s max) | Intake waits; if 90s exceeded, starts with LiDAR-only context |
 | LiDAR parse fails | None | Photo-only analysis preserved |
-| Both analysis AND LiDAR fail | None | Current behavior — no regression |
+| Both analysis AND LiDAR fail | None | Intake starts from blank slate — no regression |
 | Zero/negative room dimensions | None | `_compute_room_constraints()` returns `{}`, skips category limits |
 | Empty constraints dict | None | `_format_room_constraints_for_prompt()` omits limits section |
 | Product dimensions unparseable | None | Product passes through filter unchanged |

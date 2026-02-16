@@ -493,8 +493,18 @@ class TestBuildRoomContext:
         assert wf.room_context.enrichment_sources == first_context.enrichment_sources
         assert wf.room_context.room_dimensions == first_context.room_dimensions
 
-    def test_noop_when_no_analysis(self) -> None:
-        """_build_room_context() is a no-op when room_analysis is None."""
+    def test_noop_when_no_analysis_and_no_lidar(self) -> None:
+        """_build_room_context() is a no-op when both analysis and LiDAR are None."""
+        wf = self._make_workflow()
+        wf.room_analysis = None
+        wf.scan_data = None
+        wf.room_context = None
+
+        wf._build_room_context()
+        assert wf.room_context is None  # Still None — nothing to merge
+
+    def test_lidar_only_builds_context(self) -> None:
+        """_build_room_context() builds context with LiDAR even without photo analysis."""
         wf = self._make_workflow()
         wf.room_analysis = None
         wf.scan_data = ScanData(
@@ -504,7 +514,11 @@ class TestBuildRoomContext:
         wf.room_context = None
 
         wf._build_room_context()
-        assert wf.room_context is None  # Still None — early return
+        assert wf.room_context is not None
+        assert wf.room_context.photo_analysis is None
+        assert wf.room_context.room_dimensions is not None
+        assert wf.room_context.room_dimensions.width_m == 4.0
+        assert wf.room_context.enrichment_sources == ["lidar"]
 
     def test_lidar_updates_estimated_dimensions(self) -> None:
         """_build_room_context() overwrites estimated_dimensions with precise LiDAR values."""
@@ -991,7 +1005,7 @@ class TestWorkflowHappyPath:
 
             # Approve from iteration
             await handle.signal(DesignProjectWorkflow.approve_design)
-            await asyncio.sleep(0.5)
+            await asyncio.sleep(5)  # 3s SSE grace period + activity execution
 
             # Shopping then completed — verify structure
             state = await handle.query(DesignProjectWorkflow.get_state)
@@ -1729,7 +1743,7 @@ class TestShoppingInput:
 
             # Approve → triggers shopping
             await handle.signal(DesignProjectWorkflow.approve_design)
-            await asyncio.sleep(1.0)
+            await asyncio.sleep(5)
 
             state = await handle.query(DesignProjectWorkflow.get_state)
             assert state.step == "completed"
@@ -1798,7 +1812,7 @@ class TestShoppingInput:
             await handle.signal(DesignProjectWorkflow.select_option, 0)
             await asyncio.sleep(0.5)
             await handle.signal(DesignProjectWorkflow.approve_design)
-            await asyncio.sleep(1.0)
+            await asyncio.sleep(5)
 
             state = await handle.query(DesignProjectWorkflow.get_state)
             assert state.step == "completed"
@@ -1852,7 +1866,7 @@ class TestShoppingInput:
             await asyncio.sleep(0.5)
 
             await handle.signal(DesignProjectWorkflow.approve_design)
-            await asyncio.sleep(0.5)
+            await asyncio.sleep(5)
 
             # Workflow reaches completed — analysis failure is non-fatal
             state = await handle.query(DesignProjectWorkflow.get_state)
@@ -2224,7 +2238,7 @@ class TestStartOver:
             assert state.step == "iteration"
 
             await handle.signal(DesignProjectWorkflow.approve_design)
-            await asyncio.sleep(1.0)
+            await asyncio.sleep(5)
 
             state = await handle.query(DesignProjectWorkflow.get_state)
             assert state.step == "completed"
@@ -2451,7 +2465,7 @@ class TestStartOver:
             await handle.signal(DesignProjectWorkflow.select_option, 0)
             await asyncio.sleep(0.5)
             await handle.signal(DesignProjectWorkflow.approve_design)
-            await asyncio.sleep(1.0)
+            await asyncio.sleep(5)
 
             state = await handle.query(DesignProjectWorkflow.get_state)
             assert state.step == "completed"
@@ -2508,7 +2522,7 @@ class TestStartOver:
 
             # Approve the design
             await handle.signal(DesignProjectWorkflow.approve_design)
-            await asyncio.sleep(1.0)
+            await asyncio.sleep(5)
 
             state = await handle.query(DesignProjectWorkflow.get_state)
             assert state.approved is True
@@ -2859,7 +2873,7 @@ class TestIterationPhase:
 
             # Approve from the explicit approval step
             await handle.signal(DesignProjectWorkflow.approve_design)
-            await asyncio.sleep(1.0)
+            await asyncio.sleep(5)
 
             state = await handle.query(DesignProjectWorkflow.get_state)
             assert state.step == "completed"
@@ -2980,7 +2994,7 @@ class TestApproval:
 
             # Approve immediately without any edits
             await handle.signal(DesignProjectWorkflow.approve_design)
-            await asyncio.sleep(1.0)
+            await asyncio.sleep(5)
 
             state = await handle.query(DesignProjectWorkflow.get_state)
             assert state.step == "completed"
@@ -3011,7 +3025,7 @@ class TestApproval:
             await handle.signal(DesignProjectWorkflow.select_option, 0)
             await asyncio.sleep(0.5)
             await handle.signal(DesignProjectWorkflow.approve_design)
-            await asyncio.sleep(1.0)
+            await asyncio.sleep(5)
 
             state = await handle.query(DesignProjectWorkflow.get_state)
             assert state.step == "completed"
@@ -3344,7 +3358,7 @@ class TestCancellation:
             handle = await _start_workflow(workflow_env, tq)
             await _advance_to_iteration(handle)
             await handle.signal(DesignProjectWorkflow.approve_design)
-            await asyncio.sleep(2.0)
+            await asyncio.sleep(5)
 
             state = await handle.query(DesignProjectWorkflow.get_state)
             assert state.step == "shopping"
@@ -3401,7 +3415,7 @@ class TestCancellation:
 
             # Approve → shopping → completed
             await handle.signal(DesignProjectWorkflow.approve_design)
-            await asyncio.sleep(1.0)
+            await asyncio.sleep(5)
 
             state = await handle.query(DesignProjectWorkflow.get_state)
             assert state.step == "completed"
@@ -3521,7 +3535,7 @@ class TestCompletionPurge:
             handle = await _start_workflow(workflow_env, tq)
             await _advance_to_iteration(handle)
             await handle.signal(DesignProjectWorkflow.approve_design)
-            await asyncio.sleep(1.0)
+            await asyncio.sleep(5)
 
             # Verify completed state before 24h timer fires
             state = await handle.query(DesignProjectWorkflow.get_state)
@@ -3549,7 +3563,7 @@ class TestCompletionPurge:
             handle = await _start_workflow(workflow_env, tq)
             await _advance_to_iteration(handle)
             await handle.signal(DesignProjectWorkflow.approve_design)
-            await asyncio.sleep(1.0)
+            await asyncio.sleep(5)
 
             state = await handle.query(DesignProjectWorkflow.get_state)
             assert state.step == "completed"
@@ -3738,7 +3752,7 @@ class TestErrorRecovery:
 
             # No active error → approve is accepted.
             await handle.signal(DesignProjectWorkflow.approve_design)
-            await asyncio.sleep(2.0)
+            await asyncio.sleep(5)
 
             state = await handle.query(DesignProjectWorkflow.get_state)
             assert state.approved is True
@@ -3803,7 +3817,7 @@ class TestErrorRecovery:
             handle = await _start_workflow(workflow_env, tq)
             await _advance_to_iteration(handle)
             await handle.signal(DesignProjectWorkflow.approve_design)
-            await asyncio.sleep(2.0)
+            await asyncio.sleep(5)
 
             state = await handle.query(DesignProjectWorkflow.get_state)
             assert state.step == "shopping"
@@ -3870,7 +3884,7 @@ class TestErrorRecovery:
             handle = await _start_workflow(workflow_env, tq)
             await _advance_to_iteration(handle)
             await handle.signal(DesignProjectWorkflow.approve_design)
-            await asyncio.sleep(2.0)
+            await asyncio.sleep(5)
 
             # Should be in shopping with error
             state = await handle.query(DesignProjectWorkflow.get_state)
@@ -4131,7 +4145,7 @@ class TestEagerAnalysis:
             await handle.signal(DesignProjectWorkflow.select_option, 0)
             await asyncio.sleep(0.5)
             await handle.signal(DesignProjectWorkflow.approve_design)
-            await asyncio.sleep(2.0)
+            await asyncio.sleep(5)
 
             state = await handle.query(DesignProjectWorkflow.get_state)
             assert state.step == "completed"
@@ -4220,7 +4234,7 @@ class TestStartOverDuringEdit:
             await handle.signal(DesignProjectWorkflow.select_option, 0)
             await asyncio.sleep(0.5)
             await handle.signal(DesignProjectWorkflow.approve_design)
-            await asyncio.sleep(2.0)
+            await asyncio.sleep(5)
 
             state = await handle.query(DesignProjectWorkflow.get_state)
             assert state.step == "completed"
@@ -4397,3 +4411,60 @@ class TestRapidFireSignals:
             assert state.revision_history[0].type == "annotation"
             assert state.revision_history[1].type == "feedback"
             assert state.revision_history[2].type == "annotation"
+
+
+# === Shopping Streaming Signals ===
+
+
+class TestShoppingStreamingSignals:
+    """Unit tests for handle_shopping_streaming and receive_shopping_result signals."""
+
+    def _make_workflow(self) -> DesignProjectWorkflow:
+        wf = DesignProjectWorkflow.__new__(DesignProjectWorkflow)
+        wf.__init__()
+        wf._project_id = "test-proj"
+        return wf
+
+    @pytest.mark.asyncio
+    async def test_handle_shopping_streaming_sets_flag(self):
+        wf = self._make_workflow()
+        assert wf._shopping_streaming is False
+        await wf.handle_shopping_streaming()
+        assert wf._shopping_streaming is True
+
+    @pytest.mark.asyncio
+    async def test_receive_shopping_result_sets_list(self):
+        wf = self._make_workflow()
+        assert wf.shopping_list is None
+        result = GenerateShoppingListOutput(
+            items=[
+                ProductMatch(
+                    category_group="Vanity",
+                    product_name="Test Vanity",
+                    retailer="Amazon",
+                    price_cents=29900,
+                    product_url="https://amazon.com/vanity",
+                    confidence_score=0.85,
+                    why_matched="Good match",
+                )
+            ],
+            unmatched=[],
+            total_estimated_cost_cents=29900,
+        )
+        await wf.receive_shopping_result(result)
+        assert wf.shopping_list is not None
+        assert len(wf.shopping_list.items) == 1
+        assert wf.shopping_list.items[0].product_name == "Test Vanity"
+
+    @pytest.mark.asyncio
+    async def test_streaming_flag_independent_of_result(self):
+        """Streaming flag and result are independent — both can be set."""
+        wf = self._make_workflow()
+        await wf.handle_shopping_streaming()
+        assert wf._shopping_streaming is True
+        assert wf.shopping_list is None
+
+        result = GenerateShoppingListOutput(items=[], unmatched=[], total_estimated_cost_cents=0)
+        await wf.receive_shopping_result(result)
+        assert wf._shopping_streaming is True
+        assert wf.shopping_list is not None

@@ -18,7 +18,10 @@ import os
 import re
 import urllib.parse
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from collections.abc import AsyncGenerator
 
 import anthropic
 import httpx
@@ -26,6 +29,7 @@ import structlog
 from temporalio import activity
 from temporalio.exceptions import ApplicationError
 
+from app.config import settings
 from app.models.contracts import (
     DesignBrief,
     GenerateShoppingListInput,
@@ -36,6 +40,7 @@ from app.models.contracts import (
     RoomDimensions,
     UnmatchedItem,
 )
+from app.utils.tracing import traceable
 
 log = structlog.get_logger("shopping")
 
@@ -502,28 +507,27 @@ def _expand_color_synonym(color: str) -> str | None:
     return None
 
 
+@traceable(name="exa.build_queries", run_type="chain")
 def _build_search_queries(
     item: dict[str, Any],
     room_dimensions: RoomDimensions | None = None,
+    design_brief: DesignBrief | None = None,
 ) -> list[str]:
     """Build source-aware search queries for an extracted item.
 
     Uses natural product descriptions (no "buy"/"shop" prefixes) since Exa's
     neural/semantic search + useAutoprompt handles purchase intent internally.
 
-    Source tag determines query strategy:
-    - BRIEF_ANCHORED: user's own language (highest recall)
-    - ITERATION_ANCHORED: iteration instruction keywords
-    - IMAGE_ONLY: AI-described category + attributes
+    Query priority (highest signal first):
+    1. Description — the richest signal from Claude's vision extraction
+    2. Style-contextualized — combines design brief mood/room with category
+    3. Source reference — user's own language (BRIEF/ITERATION anchored)
+    4. Material-focused — targeted attribute query
+    5. Color synonym — alternative color term for broader recall
+    6. Room-constrained — size limits for primary furniture
 
-    All tags get a description-based query when available, since the
-    extraction prompt produces rich professional descriptions.
-
-    When room_dimensions are available, adds a size-constrained query for
-    primary furniture categories (sofa, table, rug, cabinet).
-
-    Color synonym expansion adds one additional query with the closest
-    synonym for the item's color, improving recall across retailers.
+    When design_brief is provided, queries incorporate the overall design
+    style (mood, room type, colors) for much better product relevance.
     """
     tag = item.get("source_tag", "IMAGE_ONLY")
     category = item.get("category", "")
@@ -533,34 +537,54 @@ def _build_search_queries(
     description = item.get("description", "")
     dims = item.get("estimated_dimensions", "")
 
-    queries = []
-    if tag == "BRIEF_ANCHORED":
-        ref = str(item.get("source_reference") or description)
-        queries.append(ref)
-        queries.append(f"{category} {style} {material} furniture")
-    elif tag == "ITERATION_ANCHORED":
-        ref = str(item.get("source_reference") or description)
-        queries.append(ref)
-        queries.append(f"{category} {material} {color} furniture")
-    else:
-        queries.append(f"{category} {material} {color}")
-        queries.append(f"{category} {style} furniture")
+    # Extract design context from brief
+    brief_mood = ""
+    brief_room = ""
+    if design_brief:
+        brief_room = design_brief.room_type or ""
+        if design_brief.style_profile:
+            brief_mood = design_brief.style_profile.mood or ""
 
-    # Description-based query for all tags — the extraction prompt produces
-    # rich descriptions like "ivory boucle sofa with down-blend cushions"
-    if description and description != item.get("source_reference", ""):
+    queries = []
+
+    # 1. Description query FIRST — highest signal, richest product language
+    # (e.g., "walnut floating vanity with soft-close drawers")
+    if description:
         queries.append(description)
 
+    # 2. Style-contextualized query — combines brief mood + room + category
+    # (e.g., "modern spa bathroom vanity" instead of just "vanity")
+    if brief_mood and brief_room:
+        queries.append(f"{brief_mood} {brief_room} {category}")
+    elif brief_mood:
+        queries.append(f"{brief_mood} {category}")
+    elif brief_room:
+        queries.append(f"{brief_room} {category} {style}")
+    elif style:
+        # No brief available — fall back to item's own style
+        queries.append(f"{category} {style} furniture")
+
+    # 3. Source reference (for anchored items — user's own words)
+    if tag in ("BRIEF_ANCHORED", "ITERATION_ANCHORED"):
+        ref = str(item.get("source_reference") or "")
+        if ref and ref != description:
+            queries.append(ref)
+
+    # 4. Material-focused query — targeted attribute combination
+    if material:
+        queries.append(f"{category} {material} {color}".strip())
+
+    # 5. Dimension query — important for rugs, tables, etc.
     if dims:
         queries.append(f"{category} {dims}")
 
-    # Color synonym expansion: add one query swapping the primary color
+    # 5. Color synonym expansion: one query swapping the primary color
     if color:
         synonym = _expand_color_synonym(color)
         if synonym:
             queries.append(f"{category} {material} {synonym}")
 
-    # Room-aware constrained query for primary furniture
+    # 6. Room-aware constrained query for primary furniture
     if room_dimensions is not None:
         constraint_key = _match_category(item)
         if constraint_key:
@@ -615,6 +639,7 @@ def _exa_cache_path(
     return cache_dir / f"exa_{key}.json"
 
 
+@traceable(name="exa.search_request", run_type="tool")
 async def _search_exa(
     http_client: httpx.AsyncClient,
     query: str,
@@ -712,6 +737,25 @@ async def _search_exa(
                     log.info("exa_cache_saved", query=query[:80])
                 except OSError:
                     pass
+            # Best-effort LangSmith metadata for filtering/debugging
+            try:
+                from langsmith import get_current_run_tree
+
+                rt = get_current_run_tree()
+                if rt:
+                    rt.add_metadata(
+                        {
+                            "exa_query": query,
+                            "exa_search_type": search_type,
+                            "exa_num_results": num_results,
+                            "exa_domains": include_domains or "open_web",
+                            "exa_text_filter": include_text or "none",
+                            "exa_response_count": len(results),
+                            "exa_response_urls": [r.get("url", "") for r in results],
+                        }
+                    )
+            except (ImportError, AttributeError, TypeError):
+                pass
             return results
 
         # Retry on transient errors (429 rate limit, 500+ server errors)
@@ -760,11 +804,13 @@ _RETAILER_DOMAINS: list[str] = [
 ]
 
 
+@traceable(name="exa.search_item", run_type="chain")
 async def search_products_for_item(
     http_client: httpx.AsyncClient,
     item: dict[str, Any],
     exa_api_key: str,
     room_dimensions: RoomDimensions | None = None,
+    design_brief: DesignBrief | None = None,
 ) -> list[dict[str, Any]]:
     """Search Exa for products matching a single extracted item.
 
@@ -776,7 +822,11 @@ async def search_products_for_item(
     HIGH-priority items use "deep" search type (query expansion);
     others use "auto" (neural + reranker).
     """
-    queries = _build_search_queries(item, room_dimensions=room_dimensions)
+    queries = _build_search_queries(
+        item,
+        room_dimensions=room_dimensions,
+        design_brief=design_brief,
+    )
     num_results = _num_results_for_item(item)
     priority = item.get("search_priority", "MEDIUM")
     search_type = "deep" if priority == "HIGH" else "auto"
@@ -825,16 +875,21 @@ async def search_all_items(
     items: list[dict[str, Any]],
     exa_api_key: str,
     room_dimensions: RoomDimensions | None = None,
+    design_brief: DesignBrief | None = None,
 ) -> list[list[dict[str, Any]]]:
     """Step 2: Search Exa for products for all items (parallelized)."""
     async with httpx.AsyncClient() as http_client:
         tasks = [
             search_products_for_item(
-                http_client, item, exa_api_key, room_dimensions=room_dimensions
+                http_client,
+                item,
+                exa_api_key,
+                room_dimensions=room_dimensions,
+                design_brief=design_brief,
             )
             for item in items
         ]
-        return await asyncio.gather(*tasks)
+        return list(await asyncio.gather(*tasks))
 
 
 # === Step 3: Rubric-Based Scoring ===
@@ -1048,19 +1103,6 @@ async def score_product(
         cached["product_name"] = product.get("title", "Unknown")
         cached["image_url"] = product.get("image")
         cached["dimensions"] = product.get("text", "")
-        if "price_cents" not in cached:
-            cached["price_cents"] = _price_to_cents(_extract_price_text(product))
-        return cached  # type: ignore[no-any-return]
-
-    # Dev/test cache: avoid redundant Claude scoring calls when prompt
-    # hasn't changed. Will be removed in production.
-    cache_key = [prompt]
-    cached = get_cached("claude_scoring", cache_key)
-    if cached and isinstance(cached, dict):
-        # Restore product metadata (not included in scored output)
-        cached["product_url"] = product.get("url", "")
-        cached["product_name"] = product.get("title", "Unknown")
-        cached["image_url"] = product.get("image")
         if "price_cents" not in cached:
             cached["price_cents"] = _price_to_cents(_extract_price_text(product))
         return cached  # type: ignore[no-any-return]
@@ -1523,11 +1565,11 @@ async def generate_shopping_list(
 
     Stateless: all data passed via input, output returned.
     """
-    anthropic_key = os.environ.get("ANTHROPIC_API_KEY")
+    anthropic_key = settings.anthropic_api_key or os.environ.get("ANTHROPIC_API_KEY", "")
     if not anthropic_key:
         raise ApplicationError("ANTHROPIC_API_KEY not set", non_retryable=True)
 
-    exa_key = os.environ.get("EXA_API_KEY")
+    exa_key = settings.exa_api_key or os.environ.get("EXA_API_KEY", "")
     if not exa_key:
         raise ApplicationError("EXA_API_KEY not set", non_retryable=True)
 
@@ -1591,9 +1633,13 @@ async def generate_shopping_list(
 
     # Step 2: Search products
     try:
-        search_results = await search_all_items(
-            items, exa_key, room_dimensions=input.room_dimensions
-        )
+        with trace_thread(_project_id, "shopping_search"):
+            search_results = await search_all_items(
+                items,
+                exa_key,
+                room_dimensions=input.room_dimensions,
+                design_brief=input.design_brief,
+            )
     except Exception as e:
         log.error("shopping_search_failed", error=str(e))
         raise ApplicationError(f"Exa search failed: {e}", non_retryable=False) from e
@@ -1644,3 +1690,132 @@ async def generate_shopping_list(
         unmatched=unmatched,
         total_estimated_cost_cents=total_cost,
     )
+
+
+async def generate_shopping_list_streaming(
+    input: GenerateShoppingListInput,
+) -> AsyncGenerator[str, None]:
+    """Streaming version of shopping pipeline — yields SSE events.
+
+    NOT a Temporal activity (runs in API process, not worker).
+    Reuses all existing functions; searches items sequentially for
+    streaming progress, then batch-scores for quality.
+    """
+    anthropic_key = settings.anthropic_api_key or os.environ.get("ANTHROPIC_API_KEY", "")
+    if not anthropic_key:
+        yield f"event: error\ndata: {json.dumps({'error': 'ANTHROPIC_API_KEY not set'})}\n\n"
+        return
+
+    exa_key = settings.exa_api_key or os.environ.get("EXA_API_KEY", "")
+    if not exa_key:
+        yield f"event: error\ndata: {json.dumps({'error': 'EXA_API_KEY not set'})}\n\n"
+        return
+
+    from app.utils.tracing import trace_thread, wrap_anthropic
+
+    client = wrap_anthropic(anthropic.AsyncAnthropic(api_key=anthropic_key))
+
+    _pid_match = re.search(r"projects/([a-zA-Z0-9_-]+)/", input.design_image_url)
+    _project_id = _pid_match.group(1) if _pid_match else "unknown"
+
+    from app.utils.r2 import resolve_url, resolve_urls
+
+    try:
+        design_image_url = resolve_url(input.design_image_url)
+        original_room_photo_urls = resolve_urls(input.original_room_photo_urls)
+    except Exception as e:
+        log.error("shopping_stream_url_resolve_error", error=str(e))
+        yield f"event: error\ndata: {json.dumps({'error': f'URL resolution failed: {e}'})}\n\n"
+        return
+
+    # Step 1: Extract items
+    try:
+        with trace_thread(_project_id, "shopping"):
+            items = await extract_items(
+                client,
+                design_image_url,
+                original_room_photo_urls,
+                input.design_brief,
+                input.revision_history,
+                source_urls=[input.design_image_url, *input.original_room_photo_urls],
+                room_context=input.room_context,
+                room_dimensions=input.room_dimensions,
+            )
+    except Exception as e:
+        log.error("shopping_stream_extraction_error", error=str(e))
+        yield f"event: error\ndata: {json.dumps({'error': f'Extraction failed: {e}'})}\n\n"
+        return
+
+    yield (
+        f"event: status\ndata: {json.dumps({'phase': 'extracting', 'item_count': len(items)})}\n\n"
+    )
+
+    if not items:
+        result = GenerateShoppingListOutput(items=[], unmatched=[], total_estimated_cost_cents=0)
+        yield f"event: done\ndata: {result.model_dump_json()}\n\n"
+        return
+
+    # Step 2: Search items sequentially for streaming progress
+    search_results: list[list[dict[str, Any]]] = []
+    with trace_thread(_project_id, "shopping_search"):
+        async with httpx.AsyncClient() as http_client:
+            for item in items:
+                try:
+                    results = await search_products_for_item(
+                        http_client,
+                        item,
+                        exa_key,
+                        room_dimensions=input.room_dimensions,
+                        design_brief=input.design_brief,
+                    )
+                except Exception as e:
+                    log.warning(
+                        "shopping_stream_search_error",
+                        item=item.get("description"),
+                        error=str(e),
+                    )
+                    results = []
+
+                search_results.append(results)
+                payload = json.dumps(
+                    {
+                        "item": item.get("description", ""),
+                        "candidates": len(results),
+                    }
+                )
+                yield f"event: item_search\ndata: {payload}\n\n"
+
+    # Step 3: Score products (batch for quality)
+    try:
+        with trace_thread(_project_id, "shopping"):
+            scored = await score_all_products(
+                client,
+                items,
+                search_results,
+                input.design_brief,
+                room_dimensions=input.room_dimensions,
+            )
+    except Exception as e:
+        log.error("shopping_stream_scoring_error", error=str(e))
+        yield f"event: error\ndata: {json.dumps({'error': f'Scoring failed: {e}'})}\n\n"
+        return
+
+    # Step 4-5: Dimension + confidence filtering
+    try:
+        scored = filter_by_dimensions(items, scored, input.room_dimensions)
+        matched, unmatched, total_cost = apply_confidence_filtering(items, scored)
+    except Exception as e:
+        log.error("shopping_stream_filtering_error", error=str(e))
+        yield f"event: error\ndata: {json.dumps({'error': f'Filtering failed: {e}'})}\n\n"
+        return
+
+    # Yield each matched product individually
+    for product in matched:
+        yield f"event: item\ndata: {product.model_dump_json()}\n\n"
+
+    result = GenerateShoppingListOutput(
+        items=matched,
+        unmatched=unmatched,
+        total_estimated_cost_cents=total_cost,
+    )
+    yield f"event: done\ndata: {result.model_dump_json()}\n\n"

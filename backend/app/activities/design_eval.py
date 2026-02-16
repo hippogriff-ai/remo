@@ -2,7 +2,7 @@
 
 The single authoritative eval layer. CLIP/SSIM metrics were removed (false positives).
 
-Three rubric-based evaluators using Claude Sonnet as a multimodal judge:
+Three rubric-based evaluators using Claude Opus as a multimodal judge:
 1. Generation rubric (100 points, 9 criteria + 2 diagnostic scores)
 2. Edit rubric (50 points, 5 criteria)
 3. Shopping visual rubric (30 points, 3 criteria)
@@ -29,7 +29,7 @@ if TYPE_CHECKING:
 
 log = structlog.get_logger("design_eval")
 
-EVAL_MODEL = "claude-sonnet-4-5-20250929"
+EVAL_MODEL = "claude-opus-4-6"
 EVAL_MAX_TOKENS = 2048
 
 
@@ -330,7 +330,7 @@ def _text_block(text: str) -> dict[str, Any]:
 async def _run_eval(
     content_blocks: list[dict[str, Any]],
 ) -> dict[str, Any]:
-    """Send multimodal content to Claude Sonnet and parse JSON response."""
+    """Send multimodal content to Claude Opus and parse JSON response."""
     api_key = os.environ.get("ANTHROPIC_API_KEY")
     if not api_key:
         raise RuntimeError("ANTHROPIC_API_KEY not set")
@@ -391,7 +391,7 @@ async def evaluate_generation(
 ) -> GenerationEvalResult:
     """Run the generation VLM eval (100 points, 9 criteria + diagnostics).
 
-    Downloads both images, sends them to Claude Sonnet with the brief,
+    Downloads both images, sends them to Claude Opus with the brief,
     optional generation prompt and room context, and rubric. Returns
     per-criterion scores plus diagnostic scores (instruction_adherence,
     spatial_accuracy) that are NOT part of the 100-point total.
@@ -455,7 +455,7 @@ async def evaluate_edit(
 ) -> EditEvalResult:
     """Run the edit VLM eval (50 points, 5 criteria).
 
-    Downloads both images, sends them to Claude Sonnet with the edit
+    Downloads both images, sends them to Claude Opus with the edit
     instruction and rubric, and returns per-criterion scores.
     """
     orig_b64, orig_mime = await _load_image_base64(original_image_url)
@@ -494,7 +494,7 @@ async def evaluate_shopping_visual(
 ) -> ShoppingVisualEvalResult:
     """Run the shopping visual deep eval (30 points, 3 criteria).
 
-    Downloads the room and product images, sends them to Claude Sonnet
+    Downloads the room and product images, sends them to Claude Opus
     with the product description and rubric.
     """
     room_b64, room_mime = await _load_image_base64(room_image_url)

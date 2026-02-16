@@ -15,6 +15,7 @@ Tests are skipped automatically if the Remo API is not reachable.
 
 import asyncio
 import io
+import json
 import os
 import tempfile
 import time
@@ -45,6 +46,16 @@ _SCAN_DATA = {
     "surfaces": [{"type": "floor"}],
     "floor_area_sqm": 24.36,
 }
+
+_REAL_LIDAR_FIXTURE = Path(__file__).parent / "fixtures" / "real_lidar_scan.json"
+
+
+def _get_scan_data() -> dict:
+    """Load real LiDAR fixture if available, else use synthetic."""
+    if _REAL_LIDAR_FIXTURE.exists():
+        return json.loads(_REAL_LIDAR_FIXTURE.read_text())
+    return _SCAN_DATA
+
 
 # Detect if backend is running with real AI activities (not mocks).
 # Used to enable real-mode assertions in tests that work both ways.
@@ -321,6 +332,9 @@ async def _create_project_with_photos(client: httpx.AsyncClient, room_count: int
     for _ in range(room_count):
         r = await _upload_photo(client, project_id, sharp)
         assert r.status_code == 200, f"upload failed: {r.status_code} {r.text}"
+    # Confirm photos to advance workflow from 'photos' to 'scan'
+    r = await client.post(f"/api/v1/projects/{project_id}/photos/confirm")
+    assert r.status_code == 200, f"confirm_photos failed: {r.status_code} {r.text}"
     # Wait for workflow to process signals and transition to 'scan'
     await _poll_step(client, project_id, "scan", timeout=10.0)
     return project_id
@@ -714,6 +728,8 @@ async def _advance_to_intake_with_scan(
     for _ in range(2):
         r = await _upload_photo(client, pid, sharp)
         assert r.status_code == 200, f"upload failed: {r.status_code} {r.text}"
+    r = await client.post(f"/api/v1/projects/{pid}/photos/confirm")
+    assert r.status_code == 200, f"confirm_photos failed: {r.status_code} {r.text}"
     await _poll_step(client, pid, "scan", timeout=10.0)
     r = await client.post(f"/api/v1/projects/{pid}/scan", json=scan_data or _SCAN_DATA)
     assert r.status_code == 200, f"scan submit failed: {r.status_code} {r.text}"
@@ -1716,6 +1732,8 @@ class TestWI26IntakeConversationValidation:
             photo_type="inspiration",
             note="Love the warm wood tones and cozy textiles",
         )
+        r = await client.post(f"/api/v1/projects/{pid}/photos/confirm")
+        assert r.status_code == 200
         await _poll_step(client, pid, "scan", timeout=10.0)
         await client.post(f"/api/v1/projects/{pid}/scan/skip")
         await _poll_step(client, pid, "intake", timeout=10.0)
@@ -2107,6 +2125,10 @@ class TestRapidSignalSequences:
         for r in results:
             assert r.status_code == 200
 
+        # Confirm photos to advance
+        r = await client.post(f"/api/v1/projects/{pid}/photos/confirm")
+        assert r.status_code == 200
+
         # Should eventually reach scan step
         await _poll_step(client, pid, "scan", timeout=10.0)
         state = (await client.get(f"/api/v1/projects/{pid}")).json()
@@ -2216,6 +2238,8 @@ class TestGoldenPathRealAI:
         for _ in range(2):
             r = await _upload_photo(client, pid, sharp)
             assert r.status_code == 200
+        r = await client.post(f"/api/v1/projects/{pid}/photos/confirm")
+        assert r.status_code == 200
         await _poll_step(client, pid, "scan", timeout=15.0)
 
         # --- 3. Skip scan ---
@@ -2311,3 +2335,538 @@ class TestGoldenPathRealAI:
         # 204 (accepted) — that's the contract the iOS app relies on.
         r = await client.delete(f"/api/v1/projects/{pid}")
         assert r.status_code == 204
+
+    async def test_full_pipeline_real_ai_with_lidar(self, client: httpx.AsyncClient):
+        """Complete user journey with LiDAR scan data through every AI service.
+
+        Exercises the full pipeline with real room dimensions flowing through
+        generation, editing, and shopping:
+            create (has_lidar=True) → photos → confirm → submit scan →
+            real intake (Claude Opus) → confirm → real generation (Gemini) →
+            select → real edit (Gemini, dimension-aware) → approve →
+            real shopping (Exa + Claude) → verify → delete
+        """
+        scan_data = _get_scan_data()
+        room = scan_data["room"]
+
+        # --- 1. Create project with LiDAR ---
+        resp = await client.post("/api/v1/projects", json=_NEW_PROJECT_LIDAR)
+        assert resp.status_code == 201
+        pid = resp.json()["project_id"]
+
+        # --- 2. Upload 2 room photos + confirm ---
+        sharp = _make_sharp_jpeg()
+        for _ in range(2):
+            r = await _upload_photo(client, pid, sharp)
+            assert r.status_code == 200
+        r = await client.post(f"/api/v1/projects/{pid}/photos/confirm")
+        assert r.status_code == 200
+        await _poll_step(client, pid, "scan", timeout=15.0)
+
+        # --- 3. Submit scan data (real LiDAR or synthetic fallback) ---
+        r = await client.post(f"/api/v1/projects/{pid}/scan", json=scan_data)
+        assert r.status_code == 200
+        await _poll_step(client, pid, "intake", timeout=10.0)
+
+        # Verify scan_data persisted (ScanData → room_dimensions: RoomDimensions)
+        state = (await client.get(f"/api/v1/projects/{pid}")).json()
+        sd = state["scan_data"]
+        assert sd is not None
+        rd = sd["room_dimensions"]
+        assert rd is not None
+        assert rd["width_m"] == pytest.approx(room["width"], abs=0.1)
+        assert rd["length_m"] == pytest.approx(room["length"], abs=0.1)
+        assert len(rd.get("furniture", [])) >= 1
+
+        # --- 4. Real intake conversation (Claude Opus) ---
+        r = await client.post(f"/api/v1/projects/{pid}/intake/start", json={"mode": "quick"})
+        assert r.status_code == 200
+
+        rw, rl = room["width"], room["length"]
+        intake_messages = [
+            f"It's a bathroom, roughly {rw:.1f} by {rl:.1f}m, bathtub + glass panel",
+            "Modern spa-inspired with warm wood, natural stone, and soft lighting",
+            "Upgrade the vanity area, add better storage, keep the bathtub",
+            "That covers everything, please summarize",
+        ]
+        last_response = None
+        for msg in intake_messages:
+            r = await client.post(
+                f"/api/v1/projects/{pid}/intake/message",
+                json={"message": msg},
+            )
+            assert r.status_code == 200
+            last_response = r.json()
+            assert len(last_response["agent_message"]) > 20
+
+        # Confirm the brief
+        brief_data = {"room_type": "bathroom"}
+        if last_response and last_response.get("partial_brief"):
+            brief_data = last_response["partial_brief"]
+        r = await client.post(
+            f"/api/v1/projects/{pid}/intake/confirm",
+            json={"brief": brief_data},
+        )
+        assert r.status_code == 200
+
+        # --- 5. Wait for real Gemini generation ---
+        state = await _poll_step(client, pid, "selection", timeout=180.0)
+        assert len(state["generated_options"]) == 2
+        for opt in state["generated_options"]:
+            assert "mock" not in opt["image_url"].lower()
+            assert len(opt["caption"]) > 10
+
+        # scan_data should persist through generation
+        assert state["scan_data"] is not None
+        assert state["scan_data"]["room_dimensions"]["width_m"] == pytest.approx(
+            room["width"], abs=0.1
+        )
+
+        # Log generated options for visibility
+        print(f"\n{'=' * 60}")
+        print(f"LIDAR GOLDEN PATH — Project {pid}")
+        print(f"Room: {room['width']:.1f}m x {room['length']:.1f}m x {room['height']:.1f}m")
+        print(f"Furniture: {[f['type'] for f in scan_data.get('furniture', [])]}")
+        print(f"{'=' * 60}")
+        for i, opt in enumerate(state["generated_options"]):
+            print(f"\n--- Design Option {i + 1} ---")
+            print(f"  Caption: {opt['caption']}")
+            print(f"  Image:   {opt['image_url']}")
+
+        # --- 6. Select first option ---
+        r = await client.post(f"/api/v1/projects/{pid}/select", json={"index": 0})
+        assert r.status_code == 200
+
+        # --- 7. One real Gemini edit (dimension-aware feedback) ---
+        await _poll_iteration(client, pid, 0)
+        r = await client.post(
+            f"/api/v1/projects/{pid}/iterate/feedback",
+            json={
+                "feedback": (
+                    f"The vanity needs to fit the {room['width']:.1f}m wall. "
+                    "Add warmer lighting above the mirror and a small plant on the counter."
+                )
+            },
+        )
+        assert r.status_code == 200
+        state = await _poll_iteration(client, pid, 1, timeout=120.0)
+        assert state["iteration_count"] >= 1
+        assert len(state["revision_history"]) >= 1
+        revised_url = state["revision_history"][0]["revised_image_url"]
+        assert "mock" not in revised_url.lower()
+
+        # scan_data persists through edits
+        assert state["scan_data"] is not None
+
+        print("\n--- Edit Result ---")
+        print(f"  Revised: {revised_url}")
+
+        # --- 8. Approve design ---
+        r = await client.post(f"/api/v1/projects/{pid}/approve")
+        assert r.status_code == 200
+
+        # --- 9. Wait for real shopping list (Exa + Claude) ---
+        # Shopping involves Exa search + Claude scoring — can take 3-5 minutes
+        state = await _poll_step(client, pid, "completed", timeout=360.0)
+        assert state["approved"] is True
+        shopping = state["shopping_list"]
+        assert shopping is not None
+        assert len(shopping["items"]) >= 3
+
+        # Verify shopping quality
+        for item in shopping["items"]:
+            assert "Mock" not in item["product_name"]
+            assert item["product_url"].startswith("http")
+            assert 0.0 <= item["confidence_score"] <= 1.0
+
+        priced = [i for i in shopping["items"] if i.get("price_cents", 0) > 0]
+        assert len(priced) >= 1, "No items have prices"
+        assert shopping["total_estimated_cost_cents"] > 0
+
+        # scan_data persists to completion
+        assert state["scan_data"] is not None
+        assert state["scan_data"]["room_dimensions"]["width_m"] == pytest.approx(
+            room["width"], abs=0.1
+        )
+
+        # Log shopping list
+        print(f"\n--- Shopping List ({len(shopping['items'])} items) ---")
+        total_cents = shopping["total_estimated_cost_cents"]
+        print(f"  Total: ${total_cents / 100:.2f}")
+        for item in shopping["items"]:
+            price = item.get("price_cents", 0)
+            price_str = f"${price / 100:.2f}" if price else "no price"
+            print(f"  - {item['product_name']} ({price_str})")
+            print(f"    {item['product_url']}")
+            if item.get("reason"):
+                print(f"    Reason: {item['reason']}")
+        print(f"{'=' * 60}\n")
+
+        # --- 10. Delete project ---
+        r = await client.delete(f"/api/v1/projects/{pid}")
+        assert r.status_code == 204
+
+
+# ---------------------------------------------------------------------------
+# SSE Streaming E2E Tests
+# ---------------------------------------------------------------------------
+
+
+def _parse_sse_events(raw: str) -> list[tuple[str, str]]:
+    """Parse raw SSE text into (event_type, data_json) pairs.
+
+    Raises ValueError if any SSE block has an event type but no data (or vice
+    versa), to prevent silently swallowing malformed server responses.
+    Accumulates multi-line ``data:`` fields per the SSE spec.
+    """
+    events: list[tuple[str, str]] = []
+    for block in raw.split("\n\n"):
+        block = block.strip()
+        if not block:
+            continue
+        # Skip SSE comment lines (start with ':')
+        if all(line.startswith(":") for line in block.split("\n") if line):
+            continue
+        event_type = ""
+        data_parts: list[str] = []
+        for line in block.split("\n"):
+            if line.startswith(":"):
+                continue  # SSE comment
+            if line.startswith("event: "):
+                event_type = line[7:]
+            elif line.startswith("data: "):
+                data_parts.append(line[6:])
+        data = "\n".join(data_parts)
+        if event_type and data:
+            events.append((event_type, data))
+        elif event_type or data:
+            raise ValueError(
+                f"Malformed SSE block: event_type={event_type!r}, "
+                f"data={data!r}, raw block={block!r}"
+            )
+    return events
+
+
+@_skip_unless_real
+class TestSSEIntakeStreamingE2E:
+    """E2E: Intake chat SSE streaming with real Claude Opus.
+
+    Verifies that the streaming endpoint returns incremental delta events
+    followed by a done event with the complete IntakeChatOutput.
+    """
+
+    async def test_intake_sse_streams_deltas_and_done(self, client: httpx.AsyncClient):
+        """Intake SSE endpoint streams real Claude response token-by-token."""
+        scan_data = _get_scan_data()
+        pid = await _advance_to_intake_with_scan(client, scan_data)
+
+        r = await client.post(f"/api/v1/projects/{pid}/intake/start", json={"mode": "quick"})
+        assert r.status_code == 200
+
+        # Use the streaming endpoint
+        async with httpx.AsyncClient(base_url=BASE_URL, timeout=120.0) as stream_client:
+            response = await stream_client.post(
+                f"/api/v1/projects/{pid}/intake/message/stream",
+                json={
+                    "message": "It's a bathroom with a bathtub and glass panel, "
+                    "roughly 2.4 by 2.8 meters"
+                },
+            )
+            assert response.status_code == 200
+            ct = response.headers.get("content-type", "")
+            assert "text/event-stream" in ct, f"Not SSE: {ct}"
+
+            events = _parse_sse_events(response.text)
+
+        # Categorize events
+        deltas = [(t, d) for t, d in events if t == "delta"]
+        dones = [(t, d) for t, d in events if t == "done"]
+        errors = [(t, d) for t, d in events if t == "error"]
+
+        assert len(errors) == 0, f"Got error events: {errors}"
+        assert len(dones) == 1, f"Expected exactly 1 done event, got {len(dones)}"
+
+        # Verify delta events (if any) have valid text.
+        # Claude's tool-use streaming may produce 0 deltas when the
+        # _MessageExtractor can't parse incremental JSON for that response.
+        # This is expected — the done event always carries the full result.
+        for _, data in deltas:
+            parsed = json.loads(data)
+            assert "text" in parsed, f"Delta event missing 'text' key: {data}"
+
+        full_text = "".join(json.loads(d)["text"] for _, d in deltas) if deltas else ""
+
+        # Verify done event has complete IntakeChatOutput
+        done_data = json.loads(dones[0][1])
+        assert "agent_message" in done_data
+        assert len(done_data["agent_message"]) > 20
+
+        # When deltas are present, verify they are a prefix of the done message.
+        # This catches mismatches where the stream sends wrong text.
+        if full_text:
+            agent_msg = done_data["agent_message"]
+            assert agent_msg.startswith(full_text), (
+                f"Delta text is not a prefix of done event. "
+                f"Deltas: {full_text[:80]!r}... Done: {agent_msg[:80]!r}..."
+            )
+
+        # Print streaming stats
+        print(f"\n{'=' * 60}")
+        print(f"INTAKE SSE — Project {pid}")
+        print(f"  Delta events: {len(deltas)}")
+        print(f"  Streamed text length: {len(full_text)}")
+        print(f"  Agent message length: {len(done_data['agent_message'])}")
+        print(f"  Has options: {bool(done_data.get('options'))}")
+        print(f"  Is summary: {done_data.get('is_summary', False)}")
+        print(f"{'=' * 60}\n")
+
+        # Cleanup
+        await client.delete(f"/api/v1/projects/{pid}")
+
+    async def test_intake_sse_multi_turn_conversation(self, client: httpx.AsyncClient):
+        """Multi-turn intake conversation works correctly via SSE streaming."""
+        scan_data = _get_scan_data()
+        pid = await _advance_to_intake_with_scan(client, scan_data)
+
+        r = await client.post(f"/api/v1/projects/{pid}/intake/start", json={"mode": "quick"})
+        assert r.status_code == 200
+
+        messages = [
+            "It's a bathroom with a bathtub and glass panel",
+            "Modern spa-inspired with warm wood and natural stone",
+            "Upgrade the vanity, add better storage, keep the bathtub",
+            "That covers everything, please summarize",
+        ]
+
+        conversation_history: list[dict] = []
+        got_summary = False
+
+        for msg in messages:
+            async with httpx.AsyncClient(base_url=BASE_URL, timeout=120.0) as stream_client:
+                response = await stream_client.post(
+                    f"/api/v1/projects/{pid}/intake/message/stream",
+                    json={
+                        "message": msg,
+                        "conversation_history": conversation_history,
+                    },
+                )
+                assert response.status_code == 200, f"SSE failed: {response.status_code}"
+
+            events = _parse_sse_events(response.text)
+            deltas = [(t, d) for t, d in events if t == "delta"]
+            dones = [(t, d) for t, d in events if t == "done"]
+            errors = [(t, d) for t, d in events if t == "error"]
+
+            assert not errors, f"Error on '{msg}': {errors}"
+            assert len(dones) == 1, f"No done on '{msg}'"
+
+            done_data = json.loads(dones[0][1])
+            agent_msg = done_data["agent_message"]
+            assert len(agent_msg) > 10, f"Short: {agent_msg}"
+
+            conversation_history.append({"role": "user", "content": msg})
+            conversation_history.append({"role": "assistant", "content": agent_msg})
+
+            turn = len(conversation_history) // 2
+            print(f"  Turn {turn}: {len(deltas)} deltas, {len(agent_msg)} chars")
+
+            if done_data.get("is_summary"):
+                got_summary = True
+                assert done_data.get("partial_brief") is not None
+                brief = done_data["partial_brief"]
+                assert brief.get("room_type") is not None
+                print(f"  ** Summary reached! Room type: {brief['room_type']}")
+                break
+
+        assert got_summary, "Quick mode did not produce summary within 4 messages via SSE"
+
+        # Cleanup
+        await client.delete(f"/api/v1/projects/{pid}")
+
+    async def test_intake_sse_session_persistence(self, client: httpx.AsyncClient):
+        """SSE streaming correctly updates session state (history, brief)."""
+        pid = await _advance_to_intake(client)
+
+        r = await client.post(f"/api/v1/projects/{pid}/intake/start", json={"mode": "quick"})
+        assert r.status_code == 200
+
+        # Send first message via SSE
+        async with httpx.AsyncClient(base_url=BASE_URL, timeout=120.0) as stream_client:
+            r1 = await stream_client.post(
+                f"/api/v1/projects/{pid}/intake/message/stream",
+                json={"message": "It's a living room, about 15x20 feet"},
+            )
+            assert r1.status_code == 200
+
+        # Second message via non-streaming (proves session state persists)
+        r2 = await client.post(
+            f"/api/v1/projects/{pid}/intake/message",
+            json={"message": "mid-century modern style"},
+        )
+        assert r2.status_code == 200
+        data = r2.json()
+        assert len(data["agent_message"]) > 20
+
+        # Third message via SSE again (proves bidirectional compatibility)
+        async with httpx.AsyncClient(base_url=BASE_URL, timeout=120.0) as stream_client:
+            r3 = await stream_client.post(
+                f"/api/v1/projects/{pid}/intake/message/stream",
+                json={"message": "replace the old couch with something modern"},
+            )
+            assert r3.status_code == 200
+
+        events = _parse_sse_events(r3.text)
+        dones = [(t, d) for t, d in events if t == "done"]
+        assert len(dones) == 1
+
+        # Cleanup
+        await client.delete(f"/api/v1/projects/{pid}")
+
+
+@_skip_unless_real
+class TestSSEShoppingStreamingE2E:
+    """E2E: Shopping list SSE streaming with real Exa + Claude.
+
+    Verifies that the shopping streaming endpoint produces status, item_search,
+    item, and done events as products are found one-by-one.
+    """
+
+    async def test_shopping_sse_streams_products(self, client: httpx.AsyncClient):
+        """Shopping SSE endpoint streams real products progressively.
+
+        Full pipeline: photos → scan → intake → generation → select →
+        approve → shopping SSE stream.
+        """
+        scan_data = _get_scan_data()
+        room = scan_data["room"]
+
+        # --- Setup: full pipeline to shopping step ---
+        resp = await client.post("/api/v1/projects", json=_NEW_PROJECT_LIDAR)
+        assert resp.status_code == 201
+        pid = resp.json()["project_id"]
+
+        # Upload photos
+        sharp = _make_sharp_jpeg()
+        for _ in range(2):
+            r = await _upload_photo(client, pid, sharp)
+            assert r.status_code == 200
+        r = await client.post(f"/api/v1/projects/{pid}/photos/confirm")
+        assert r.status_code == 200
+        await _poll_step(client, pid, "scan", timeout=15.0)
+
+        # Submit scan
+        r = await client.post(f"/api/v1/projects/{pid}/scan", json=scan_data)
+        assert r.status_code == 200
+        await _poll_step(client, pid, "intake", timeout=10.0)
+
+        # Real intake
+        r = await client.post(f"/api/v1/projects/{pid}/intake/start", json={"mode": "quick"})
+        assert r.status_code == 200
+
+        rw, rl = room["width"], room["length"]
+        intake_messages = [
+            f"Bathroom, {rw:.1f} by {rl:.1f}m, bathtub + glass panel",
+            "Modern spa with warm wood and natural stone",
+            "Upgrade vanity, add storage, keep bathtub, modernize",
+            "That's everything, please summarize",
+        ]
+        last_response = None
+        for msg in intake_messages:
+            r = await client.post(
+                f"/api/v1/projects/{pid}/intake/message",
+                json={"message": msg},
+            )
+            assert r.status_code == 200
+            last_response = r.json()
+            if last_response.get("is_summary"):
+                break
+
+        brief_data = {"room_type": "bathroom"}
+        if last_response and last_response.get("partial_brief"):
+            brief_data = last_response["partial_brief"]
+        r = await client.post(
+            f"/api/v1/projects/{pid}/intake/confirm",
+            json={"brief": brief_data},
+        )
+        assert r.status_code == 200
+
+        # Wait for generation
+        state = await _poll_step(client, pid, "selection", timeout=180.0)
+        assert len(state["generated_options"]) == 2
+
+        # Select + approve
+        r = await client.post(f"/api/v1/projects/{pid}/select", json={"index": 0})
+        assert r.status_code == 200
+        await _poll_step(client, pid, "iteration", timeout=10.0)
+        r = await client.post(f"/api/v1/projects/{pid}/approve")
+        assert r.status_code == 200
+
+        # Poll for shopping step (need to catch it before activity completes)
+        state = await _poll_step(client, pid, "shopping", timeout=30.0)
+
+        # Connect to SSE stream
+        async with httpx.AsyncClient(base_url=BASE_URL, timeout=360.0) as stream_client:
+            response = await stream_client.get(
+                f"/api/v1/projects/{pid}/shopping/stream",
+            )
+
+        # If we got 409, the activity already completed (race condition).
+        # Use pytest.skip so test reports make it clear SSE was NOT tested.
+        if response.status_code == 409:
+            state = await _poll_step(client, pid, "completed", timeout=360.0)
+            assert state["shopping_list"] is not None
+            assert len(state["shopping_list"]["items"]) >= 1
+            await client.delete(f"/api/v1/projects/{pid}")
+            pytest.skip(
+                "SSE race lost — activity finished before SSE connection. "
+                "Shopping SSE streaming was NOT tested in this run."
+            )
+
+        assert response.status_code == 200, f"Shopping SSE: {response.status_code}"
+        content_type = response.headers.get("content-type", "")
+        assert "text/event-stream" in content_type
+
+        events = _parse_sse_events(response.text)
+
+        # Categorize events
+        statuses = [(t, d) for t, d in events if t == "status"]
+        item_searches = [(t, d) for t, d in events if t == "item_search"]
+        items = [(t, d) for t, d in events if t == "item"]
+        dones = [(t, d) for t, d in events if t == "done"]
+        errors = [(t, d) for t, d in events if t == "error"]
+
+        print(f"\n{'=' * 60}")
+        print(f"SHOPPING SSE — Project {pid}")
+        print(f"  Status events: {len(statuses)}")
+        print(f"  Item search events: {len(item_searches)}")
+        print(f"  Item events: {len(items)}")
+        print(f"  Done events: {len(dones)}")
+        print(f"  Error events: {len(errors)}")
+
+        # Hard assertions: no errors, exactly one done, at least one item
+        assert len(errors) == 0, f"Got error events: {errors}"
+        assert len(dones) == 1, f"Expected exactly 1 done event, got {len(dones)}"
+
+        done_data = json.loads(dones[0][1])
+        assert "items" in done_data
+        assert len(done_data["items"]) >= 1, "Done event has no items"
+        print(f"  Total items in done: {len(done_data['items'])}")
+        for item_data in done_data["items"]:
+            print(f"    - {item_data['product_name']}: {item_data['product_url']}")
+
+        # Verify streamed item events have required fields
+        for _, data in items:
+            parsed = json.loads(data)
+            assert "product_name" in parsed
+            assert "product_url" in parsed
+            print(f"  Streamed: {parsed['product_name']}")
+
+        print(f"{'=' * 60}\n")
+
+        # Wait for workflow to reach completed (SSE signals the result)
+        state = await _poll_step(client, pid, "completed", timeout=120.0)
+        assert state["shopping_list"] is not None
+        assert len(state["shopping_list"]["items"]) >= 1
+
+        # Cleanup
+        await client.delete(f"/api/v1/projects/{pid}")

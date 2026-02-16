@@ -8,7 +8,7 @@ Remo is an AI-powered room redesign iOS app. Users photograph a room, describe t
 
 ## Status
 
-T0 (Platform) P0+P1 complete, P2 integration done. All T0-owned modules at 100% coverage, ruff/mypy clean. Full pipeline verified end-to-end with real AI (Claude Opus, Gemini 3 Pro, Exa). Golden path test: 216s. LLM response caching for dev/test. See `CONTINUITY.md` for current state.
+P0–P2 complete. Full pipeline verified end-to-end with real AI (Claude Opus, Gemini 3 Pro, Exa). Golden path test: 216s. LLM response caching for dev/test.
 
 ## Development Commands
 
@@ -81,7 +81,8 @@ Key rule: API layer never calls AI APIs (except sync photo validation). Workflow
 | AI chat/scoring | Claude Opus 4.6 via raw `anthropic` SDK with tool use (no framework) |
 | Photo validation | Claude Haiku 4.5 (sync in API handler) |
 | Product search | Exa API |
-| Storage | Cloudflare R2 (images), Railway PostgreSQL (metadata) |
+| Storage: PostgreSQL | Railway PostgreSQL — projects, briefs, products (9 tables, every artifact persisted) |
+| Storage: R2 | Cloudflare R2 — photos, designs, scans (S3-compatible, presigned URLs) |
 | Hosting | Railway (2 services: API + Worker), Temporal Cloud |
 | CI | GitHub Actions (2-job: lint→test, pip cache, coverage) → Railway auto-deploy |
 
@@ -94,8 +95,8 @@ backend/
     models/db.py               # SQLAlchemy models (9 tables)
     api/routes/projects.py     # FastAPI endpoints (mock state store, multi-step intake conversation, real intake agent wiring)
     api/routes/health.py       # Health check endpoint (version, environment, service status)
-    workflows/design_project.py # Temporal workflow (12 signals, 1 query)
-    activities/mock_stubs.py   # Mock activities (T0-owned, swapped in P2)
+    workflows/design_project.py # Temporal workflow (17 signals, 1 query)
+    activities/mock_stubs.py   # Mock activity stubs (dev/test fallback)
     activities/validation.py   # Photo validation (Pillow + Claude Haiku 4.5)
     activities/purge.py        # R2 cleanup activity
     utils/r2.py                # Cloudflare R2 client
@@ -110,58 +111,43 @@ backend/
     worker.py                  # Temporal worker entrypoint
   migrations/versions/         # Alembic (001_initial_schema.py)
   tests/                       # pytest suite (module-scoped Temporal fixture)
-ios/                           # (T1-owned, not yet scaffolded in this worktree)
+ios/
+  Remo/                        # App target (HomeScreen, ProjectFlow, Router)
+  Packages/
+    RemoModels/                # Models, ProjectState, ProjectStep, contracts
+    RemoNetworking/            # RealWorkflowClient, MockWorkflowClient, SSE parsers
+    RemoPhotoUpload/           # PhotoUploadScreen, CameraView
+    RemoChatUI/                # IntakeChatScreen (SSE streaming)
+    RemoDesignViews/           # Selection, Generating, Analyzing, Approval, Output
+    RemoAnnotation/            # IterationScreen, AnnotationCanvas
+    RemoShoppingList/          # ShoppingListScreen, ProductCard
+    RemoLiDAR/                 # LiDARScanScreen (RoomPlan)
 ```
 
-## Team Structure & File Ownership
+## Code Organization
 
-4 teams work in parallel via git worktrees. **File ownership is strict** — only the owning team modifies their files.
+All code lives in a single repo. Backend owns contracts, API, workflow, infra. iOS owns all `ios/` and `Packages/`. Activities are organized by domain: `generate.py`, `edit.py` (Gemini), `intake.py`, `shopping.py` (Claude + Exa), `analyze_room.py` (Claude), `validation.py` (Haiku), `purge.py` (R2).
 
-| Team | Worktree | Branch prefix | Owns |
-|------|----------|---------------|------|
-| T0: Platform | `/Hanalei/remo` (main) | `team/platform/*` | contracts, DB, API, workflow, CI, validation, purge, R2 |
-| T1: iOS | `/Hanalei/remo-ios` | `team/ios/*` | All `ios/` and `Packages/` |
-| T2: Image Gen | `/Hanalei/remo-gen` | `team/gen/*` | `activities/{generate,edit}.py`, image utils, gemini chat, gen prompts |
-| T3: AI Agents | `/Hanalei/remo-ai` | `team/ai/*` | `activities/{intake,shopping}.py`, AI prompts |
+## Specs & Docs
 
-## Specs & Plans
-
-Plans in `specs/` (tracked). Agent prompts in `specs/PROMPT_*.md` (gitignored — not open-sourced).
+Reference docs in `specs/` (tracked). Agent prompts in `specs/PROMPT_*.md` (gitignored).
 
 | File | Purpose |
 |------|---------|
-| `docs/EVAL_PIPELINE.md` | Eval pipeline guide (setup, usage, metrics, rubrics) |
 | `specs/PRODUCT_SPEC.md` | Product requirements (source of truth for features) |
-| `specs/PLAN_FINAL.md` | Master implementation plan (architecture, contracts, phases, all teams) |
-| `specs/PLAN_T0_PLATFORM.md` | T0 sub-plan |
-| `specs/PLAN_T1_IOS.md` | T1 sub-plan |
-| `specs/PLAN_T2_IMAGE_GEN.md` | T2 sub-plan |
-| `specs/PLAN_T3_AI_AGENTS.md` | T3 sub-plan |
-| `specs/DESIGN_INTELLIGENCE.md` | Design reasoning reference for T3 intake + shopping agents |
-| `specs/PROMPT_T1_IOS.md` | T1 ralph loop prompt (gitignored) |
-| `specs/PROMPT_T2_IMAGE_GEN.md` | T2 ralph loop prompt (gitignored) |
+| `specs/ARCHITECTURE.md` | System architecture diagrams (Mermaid): workflow state machine, API map, iOS navigation, data flows |
+| `specs/ARCHITECTURE_AGENT_WORKFLOW.md` | Agent pipeline architecture: eager analysis, intake agent, shopping pipeline, room intelligence |
+| `specs/DESIGN_INTELLIGENCE.md` | Design reasoning reference for intake + shopping agents |
+| `specs/RESEARCH_GEMINI_PROMPTING.md` | Gemini 3 Pro Image prompt engineering research (quality eval, optimization) |
+| `docs/EVAL_PIPELINE.md` | Eval pipeline guide (setup, usage, metrics, rubrics) |
 
 ## Key Contracts
 
 All Pydantic models live in `backend/app/models/contracts.py` (T0 owns exclusively, frozen at P0 exit gate). Activity contracts follow the pattern `{Action}Input` / `{Action}Output`. The workflow exposes state via `WorkflowState` query. iOS Swift models mirror the Pydantic models exactly.
 
-## Mock API Behavior
-
-The mock API (pre-P2) uses in-memory state stores. Key behaviors:
-- **Intake conversation**: 3-step flow tracking user messages per project. Step 1: room type → style options. Step 2: style → open-ended preferences. Step 3+: summary with partial `DesignBrief`. Conversation state resets on `start_over` and `delete`.
-- **Photo upload**: Runs real `validate_photo` (Pillow checks) synchronously. Auto-transitions to `scan` step after 2+ valid photos.
-- **Iteration**: `_apply_revision` caps at 5 rounds then forces `approval` step.
-
 ## Error Handling Convention
 
 All errors return `ErrorResponse` JSON (`{"error": str, "message": str, "retryable": bool}`). This includes 404 (not found), 409 (wrong step), 413 (file too large), 422 (validation + invalid scan/selection), and 500 (unhandled). Custom exception handlers normalize Pydantic validation errors and unhandled exceptions to the same shape. Every response includes an `X-Request-ID` header for log correlation.
-
-## Build Phases
-
-- **P0 (Foundation)**: Contracts, scaffold, infra, Gemini quality spike. Gate: contracts frozen + mock API works.
-- **P1 (Independent Build)**: All teams build in parallel against contracts/mocks. No cross-team deps.
-- **P2 (Integration)**: Wire real activities incrementally. T0 leads.
-- **P3 (Stabilization)**: Bug fixes, resume testing, demo prep.
 
 ## Git Conventions
 

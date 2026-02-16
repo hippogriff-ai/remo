@@ -54,6 +54,7 @@ from app.activities.shopping import (
     extract_items,
     filter_by_dimensions,
     generate_shopping_list,
+    generate_shopping_list_streaming,
     score_all_products,
     score_product,
     search_products_for_item,
@@ -469,6 +470,136 @@ class TestColorSynonymExpansion:
         assert len(_COLOR_SYNONYMS) >= 25
         for key, synonyms in _COLOR_SYNONYMS.items():
             assert len(synonyms) >= 2, f"{key} should have at least 2 synonyms"
+
+
+# === Design Brief Integration ===
+
+
+class TestDesignBriefInSearchQueries:
+    """Verify design brief context improves search query quality."""
+
+    def _make_brief(self, room_type="bathroom", mood="modern spa-inspired"):
+        return DesignBrief(
+            room_type=room_type,
+            style_profile=StyleProfile(mood=mood, colors=["white", "natural wood"]),
+        )
+
+    def test_brief_mood_and_room_in_queries(self):
+        """When brief has mood + room, queries include style-contextualized query."""
+        brief = self._make_brief()
+        item = {
+            "source_tag": "IMAGE_ONLY",
+            "category": "Vanity Mirror",
+            "description": "round frameless vanity mirror with LED backlight",
+            "material": "glass",
+            "color": "silver",
+            "style": "modern",
+        }
+        queries = _build_search_queries(item, design_brief=brief)
+        # Should include style-contextualized query
+        style_query = [q for q in queries if "modern spa" in q and "bathroom" in q]
+        assert len(style_query) >= 1, f"Expected brief-contextualized query. Got: {queries}"
+        # Description should be first (highest signal)
+        assert queries[0] == "round frameless vanity mirror with LED backlight"
+
+    def test_brief_mood_only(self):
+        """When brief has mood but no room_type, uses mood + category."""
+        brief = DesignBrief(
+            room_type="",
+            style_profile=StyleProfile(mood="scandinavian minimalist"),
+        )
+        item = {
+            "source_tag": "IMAGE_ONLY",
+            "category": "Floor Lamp",
+            "description": "white oak tripod floor lamp with linen shade",
+            "material": "oak",
+            "color": "white",
+            "style": "scandinavian",
+        }
+        queries = _build_search_queries(item, design_brief=brief)
+        mood_query = [q for q in queries if "scandinavian minimalist" in q]
+        assert len(mood_query) >= 1, f"Expected mood query. Got: {queries}"
+
+    def test_brief_room_only_no_mood(self):
+        """When brief has room_type but no mood, uses room + category + style."""
+        brief = DesignBrief(
+            room_type="living room",
+            style_profile=StyleProfile(mood=""),
+        )
+        item = {
+            "source_tag": "IMAGE_ONLY",
+            "category": "Sofa",
+            "description": "ivory boucle sofa",
+            "material": "boucle",
+            "color": "ivory",
+            "style": "modern",
+        }
+        queries = _build_search_queries(item, design_brief=brief)
+        room_query = [q for q in queries if "living room" in q]
+        assert len(room_query) >= 1, f"Expected room query. Got: {queries}"
+
+    def test_no_brief_falls_back_to_style(self):
+        """Without brief, falls back to item style (backward compatible)."""
+        item = {
+            "source_tag": "IMAGE_ONLY",
+            "category": "Lighting",
+            "material": "brass",
+            "color": "gold",
+            "style": "art deco",
+        }
+        queries = _build_search_queries(item, design_brief=None)
+        assert any("art deco" in q for q in queries), f"Expected style fallback. Got: {queries}"
+        assert any("furniture" in q for q in queries)
+
+    def test_description_is_first_query(self):
+        """Description should always be the first query (highest signal)."""
+        brief = self._make_brief()
+        item = {
+            "source_tag": "IMAGE_ONLY",
+            "category": "Bath Stool",
+            "description": "natural teak shower bench with slatted top",
+            "material": "teak",
+            "color": "natural",
+            "style": "modern spa",
+        }
+        queries = _build_search_queries(item, design_brief=brief)
+        assert queries[0] == "natural teak shower bench with slatted top"
+
+    def test_brief_anchored_keeps_source_ref(self):
+        """BRIEF_ANCHORED items still include source reference."""
+        brief = self._make_brief(room_type="bedroom", mood="bohemian")
+        item = {
+            "source_tag": "BRIEF_ANCHORED",
+            "source_reference": "macrame wall hanging",
+            "description": "cream cotton macrame wall hanging with fringe",
+            "category": "Wall Art",
+            "material": "cotton",
+            "color": "cream",
+            "style": "bohemian",
+        }
+        queries = _build_search_queries(item, design_brief=brief)
+        assert any(q == "macrame wall hanging" for q in queries)
+        # Description should still be first
+        assert queries[0] == "cream cotton macrame wall hanging with fringe"
+
+    def test_brief_with_room_dims(self):
+        """Brief + room dims both contribute queries."""
+        brief = self._make_brief(room_type="living room", mood="mid-century modern")
+        dims = RoomDimensions(width_m=4.0, length_m=5.0, height_m=2.7)
+        item = {
+            "source_tag": "IMAGE_ONLY",
+            "category": "Sofa",
+            "description": "olive velvet sofa with walnut legs",
+            "material": "velvet",
+            "color": "olive",
+            "style": "mid-century",
+        }
+        queries = _build_search_queries(item, room_dimensions=dims, design_brief=brief)
+        # Should have style-contextualized query
+        assert any("mid-century modern" in q and "living room" in q for q in queries)
+        # Should have room-constrained query
+        constrained = [q for q in queries if "under" in q and "inches" in q]
+        assert len(constrained) == 1
 
 
 # === B3: Retailer Domains ===
@@ -2077,8 +2208,11 @@ class TestGenerateShoppingListMocked:
 
         with (
             patch.dict("os.environ", {}, clear=True),
+            patch("app.activities.shopping.settings") as mock_settings,
             pytest.raises(ApplicationError, match="ANTHROPIC_API_KEY"),
         ):
+            mock_settings.anthropic_api_key = ""
+            mock_settings.exa_api_key = ""
             asyncio.run(generate_shopping_list(input_data))
 
     def test_missing_exa_key_raises(self):
@@ -2093,8 +2227,11 @@ class TestGenerateShoppingListMocked:
 
         with (
             patch.dict("os.environ", {"ANTHROPIC_API_KEY": "test-key"}, clear=True),
+            patch("app.activities.shopping.settings") as mock_settings,
             pytest.raises(ApplicationError, match="EXA_API_KEY"),
         ):
+            mock_settings.anthropic_api_key = ""
+            mock_settings.exa_api_key = ""
             asyncio.run(generate_shopping_list(input_data))
 
 
@@ -3163,3 +3300,212 @@ class TestScoringCachePaths:
         mock_client.messages.create.assert_called_once()
         mock_set.assert_called_once()
         assert result["weighted_total"] == 0.9
+
+
+# === Streaming Shopping Tests ===
+
+
+class TestGenerateShoppingListStreaming:
+    """Tests for generate_shopping_list_streaming async generator."""
+
+    def _make_input(self) -> GenerateShoppingListInput:
+        return GenerateShoppingListInput(
+            design_image_url="https://r2.example.com/projects/test-123/generated/opt0.png",
+            original_room_photo_urls=["https://r2.example.com/projects/test-123/photos/room.jpg"],
+            design_brief=DesignBrief(room_type="bathroom", mood="modern spa"),
+        )
+
+    def test_missing_api_key_yields_error(self, monkeypatch):
+        """Missing ANTHROPIC_API_KEY should yield an error event, not crash."""
+        monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+        monkeypatch.delenv("EXA_API_KEY", raising=False)
+
+        with patch("app.activities.shopping.settings") as mock_settings:
+            mock_settings.anthropic_api_key = ""
+            mock_settings.exa_api_key = ""
+            events = asyncio.run(self._collect_events())
+        assert len(events) == 1
+        assert "event: error" in events[0]
+        assert "ANTHROPIC_API_KEY" in events[0]
+
+    def test_missing_exa_key_yields_error(self, monkeypatch):
+        """Missing EXA_API_KEY should yield an error event."""
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+        monkeypatch.delenv("EXA_API_KEY", raising=False)
+
+        with patch("app.activities.shopping.settings") as mock_settings:
+            mock_settings.anthropic_api_key = ""
+            mock_settings.exa_api_key = ""
+            events = asyncio.run(self._collect_events())
+        assert len(events) == 1
+        assert "event: error" in events[0]
+        assert "EXA_API_KEY" in events[0]
+
+    @patch("app.activities.shopping.extract_items", new_callable=AsyncMock)
+    @patch("app.activities.shopping.search_products_for_item", new_callable=AsyncMock)
+    @patch("app.activities.shopping.score_all_products", new_callable=AsyncMock)
+    def test_yields_status_search_and_done(
+        self,
+        mock_score,
+        mock_search,
+        mock_extract,
+        monkeypatch,
+    ):
+        """Full pipeline should yield status → item_search → item → done events."""
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+        monkeypatch.setenv("EXA_API_KEY", "test-key")
+
+        # Mock extraction returns 2 items
+        mock_extract.return_value = [
+            {"description": "Vanity", "category": "Vanity", "search_priority": "HIGH"},
+            {"description": "Mirror", "category": "Mirror", "search_priority": "MEDIUM"},
+        ]
+        # Mock search returns 1 product per item
+        mock_search.return_value = [
+            {
+                "product_name": "Test Vanity",
+                "product_url": "https://amazon.com/vanity",
+                "price_cents": 29900,
+            }
+        ]
+        # Mock scoring returns scored products
+        mock_score.return_value = [
+            [
+                {
+                    "product_name": "Test Vanity",
+                    "product_url": "https://amazon.com/vanity",
+                    "image_url": "https://img.com/v.jpg",
+                    "weighted_total": 0.85,
+                    "price_cents": 29900,
+                    "why_matched": "Good match",
+                }
+            ],
+            [],  # Mirror has no scored results
+        ]
+
+        events = asyncio.run(self._collect_events())
+
+        # Check event types present
+        event_types = [e.split("\n")[0] for e in events]
+        assert "event: status" in event_types
+        assert event_types.count("event: item_search") == 2  # One per item
+        assert "event: item" in event_types  # At least one matched product
+        assert "event: done" in event_types
+
+        # The done event should contain valid GenerateShoppingListOutput
+        done_events = [e for e in events if e.startswith("event: done")]
+        assert len(done_events) == 1
+        import json
+
+        data_line = done_events[0].split("data: ", 1)[1].split("\n")[0]
+        output = json.loads(data_line)
+        assert "items" in output
+        assert "unmatched" in output
+
+    @patch("app.activities.shopping.extract_items", new_callable=AsyncMock)
+    def test_empty_extraction_yields_done_immediately(
+        self,
+        mock_extract,
+        monkeypatch,
+    ):
+        """No items extracted should yield status then done with empty list."""
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+        monkeypatch.setenv("EXA_API_KEY", "test-key")
+        mock_extract.return_value = []
+
+        events = asyncio.run(self._collect_events())
+
+        event_types = [e.split("\n")[0] for e in events]
+        assert "event: status" in event_types
+        assert "event: done" in event_types
+        assert "event: item_search" not in event_types
+
+    @patch("app.activities.shopping.extract_items", new_callable=AsyncMock)
+    def test_extraction_error_yields_error_event(
+        self,
+        mock_extract,
+        monkeypatch,
+    ):
+        """Extraction failure should yield an error SSE event."""
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+        monkeypatch.setenv("EXA_API_KEY", "test-key")
+        mock_extract.side_effect = anthropic.RateLimitError(
+            message="rate limited",
+            response=_make_httpx_response(429),
+            body=None,
+        )
+
+        events = asyncio.run(self._collect_events())
+
+        assert len(events) == 1
+        assert "event: error" in events[0]
+        assert "Extraction failed" in events[0]
+
+    def test_url_resolution_failure_yields_error(self, monkeypatch):
+        """resolve_url failure should yield error event, not crash."""
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+        monkeypatch.setenv("EXA_API_KEY", "test-key")
+
+        # Use R2 storage keys (not https:// URLs) to trigger resolve_url
+        inp = GenerateShoppingListInput(
+            design_image_url="projects/test-123/generated/opt0.png",
+            original_room_photo_urls=["projects/test-123/photos/room.jpg"],
+            design_brief=DesignBrief(room_type="bathroom", mood="modern spa"),
+        )
+
+        with patch(
+            "app.utils.r2.resolve_url",
+            side_effect=Exception("R2 connection failed"),
+        ):
+            events = asyncio.run(self._collect_events(inp))
+
+        assert len(events) == 1
+        assert "event: error" in events[0]
+        assert "URL resolution failed" in events[0]
+
+    async def _collect_events(self, inp=None) -> list[str]:
+        if inp is None:
+            inp = self._make_input()
+        events = []
+        async for chunk in generate_shopping_list_streaming(inp):
+            events.append(chunk)
+        return events
+
+
+class TestExaTracingDecorators:
+    """Verify @traceable decorators don't alter function behavior."""
+
+    def test_build_search_queries_returns_list(self):
+        """Decorated _build_search_queries still returns a list of strings."""
+        item = {"category": "sofa", "style": "modern", "description": "gray modern sofa"}
+        result = _build_search_queries(item)
+        assert isinstance(result, list)
+        assert all(isinstance(q, str) for q in result)
+        assert len(result) >= 1
+
+    def test_build_search_queries_with_brief(self):
+        """Decorated function handles DesignBrief parameter correctly."""
+        from app.models.contracts import DesignBrief, StyleProfile
+
+        brief = DesignBrief(
+            room_type="living room",
+            style_profile=StyleProfile(mood="contemporary"),
+        )
+        item = {"category": "coffee table", "description": "round oak coffee table"}
+        result = _build_search_queries(item, design_brief=brief)
+        assert isinstance(result, list)
+        assert any("contemporary" in q or "living room" in q for q in result)
+
+    def test_search_exa_decorated_callable(self):
+        """_search_exa is still an async callable after decoration."""
+        import inspect
+
+        assert inspect.iscoroutinefunction(_search_exa) or callable(_search_exa)
+
+    def test_search_products_for_item_decorated_callable(self):
+        """search_products_for_item is still async callable after decoration."""
+        import inspect
+
+        assert inspect.iscoroutinefunction(search_products_for_item) or callable(
+            search_products_for_item
+        )

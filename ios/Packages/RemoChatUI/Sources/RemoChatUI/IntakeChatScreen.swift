@@ -147,7 +147,8 @@ public struct IntakeChatScreen: View {
 
                         // Quick reply chips — hidden once user selects one or while waiting for response
                         if let options = projectState.currentIntakeOutput?.options, !options.isEmpty,
-                           selectedQuickReply == nil, !isSending {
+                           selectedQuickReply == nil, !isSending,
+                           projectState.currentIntakeOutput?.isSummary != true {
                             QuickReplyChips(
                                 options: options,
                                 selectedId: selectedQuickReply,
@@ -264,6 +265,10 @@ public struct IntakeChatScreen: View {
         }
     }
 
+    /// Minimum interval between UI updates when streaming deltas, so text
+    /// appears as a readable typing effect instead of a sudden wall of text.
+    private static let minDeltaInterval: Duration = .milliseconds(30)
+
     private func sendMessage(_ message: String) async {
         guard !isSending else { return }
         guard let projectId = projectState.projectId else {
@@ -277,36 +282,155 @@ public struct IntakeChatScreen: View {
         isSending = true
         defer { isSending = false }
 
+        // Capture count BEFORE optimistic append so rollback can remove the
+        // user message too if the request never reached the server.
+        let messageCountBefore = projectState.chatMessages.count
         projectState.chatMessages.append(ChatMessage(role: "user", content: trimmed))
         isInputFocused = false
         inputText = ""
 
-        do {
-            // API contract caps conversation_history at 20 items; send only the tail
-            let history = Array(projectState.chatMessages.suffix(20))
-            let output = try await client.sendIntakeMessage(projectId: projectId, message: trimmed, conversationHistory: history, mode: selectedMode)
-            projectState.chatMessages.append(ChatMessage(role: "assistant", content: output.agentMessage))
-            projectState.currentIntakeOutput = output
-        } catch {
-            // Roll back optimistic message so chat isn't polluted with unsent text
-            if let lastIndex = projectState.chatMessages.indices.last,
-               projectState.chatMessages[lastIndex].role == "user",
-               projectState.chatMessages[lastIndex].content == trimmed {
-                projectState.chatMessages.removeLast()
-            }
+        let history = Array(projectState.chatMessages.suffix(20))
 
-            // "wrong_step" means the workflow advanced past intake — refresh state
-            // so the router navigates to the correct screen instead of showing a dead-end error
-            if case .httpError(409, let response) = error as? APIError, response.error == "wrong_step" {
-                if let newState = try? await client.getState(projectId: projectId) {
-                    projectState.apply(newState)
+        // Declared outside `do` so the `catch` block can tell whether the
+        // server already consumed the message (deltas arrived) or not.
+        var receivedAnyDelta = false
+
+        do {
+            // Try streaming first for progressive text rendering
+            var receivedDone = false
+            var lastDeltaTime: ContinuousClock.Instant = .now
+            let stream = client.streamIntakeMessage(
+                projectId: projectId,
+                message: trimmed,
+                conversationHistory: history,
+                mode: selectedMode
+            )
+            for try await event in stream {
+                switch event {
+                case .delta(let text):
+                    receivedAnyDelta = true
+                    if projectState.chatMessages.last?.role != "assistant"
+                        || projectState.chatMessages.count == messageCountBefore {
+                        projectState.chatMessages.append(
+                            ChatMessage(role: "assistant", content: text)
+                        )
+                    } else {
+                        let idx = projectState.chatMessages.count - 1
+                        projectState.chatMessages[idx].content += text
+                    }
+                    // Throttle: ensure minimum interval between UI updates so
+                    // deltas that arrive in a burst appear as gradual typing
+                    let elapsed = ContinuousClock.now - lastDeltaTime
+                    if elapsed < Self.minDeltaInterval {
+                        try await Task.sleep(for: Self.minDeltaInterval - elapsed)
+                    }
+                    lastDeltaTime = .now
+                case .done(let output):
+                    if !receivedAnyDelta {
+                        // No streaming occurred — reveal text with typewriter effect
+                        await revealTextProgressively(
+                            output.agentMessage,
+                            messageCountBefore: messageCountBefore
+                        )
+                    } else if let idx = projectState.chatMessages.indices.last,
+                              projectState.chatMessages[idx].role == "assistant" {
+                        // Replace streamed text with final authoritative message
+                        projectState.chatMessages[idx].content = output.agentMessage
+                    } else {
+                        projectState.chatMessages.append(
+                            ChatMessage(role: "assistant", content: output.agentMessage)
+                        )
+                    }
+                    projectState.currentIntakeOutput = output
+                    receivedDone = true
+                case .error(let message):
+                    if receivedAnyDelta {
+                        // Server consumed the prompt — keep user turn, remove partial assistant
+                        let assistantStart = messageCountBefore + 1
+                        if projectState.chatMessages.count > assistantStart {
+                            projectState.chatMessages.removeSubrange(assistantStart...)
+                        }
+                    } else {
+                        // Server never processed the prompt — full rollback
+                        if projectState.chatMessages.count > messageCountBefore {
+                            projectState.chatMessages.removeSubrange(messageCountBefore...)
+                        }
+                        inputText = trimmed
+                        selectedQuickReply = nil
+                    }
+                    errorMessage = message
                     return
                 }
             }
+            // Only fall back to non-streaming if we never got any data from
+            // the stream. If deltas arrived, the server already processed the
+            // message — re-sending would duplicate it.
+            if !receivedDone && !receivedAnyDelta {
+                let output = try await client.sendIntakeMessage(
+                    projectId: projectId,
+                    message: trimmed,
+                    conversationHistory: history,
+                    mode: selectedMode
+                )
+                await revealTextProgressively(
+                    output.agentMessage,
+                    messageCountBefore: messageCountBefore
+                )
+                projectState.currentIntakeOutput = output
+            }
+        } catch is CancellationError {
+            // View disappeared — do nothing
+        } catch {
+            // If the server already processed the message (deltas arrived),
+            // keep the user message but remove any partial assistant content.
+            // Otherwise, roll back everything including the optimistic user message.
+            if receivedAnyDelta {
+                // Server consumed the message — keep user turn, remove partial assistant
+                let assistantStart = messageCountBefore + 1  // after user msg
+                if projectState.chatMessages.count > assistantStart {
+                    projectState.chatMessages.removeSubrange(assistantStart...)
+                }
+                errorMessage = error.localizedDescription
+            } else {
+                // Server never saw the message — full rollback
+                if projectState.chatMessages.count > messageCountBefore {
+                    projectState.chatMessages.removeSubrange(messageCountBefore...)
+                }
+                inputText = trimmed
+                selectedQuickReply = nil
 
-            inputText = trimmed
-            selectedQuickReply = nil
-            errorMessage = error.localizedDescription
+                // "wrong_step" means the workflow advanced past intake — refresh state
+                if case .httpError(409, let response) = error as? APIError,
+                   response.error == "wrong_step" {
+                    if let newState = try? await client.getState(projectId: projectId) {
+                        projectState.apply(newState)
+                        return
+                    }
+                }
+                errorMessage = error.localizedDescription
+            }
+        }
+    }
+
+    /// Reveal text progressively for a natural typing effect when streaming
+    /// produced no deltas (e.g. non-streaming fallback or tool-use JSON delay).
+    private func revealTextProgressively(
+        _ text: String,
+        messageCountBefore: Int
+    ) async {
+        if projectState.chatMessages.last?.role != "assistant"
+            || projectState.chatMessages.count <= messageCountBefore {
+            projectState.chatMessages.append(ChatMessage(role: "assistant", content: ""))
+        }
+        let idx = projectState.chatMessages.count - 1
+        // Reveal ~4 characters per frame at 30ms intervals (~130 chars/sec)
+        let chunkSize = 4
+        var offset = text.startIndex
+        while offset < text.endIndex {
+            let end = text.index(offset, offsetBy: chunkSize, limitedBy: text.endIndex) ?? text.endIndex
+            projectState.chatMessages[idx].content += text[offset..<end]
+            offset = end
+            try? await Task.sleep(for: Self.minDeltaInterval)
         }
     }
 

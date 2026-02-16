@@ -20,6 +20,8 @@ struct ProjectRouter: View {
             PhotoUploadScreen(projectState: projectState, client: client)
         case .scan:
             LiDARScanScreen(projectState: projectState, client: client)
+        case .analyzing:
+            AnalyzingRoomScreen(projectState: projectState, client: client)
         case .intake:
             IntakeChatScreen(projectState: projectState, client: client)
         case .generation:

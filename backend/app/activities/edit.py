@@ -349,6 +349,16 @@ async def _continue_chat(
     # Build message parts (supports annotations, feedback, or both)
     message_parts: list = []
 
+    # CRITICAL: On continuation turns, Gemini sees accumulated "Region N:" text
+    # in the chat history and starts adding visual region markers to the output.
+    # This preamble overrides that behavior explicitly.
+    message_parts.append(
+        "IMPORTANT: Output ONLY a clean photorealistic photograph. "
+        "Do NOT add any numbered circles, region markers, colored outlines, "
+        "text overlays, or annotation-like shapes to the image. "
+        "The output must look like a real interior photograph."
+    )
+
     # Prepend room photos as spatial anchors (capped to leave room for edit images)
     if room_images:
         # Reserve slots: base_image (1 if annotations) + safety margin
@@ -420,7 +430,8 @@ async def _continue_chat(
         # Retry with explicit request
         retry_text = (
             "Please generate the edited room image now. "
-            "Output only a clean photorealistic photograph with no overlays or markers."
+            "Output only a clean photorealistic photograph — no numbered circles, "
+            "region markers, colored outlines, text, or any annotation-like shapes."
         )
         response = await asyncio.to_thread(
             continue_chat,

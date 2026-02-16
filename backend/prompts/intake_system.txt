@@ -133,6 +133,22 @@ Apply these rules based on the detected room type:
 
 {room_analysis_section}
 
+### Measured Room Dimensions (from LiDAR scan)
+
+{room_dimensions_section}
+
+### Using Room Dimensions
+
+- When room dimensions are available, USE them to constrain recommendations.
+  Do NOT suggest furniture or layouts that won't physically fit.
+  Reference actual measurements: "Your room is 3.2m wide — a standard double
+  vanity (1.5m) would leave only 1.7m of clearance, so a single vanity with
+  storage would work better."
+- When dimensions indicate a small room (<10 sq m), flag spatial constraints
+  proactively. Avoid oversized furniture suggestions.
+- When no dimensions are available, rely on photo-based estimates and ask the
+  client about room size if relevant to your recommendations.
+
 ---
 
 ## BEHAVIORAL RULES
