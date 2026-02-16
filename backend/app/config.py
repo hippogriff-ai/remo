@@ -2,7 +2,7 @@ from pydantic_settings import BaseSettings
 
 
 class Settings(BaseSettings):
-    model_config = {"env_prefix": "", "case_sensitive": False}
+    model_config = {"env_file": "../.env", "extra": "ignore", "env_prefix": "", "case_sensitive": False}
 
     # Database
     database_url: str = "postgresql+asyncpg://user:password@localhost:5432/remo"

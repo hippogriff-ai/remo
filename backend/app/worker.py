@@ -130,6 +130,13 @@ async def run_worker() -> None:
 
 def main() -> None:
     """Entrypoint for `python -m app.worker`."""
+    # Load .env into os.environ so activities can read API keys directly.
+    try:
+        import dotenv
+
+        dotenv.load_dotenv(dotenv.find_dotenv(usecwd=True))
+    except ImportError:
+        pass
     configure_logging()
     try:
         asyncio.run(run_worker())

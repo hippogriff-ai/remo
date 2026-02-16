@@ -355,6 +355,7 @@ def load_system_prompt(
     previous_brief: dict[str, Any] | None = None,
     room_analysis: dict[str, Any] | None = None,
     loaded_skill_ids: list[str] | None = None,
+    room_dimensions: dict[str, Any] | None = None,
 ) -> str:
     """Load and customize the system prompt for the given mode and turn.
 
@@ -381,6 +382,10 @@ def load_system_prompt(
     # Inject room analysis context if available
     analysis_section = _format_room_analysis_section(room_analysis)
     prompt = prompt.replace("{room_analysis_section}", analysis_section)
+
+    # Inject measured room dimensions from LiDAR if available
+    dimensions_section = _format_room_dimensions_section(room_dimensions)
+    prompt = prompt.replace("{room_dimensions_section}", dimensions_section)
 
     # Inject skill system: compact summary table + loaded skill content
     manifest = skill_loader.load_manifest()
@@ -438,6 +443,86 @@ def _format_brief_context(brief: dict[str, Any]) -> str:
         lines.append(f"- Domains covered: {', '.join(brief['domains_covered'])}")
 
     return "\n".join(lines) if lines else "No information gathered yet."
+
+
+def _format_room_dimensions_section(dimensions: dict[str, Any] | None) -> str:
+    """Format LiDAR room dimensions into a concise prompt section.
+
+    Includes room size, walls, openings, furniture, surfaces, and a spatial
+    constraint warning based on floor area classification.
+    """
+    if not dimensions:
+        return "No measured dimensions available for this room."
+
+    lines: list[str] = []
+
+    # Room dimensions
+    width = dimensions.get("width_m")
+    length = dimensions.get("length_m")
+    height = dimensions.get("height_m")
+    if width and length:
+        area_m2 = width * length
+        area_ft2 = area_m2 * 10.764
+        dim_parts = [f"{width:.1f}m x {length:.1f}m ({area_m2:.1f} sq m / {area_ft2:.0f} sq ft)"]
+        if height:
+            dim_parts.append(f"ceiling {height:.1f}m")
+        lines.append(f"**Measured room**: {', '.join(dim_parts)}")
+
+        # Spatial classification
+        if area_m2 < 10:
+            lines.append(
+                f"\n⚠ SPATIAL CONSTRAINT: This is a small room (~{area_m2:.0f} sq m). "
+                "Scale all furniture recommendations to fit. Avoid suggesting items "
+                "that require more clearance than the room allows."
+            )
+        elif area_m2 <= 20:
+            lines.append(
+                f"\nRoom size: medium (~{area_m2:.0f} sq m) — standard recommendations apply."
+            )
+        else:
+            lines.append(
+                f"\nRoom size: large (~{area_m2:.0f} sq m) — more layout flexibility available."
+            )
+
+    # Walls
+    walls = dimensions.get("walls", [])
+    if walls:
+        lines.append(f"**Walls**: {len(walls)} segments")
+
+    # Openings
+    openings = dimensions.get("openings", [])
+    if openings:
+        parts = []
+        for o in openings:
+            o_type = o.get("type") or "opening"
+            o_width = o.get("width")
+            if o_width:
+                parts.append(f"{o_type} ({o_width:.1f}m wide)")
+            else:
+                parts.append(o_type)
+        lines.append(f"**Openings**: {', '.join(parts)}")
+
+    # Furniture
+    furniture = dimensions.get("furniture", [])
+    if furniture:
+        parts = []
+        for f in furniture:
+            f_type = f.get("type") or "item"
+            f_w = f.get("width")
+            f_d = f.get("depth")
+            if f_w and f_d:
+                parts.append(f"{f_type} ({f_w:.1f}m x {f_d:.1f}m)")
+            else:
+                parts.append(f_type)
+        lines.append(f"**Existing furniture**: {', '.join(parts)}")
+
+    # Surfaces
+    surfaces = dimensions.get("surfaces", [])
+    if surfaces:
+        types = [s.get("type") or "surface" for s in surfaces]
+        lines.append(f"**Surfaces**: {', '.join(types)}")
+
+    return "\n".join(lines) if lines else "No measured dimensions available for this room."
 
 
 def _format_room_analysis_section(analysis: dict[str, Any] | None) -> str:
@@ -728,8 +813,20 @@ async def _run_intake_core(input: IntakeChatInput) -> IntakeChatOutput:
     previous_brief: dict[str, Any] | None = input.project_context.get("previous_brief")
     room_analysis: dict[str, Any] | None = input.project_context.get("room_analysis")
     loaded_skill_ids: list[str] = input.project_context.get("loaded_skill_ids", [])
+
+    # Extract LiDAR room dimensions from room_context if available
+    room_context: dict[str, Any] | None = input.project_context.get("room_context")
+    room_dimensions: dict[str, Any] | None = None
+    if room_context and room_context.get("room_dimensions"):
+        room_dimensions = room_context["room_dimensions"]
+
     system_prompt = load_system_prompt(
-        input.mode, turn_number, previous_brief, room_analysis, loaded_skill_ids
+        input.mode,
+        turn_number,
+        previous_brief,
+        room_analysis,
+        loaded_skill_ids,
+        room_dimensions,
     )
 
     # Skip room photos when room analysis exists: the analyze_room activity (same

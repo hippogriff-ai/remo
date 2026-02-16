@@ -8,9 +8,12 @@ workflows. State lives in Temporal, not in-memory.
 """
 
 import asyncio
+import json
+import os
 import time
 import uuid
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Literal
 
 import structlog
@@ -56,6 +59,7 @@ router = APIRouter(tags=["projects"])
 
 MAX_PHOTO_BYTES = 20 * 1024 * 1024  # 20 MB
 MAX_SCAN_BYTES = 1 * 1024 * 1024  # 1 MB — LiDAR JSON is typically <100 KB
+_LIDAR_FIXTURE_PATH = Path(__file__).resolve().parents[3] / "tests" / "fixtures" / "real_lidar_scan.json"
 MAX_INSPIRATION_PHOTOS = 3
 
 
@@ -610,6 +614,12 @@ async def upload_scan(project_id: str, body: dict, request: Request):
     if err := _check_step(state, "scan", "upload scan"):
         return err
     assert state is not None
+
+    # One-shot LiDAR fixture capture for E2E tests.
+    if os.environ.get("CAPTURE_LIDAR_FIXTURE") and not _LIDAR_FIXTURE_PATH.exists():
+        _LIDAR_FIXTURE_PATH.parent.mkdir(parents=True, exist_ok=True)
+        _LIDAR_FIXTURE_PATH.write_text(json.dumps(body, indent=2))
+        logger.info("lidar_fixture_captured", path=str(_LIDAR_FIXTURE_PATH))
 
     # G8: Best-effort size check via Content-Length header. Body is already parsed
     # by FastAPI, so this doesn't prevent memory allocation — it catches well-behaved

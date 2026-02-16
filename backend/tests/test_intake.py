@@ -26,6 +26,7 @@ from app.activities.intake import (
     SKILL_NAMES,
     _format_brief_context,
     _format_room_analysis_section,
+    _format_room_dimensions_section,
     _get_inspiration_note,
     _run_intake_core,
     build_brief,
@@ -341,6 +342,125 @@ class TestRoomAnalysisInjection:
         prompt = load_system_prompt("quick", 1)
         assert "ROOM ANALYSIS" in prompt
         assert "no pre-analysis" in prompt.lower()
+
+
+class TestRoomDimensionsInjection:
+    """LiDAR room dimensions injection into the intake system prompt."""
+
+    def test_no_dimensions_fallback(self):
+        section = _format_room_dimensions_section(None)
+        assert "no measured dimensions" in section.lower()
+
+    def test_empty_dimensions_fallback(self):
+        section = _format_room_dimensions_section({})
+        assert "no measured dimensions" in section.lower()
+
+    def test_small_room_spatial_constraint(self):
+        dims = {"width_m": 2.39, "length_m": 2.78, "height_m": 2.73}
+        section = _format_room_dimensions_section(dims)
+        assert "2.4m x 2.8m" in section
+        assert "SPATIAL CONSTRAINT" in section
+        assert "small room" in section
+        assert "ceiling 2.7m" in section
+
+    def test_medium_room(self):
+        dims = {"width_m": 4.0, "length_m": 4.0, "height_m": 2.8}
+        section = _format_room_dimensions_section(dims)
+        assert "4.0m x 4.0m" in section
+        assert "medium" in section
+        assert "SPATIAL CONSTRAINT" not in section
+
+    def test_large_room(self):
+        dims = {"width_m": 6.0, "length_m": 5.0, "height_m": 3.0}
+        section = _format_room_dimensions_section(dims)
+        assert "6.0m x 5.0m" in section
+        assert "large" in section
+
+    def test_with_openings(self):
+        dims = {
+            "width_m": 3.0, "length_m": 4.0,
+            "openings": [
+                {"type": "door", "width": 0.9},
+                {"type": "window", "width": 1.5},
+            ],
+        }
+        section = _format_room_dimensions_section(dims)
+        assert "door (0.9m wide)" in section
+        assert "window (1.5m wide)" in section
+
+    def test_with_furniture(self):
+        dims = {
+            "width_m": 3.0, "length_m": 4.0,
+            "furniture": [
+                {"type": "sofa", "width": 2.1, "depth": 0.9},
+                {"type": "table", "width": 1.2, "depth": 0.8},
+            ],
+        }
+        section = _format_room_dimensions_section(dims)
+        assert "sofa (2.1m x 0.9m)" in section
+        assert "table (1.2m x 0.8m)" in section
+
+    def test_with_walls_and_surfaces(self):
+        dims = {
+            "width_m": 3.0, "length_m": 4.0,
+            "walls": [{"id": "w0"}, {"id": "w1"}, {"id": "w2"}, {"id": "w3"}],
+            "surfaces": [{"type": "floor"}, {"type": "ceiling"}],
+        }
+        section = _format_room_dimensions_section(dims)
+        assert "4 segments" in section
+        assert "floor" in section
+        assert "ceiling" in section
+
+    def test_missing_optional_fields(self):
+        """Furniture/openings without dimensions still format gracefully."""
+        dims = {
+            "width_m": 3.0, "length_m": 4.0,
+            "furniture": [{"type": "chair"}],
+            "openings": [{"type": "door"}],
+        }
+        section = _format_room_dimensions_section(dims)
+        assert "chair" in section
+        assert "door" in section
+
+    def test_real_lidar_data(self):
+        """Test with the real captured LiDAR data structure."""
+        dims = {
+            "width_m": 2.39, "length_m": 2.78, "height_m": 2.73,
+            "walls": [{"id": f"wall_{i}"} for i in range(4)],
+            "openings": [{"type": "door", "width": 0.84}],
+            "furniture": [
+                {"type": "toilet", "width": 0.41, "depth": 0.71},
+                {"type": "bathtub", "width": 1.38, "depth": 0.78},
+                {"type": "sink", "width": 0.58, "depth": 0.44},
+                {"type": "storage", "width": 0.71, "depth": 0.52},
+            ],
+            "surfaces": [{"type": "floor"}],
+        }
+        section = _format_room_dimensions_section(dims)
+        assert "2.4m x 2.8m" in section
+        assert "SPATIAL CONSTRAINT" in section
+        assert "toilet (0.4m x 0.7m)" in section
+        assert "bathtub (1.4m x 0.8m)" in section
+        assert "door (0.8m wide)" in section
+        assert "4 segments" in section
+
+    def test_prompt_contains_dimensions_placeholder(self):
+        """load_system_prompt with dimensions injects them into prompt."""
+        dims = {"width_m": 3.5, "length_m": 4.0, "height_m": 2.7}
+        prompt = load_system_prompt("full", 1, room_dimensions=dims)
+        assert "3.5m x 4.0m" in prompt
+        assert "Measured Room Dimensions" in prompt
+
+    def test_prompt_without_dimensions(self):
+        """load_system_prompt without dimensions uses fallback."""
+        prompt = load_system_prompt("full", 1)
+        assert "no measured dimensions" in prompt.lower()
+
+    def test_sqft_conversion(self):
+        dims = {"width_m": 4.0, "length_m": 5.0}
+        section = _format_room_dimensions_section(dims)
+        # 20 sq m = ~215 sq ft
+        assert "215" in section or "216" in section
 
 
 # === Message Building Tests ===
