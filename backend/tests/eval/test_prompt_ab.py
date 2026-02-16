@@ -637,7 +637,10 @@ class TestPromptAB:
             from app.models.contracts import AnnotationRegion
             from app.utils.gemini_chat import create_chat, extract_image, get_client
             from app.utils.image_eval import run_artifact_check
-            from app.utils.prompt_versioning import load_versioned_prompt
+            from app.utils.prompt_versioning import (
+                load_versioned_prompt,
+                strip_changelog_lines,
+            )
 
             results = []
             edit_annotations = [
@@ -660,7 +663,7 @@ class TestPromptAB:
             ]
 
             edit_instructions = _build_edit_instructions(edit_annotations)
-            edit_template = load_versioned_prompt("edit")
+            edit_template = strip_changelog_lines(load_versioned_prompt("edit"))
             edit_prompt = edit_template.format(
                 edit_instructions=edit_instructions.replace("{", "{{").replace("}", "}}"),
                 changelog="",  # First edit in eval — no previous history
@@ -736,7 +739,9 @@ class TestPromptAB:
                 vlm_scores["artifact_check"] = artifact_info
 
                 if "total" in vlm_scores:
-                    print(f"total={vlm_scores['total']} tag={vlm_scores['tag']} artifacts={artifact.artifact_count}")
+                    print(
+                        f"total={vlm_scores['total']} tag={vlm_scores['tag']} artifacts={artifact.artifact_count}"
+                    )
                 else:
                     print(f"EVAL ERROR: {vlm_scores}")
 
@@ -760,8 +765,16 @@ class TestPromptAB:
             import numpy as np
 
             totals = np.array([r["total"] for r in valid], dtype=float)
-            print(f"  VLM total (0-50): mean={totals.mean():.1f} std={totals.std():.1f} min={totals.min():.0f} max={totals.max():.0f}")
-            for key in ["edit_fidelity", "preservation_fidelity", "artifact_cleanliness", "seamless_blending", "instruction_accuracy"]:
+            print(
+                f"  VLM total (0-50): mean={totals.mean():.1f} std={totals.std():.1f} min={totals.min():.0f} max={totals.max():.0f}"
+            )
+            for key in [
+                "edit_fidelity",
+                "preservation_fidelity",
+                "artifact_cleanliness",
+                "seamless_blending",
+                "instruction_accuracy",
+            ]:
                 vals = np.array([r.get(key, 0) for r in valid], dtype=float)
                 print(f"  {key:25s}: mean={vals.mean():.1f}")
 

@@ -1625,40 +1625,40 @@ class TestStructuredRoomContext:
 
 
 class TestStripChangelogLines:
-    """Tests for _strip_changelog_lines helper."""
+    """Tests for strip_changelog_lines helper (in prompt_versioning)."""
 
     def test_strips_versioned_changelog(self):
-        from app.activities.generate import _strip_changelog_lines
+        from app.utils.prompt_versioning import strip_changelog_lines
 
         text = "[v5: Enhanced quality]\n[v4: Added details]\n\nActual prompt text."
-        result = _strip_changelog_lines(text)
+        result = strip_changelog_lines(text)
         assert "[v5:" not in result
         assert "[v4:" not in result
         assert "Actual prompt text." in result
 
     def test_preserves_non_changelog_brackets(self):
-        from app.activities.generate import _strip_changelog_lines
+        from app.utils.prompt_versioning import strip_changelog_lines
 
         text = "[v5: changelog]\n\nKeep this [note] in the prompt."
-        result = _strip_changelog_lines(text)
+        result = strip_changelog_lines(text)
         assert "[note]" in result
         assert "[v5:" not in result
 
     def test_no_leading_blank_lines(self):
-        from app.activities.generate import _strip_changelog_lines
+        from app.utils.prompt_versioning import strip_changelog_lines
 
         text = "[v5: changelog]\n[v4: changelog]\n\nFirst real line."
-        result = _strip_changelog_lines(text)
+        result = strip_changelog_lines(text)
         assert result.startswith("\n") is False
         assert "First real line." in result
 
     def test_empty_string_passthrough(self):
-        from app.activities.generate import _strip_changelog_lines
+        from app.utils.prompt_versioning import strip_changelog_lines
 
-        assert _strip_changelog_lines("") == ""
+        assert strip_changelog_lines("") == ""
 
     def test_no_changelogs_passthrough(self):
-        from app.activities.generate import _strip_changelog_lines
+        from app.utils.prompt_versioning import strip_changelog_lines
 
         text = "Just a regular prompt.\nWith multiple lines."
-        assert _strip_changelog_lines(text) == text
+        assert strip_changelog_lines(text) == text

@@ -36,7 +36,11 @@ from app.utils.gemini_chat import (
     get_client,
 )
 from app.utils.http import download_images
-from app.utils.prompt_versioning import get_active_version, load_versioned_prompt
+from app.utils.prompt_versioning import (
+    get_active_version,
+    load_versioned_prompt,
+    strip_changelog_lines,
+)
 
 logger = structlog.get_logger()
 
@@ -338,17 +342,6 @@ def _format_color_palette(colors: list[str]) -> str:
     return "\n".join(parts)
 
 
-def _strip_changelog_lines(text: str) -> str:
-    """Remove version changelog comments (e.g. '[v5: ...]') from prompt text.
-
-    These are developer metadata that waste tokens and add noise if sent
-    to the model. The prompt_versions.json manifest tracks versions instead.
-    """
-    lines = text.split("\n")
-    filtered = [ln for ln in lines if not (ln.startswith("[v") and ln.endswith("]"))]
-    return "\n".join(filtered).lstrip("\n")
-
-
 def _build_generation_prompt(
     brief: DesignBrief | None,
     inspiration_notes: list[InspirationNote],
@@ -356,8 +349,8 @@ def _build_generation_prompt(
     option_variant: str = "",
 ) -> str:
     """Build the generation prompt from templates and brief data."""
-    template = _strip_changelog_lines(load_versioned_prompt("generation"))
-    preservation = _strip_changelog_lines(load_versioned_prompt("room_preservation"))
+    template = strip_changelog_lines(load_versioned_prompt("generation"))
+    preservation = strip_changelog_lines(load_versioned_prompt("room_preservation"))
 
     brief_text = "Create a beautiful, modern interior design."
     keep_items_text = ""
@@ -569,9 +562,13 @@ async def _maybe_run_eval(
                 if generation_prompts and idx < len(generation_prompts):
                     gen_prompt = generation_prompts[idx]
 
+                from app.utils.r2 import resolve_url
+
+                gen_presigned = await asyncio.to_thread(resolve_url, gen_url)
+
                 result = await evaluate_generation(
                     original_photo_url=original_url,
-                    generated_image_url=gen_url,
+                    generated_image_url=gen_presigned,
                     brief=brief,
                     generation_prompt=gen_prompt,
                     room_context=room_context,

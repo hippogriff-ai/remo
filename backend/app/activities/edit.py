@@ -41,7 +41,11 @@ from app.utils.gemini_chat import (
     serialize_to_r2,
 )
 from app.utils.http import download_image, download_images
-from app.utils.prompt_versioning import load_versioned_prompt
+from app.utils.prompt_versioning import (
+    get_active_version,
+    load_versioned_prompt,
+    strip_changelog_lines,
+)
 
 logger = structlog.get_logger()
 
@@ -156,8 +160,8 @@ def _build_changelog(history: list) -> str:
             # Skip context prompt (Turn 1 bootstrap)
             if text == CONTEXT_PROMPT:
                 continue
-            # Detect region-based edits
-            if "Region " in text and "ACTION:" in text:
+            # Detect region-based edits (ACTION is optional, INSTRUCTION is always present)
+            if "Region " in text and "INSTRUCTION:" in text:
                 # Extract a compact summary per region
                 for line in text.split("\n"):
                     line = line.strip()
@@ -265,7 +269,7 @@ async def _bootstrap_chat(
         # Send the CLEAN base image with text-only coordinate descriptions.
         # Previously we drew visual circles on the image, but Gemini sometimes
         # reproduced those circles in its output. Text coordinates eliminate this.
-        edit_template = load_versioned_prompt("edit")
+        edit_template = strip_changelog_lines(load_versioned_prompt("edit"))
         instructions = _build_edit_instructions(input.annotations)
         edit_prompt = edit_template.format(
             edit_instructions=instructions.replace("{", "{{").replace("}", "}}"),
@@ -348,7 +352,7 @@ async def _continue_chat(
     if input.annotations:
         assert base_image is not None  # guaranteed: caller downloads when annotations present
         # Send clean base image with text coordinates — no visual annotations
-        edit_template = load_versioned_prompt("edit")
+        edit_template = strip_changelog_lines(load_versioned_prompt("edit"))
         instructions = _build_edit_instructions(input.annotations)
         edit_prompt = edit_template.format(
             edit_instructions=instructions.replace("{", "{{").replace("}", "}}"),
@@ -450,10 +454,13 @@ async def _maybe_run_edit_eval(
         }
 
         from app.activities.design_eval import evaluate_edit
+        from app.utils.r2 import resolve_url
+
+        revised_presigned = await asyncio.to_thread(resolve_url, revised_url)
 
         vlm_result = await evaluate_edit(
             original_image_url=original_url,
-            edited_image_url=revised_url,
+            edited_image_url=revised_presigned,
             edit_instruction=instruction,
             artifact_check=artifact_dict,
         )
@@ -468,7 +475,7 @@ async def _maybe_run_edit_eval(
         append_score(
             history_path=Path("eval_history.jsonl"),
             scenario="edit",
-            prompt_version="v1",
+            prompt_version=get_active_version("edit"),
             vlm_eval={"total": vlm_result.total, "tag": vlm_result.tag},
             artifact_check=artifact_dict,
         )

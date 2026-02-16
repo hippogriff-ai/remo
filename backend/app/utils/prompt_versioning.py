@@ -72,6 +72,17 @@ def load_versioned_prompt(prompt_name: str, version: str | None = None) -> str:
     raise FileNotFoundError(f"No prompt file found: tried {versioned_path} and {base_path}")
 
 
+def strip_changelog_lines(text: str) -> str:
+    """Remove version changelog comments (e.g. '[v5: ...]') from prompt text.
+
+    These are developer metadata that waste tokens and add noise if sent
+    to the model. The prompt_versions.json manifest tracks versions instead.
+    """
+    lines = text.split("\n")
+    filtered = [ln for ln in lines if not (ln.startswith("[v") and ln.endswith("]"))]
+    return "\n".join(filtered).lstrip("\n")
+
+
 def list_versions(prompt_name: str) -> list[str]:
     """List all available versions for a prompt."""
     versions = []

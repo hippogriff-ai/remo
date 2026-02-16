@@ -344,8 +344,8 @@ class TestEditInstructions:
         assert "Region 2:" in result
         assert "Region 3:" in result
         # Verify position descriptions differ based on coordinates
-        assert "left side" in result   # 0.3 → left
-        assert "center" in result      # 0.6 → center
+        assert "left side" in result  # 0.3 → left
+        assert "center" in result  # 0.6 → center
         assert "right side" in result  # 0.9 → right
 
     def test_build_instructions_action_and_avoid_only(self):
@@ -1408,16 +1408,8 @@ class TestBuildChangelog:
 
         from app.activities.edit import _build_changelog
 
-        edit1 = (
-            "Region 1: left area\n"
-            "  ACTION: Replace\n"
-            "  INSTRUCTION: Replace lamp with pendant"
-        )
-        edit2 = (
-            "Region 2: upper-right area\n"
-            "  ACTION: Remove\n"
-            "  INSTRUCTION: Remove the shelf"
-        )
+        edit1 = "Region 1: left area\n  ACTION: Replace\n  INSTRUCTION: Replace lamp with pendant"
+        edit2 = "Region 2: upper-right area\n  ACTION: Remove\n  INSTRUCTION: Remove the shelf"
         history = [
             types.Content(role="user", parts=[types.Part(text=edit1)]),
             types.Content(role="model", parts=[types.Part(text="done")]),
@@ -1429,6 +1421,28 @@ class TestBuildChangelog:
         assert "Region 2" in result
         assert "pendant" in result
         assert "shelf" in result
+
+    def test_extracts_region_edits_without_action(self):
+        """_build_changelog detects edits even when ACTION field is absent."""
+        from google.genai import types
+
+        from app.activities.edit import _build_changelog
+
+        # ACTION is optional on AnnotationRegion, so edit instructions may not have it
+        edit_text = (
+            "Region 1: left area (30% from left, 50% from top, medium area)\n"
+            "  INSTRUCTION: Replace with a modern armchair"
+        )
+        history = [
+            types.Content(role="user", parts=[types.Part(text="context")]),
+            types.Content(role="model", parts=[types.Part(text="ok")]),
+            types.Content(role="user", parts=[types.Part(text=edit_text)]),
+            types.Content(role="model", parts=[types.Part(text="done")]),
+        ]
+        result = _build_changelog(history)
+        assert "PREVIOUS EDITS" in result
+        assert "Region 1" in result
+        assert "INSTRUCTION: Replace with a modern armchair" in result
 
 
 class TestCorruptR2History:
