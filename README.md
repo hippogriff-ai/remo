@@ -1,7 +1,7 @@
 # Remo
 
 AI-powered room redesign iOS app. Photograph a room, describe your style via an AI chat, receive photorealistic redesign options, iteratively refine with annotation-based editing, and get a shoppable product list.
-
+[Demo link](https://www.youtube.com/watch?v=cwqyoOuIJHI)
 ## Prerequisites
 
 - **Docker & Docker Compose** (PostgreSQL + Temporal)
