@@ -1,0 +1,3 @@
+# Eval results are per-machine, not committed
+*.jsonl
+baseline.json
