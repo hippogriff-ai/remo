@@ -601,6 +601,89 @@ def _build_search_queries(
     return [q.strip() for q in queries if q.strip()]
 
 
+@traceable(name="exa.build_queries_tagged", run_type="chain")
+def _build_search_queries_tagged(
+    item: dict[str, Any],
+    room_dimensions: RoomDimensions | None = None,
+    design_brief: DesignBrief | None = None,
+) -> list[tuple[str, list[str]]]:
+    """Build search queries with component tags for ablation tracking.
+
+    Returns list of (query_string, component_tags) tuples.
+    Same logic as _build_search_queries but preserves which components
+    contributed to each query for post-hoc analysis.
+    """
+    tag = item.get("source_tag", "IMAGE_ONLY")
+    category = item.get("category", "")
+    style = item.get("style", "")
+    material = item.get("material", "")
+    color = item.get("color", "")
+    description = item.get("description", "")
+    dims = item.get("estimated_dimensions", "")
+
+    brief_mood = ""
+    brief_room = ""
+    if design_brief:
+        brief_room = design_brief.room_type or ""
+        if design_brief.style_profile:
+            brief_mood = design_brief.style_profile.mood or ""
+
+    tagged: list[tuple[str, list[str]]] = []
+
+    # 1. Description query FIRST — highest signal, richest product language
+    if description:
+        tagged.append((description, ["description"]))
+
+    # 2. Style-contextualized query — combines brief mood + room + category
+    if brief_mood and brief_room:
+        tagged.append(
+            (f"{brief_mood} {brief_room} {category}", ["style_context", "brief_mood", "brief_room"])
+        )
+    elif brief_mood:
+        tagged.append((f"{brief_mood} {category}", ["style_context", "brief_mood"]))
+    elif brief_room:
+        tagged.append((f"{brief_room} {category} {style}", ["style_context", "brief_room"]))
+    elif style:
+        tagged.append((f"{category} {style} furniture", ["style_context"]))
+
+    # 3. Source reference (for anchored items — user's own words)
+    if tag in ("BRIEF_ANCHORED", "ITERATION_ANCHORED"):
+        ref = str(item.get("source_reference") or "")
+        if ref and ref != description:
+            tagged.append((ref, ["source_reference"]))
+
+    # 4. Material-focused query — targeted attribute combination
+    if material:
+        tagged.append((f"{category} {material} {color}".strip(), ["material_focused"]))
+
+    # 5. Dimension query — important for rugs, tables, etc.
+    if dims:
+        tagged.append((f"{category} {dims}", ["dimension_query"]))
+
+    # 5b. Color synonym expansion: one query swapping the primary color
+    if color:
+        synonym = _expand_color_synonym(color)
+        if synonym:
+            tagged.append((f"{category} {material} {synonym}", ["color_synonym"]))
+
+    # 6. Room-aware constrained query for primary furniture
+    if room_dimensions is not None:
+        constraint_key = _match_category(item)
+        if constraint_key:
+            constraints = _compute_room_constraints(room_dimensions)
+            cat_constraint = constraints.get(constraint_key)
+            if cat_constraint:
+                max_inches = cat_constraint.get("inches", "")
+                size_label = _room_size_label(room_dimensions)
+                if max_inches:
+                    tagged.append((
+                        f"{category} {material} under {max_inches} inches {size_label} room",
+                        ["room_constrained"],
+                    ))
+
+    return [(q.strip(), c) for q, c in tagged if q.strip()]
+
+
 EXA_MAX_RETRIES = 1
 EXA_RETRY_DELAY = 1.0
 
