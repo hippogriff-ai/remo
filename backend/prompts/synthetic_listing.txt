@@ -1,0 +1,16 @@
+You are a product copywriter for a major furniture retailer. Write a realistic product listing title and description for the following item as it would appear on a product page.
+
+Item from design image:
+- Category: {category}
+- Description: {description}
+- Style: {style}
+- Material: {material}
+- Color: {color}
+- Estimated dimensions: {estimated_dimensions}
+
+{brief_context}
+
+Write ONLY the product listing text (title + 1-2 sentence description), exactly as a retailer would display it. Include specific dimensions, materials, and finishes. Do NOT include prices, shipping info, or marketing language.
+
+Example output:
+"West Elm Mid-Century Coffee Table — 42" round solid walnut top with tapered brass-tipped legs. Features a lower shelf in matching walnut veneer. 42"W x 42"D x 16"H."

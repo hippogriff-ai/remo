@@ -48,6 +48,7 @@ from app.activities.shopping import (
     _parse_product_dims_cm,
     _price_to_cents,
     _room_size_label,
+    build_synthetic_listing_query,
     _search_exa,
     _strip_code_fence,
     _validate_extracted_items,
@@ -3545,3 +3546,20 @@ def test_tagged_queries_match_untagged():
     tagged = _build_search_queries_tagged(item)
     untagged = _build_search_queries(item)
     assert [q for q, _ in tagged] == untagged
+
+
+def test_synthetic_listing_prompt_formatting():
+    """Synthetic listing prompt includes all item fields."""
+    item = {
+        "category": "sofa",
+        "description": "ivory boucle sofa",
+        "style": "mid-century modern",
+        "material": "boucle",
+        "color": "ivory",
+        "estimated_dimensions": "84 inches",
+    }
+    prompt = build_synthetic_listing_query(item)
+    assert "sofa" in prompt
+    assert "boucle" in prompt
+    assert "ivory" in prompt
+    assert "84 inches" in prompt

@@ -684,6 +684,52 @@ def _build_search_queries_tagged(
     return [(q.strip(), c) for q, c in tagged if q.strip()]
 
 
+# ---------------------------------------------------------------------------
+# Score-Then-Search: synthetic product listing strategy
+# ---------------------------------------------------------------------------
+
+_synthetic_listing_prompt_cache: str | None = None
+
+
+def _load_synthetic_listing_prompt() -> str:
+    """Load the synthetic listing prompt template (cached after first read)."""
+    global _synthetic_listing_prompt_cache  # noqa: PLW0603
+    if _synthetic_listing_prompt_cache is None:
+        _synthetic_listing_prompt_cache = (PROMPTS_DIR / "synthetic_listing.txt").read_text()
+    return _synthetic_listing_prompt_cache
+
+
+def build_synthetic_listing_query(
+    item: dict[str, Any],
+    design_brief: DesignBrief | None = None,
+) -> str:
+    """Build a prompt that asks Claude to write a synthetic product listing.
+
+    The resulting text is used as an Exa neural search query — Exa's embedding
+    search finds pages most similar to this listing-shaped text.
+    """
+    template = _load_synthetic_listing_prompt()
+
+    brief_context = ""
+    if design_brief:
+        room = design_brief.room_type or ""
+        mood = ""
+        if design_brief.style_profile:
+            mood = design_brief.style_profile.mood or ""
+        if room or mood:
+            brief_context = f"Design context: {mood} {room} redesign".strip()
+
+    return template.format(
+        category=item.get("category", ""),
+        description=item.get("description", ""),
+        style=item.get("style", ""),
+        material=item.get("material", ""),
+        color=item.get("color", ""),
+        estimated_dimensions=item.get("estimated_dimensions", "unknown"),
+        brief_context=brief_context,
+    )
+
+
 EXA_MAX_RETRIES = 1
 EXA_RETRY_DELAY = 1.0
 
