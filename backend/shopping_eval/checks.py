@@ -122,3 +122,86 @@ def check_product_matches(
         matches=False,
         detail=f"None of {keywords[:3]} found in product data",
     )
+
+
+# --- Check 3: Dimension match ---
+
+from app.activities.shopping import (
+    _compute_room_constraints,
+    _match_category,
+    _parse_product_dims_cm,
+)
+from app.models.contracts import RoomDimensions
+
+
+@dataclass(frozen=True)
+class DimensionMatchResult:
+    """Result of dimension check. matches=None means inconclusive."""
+
+    matches: bool | None  # True=fits, False=too large, None=can't determine
+    detail: str
+
+
+def check_dimension_matches(
+    exa_dimensions_str: str | None,
+    target_item: dict,
+    room_dimensions: RoomDimensions | None,
+) -> DimensionMatchResult:
+    """Check 3: Do the product dimensions fit the room?
+
+    Reuses existing _parse_product_dims_cm and _compute_room_constraints
+    from shopping.py. Returns None (inconclusive) when dimensions can't
+    be parsed or room data is unavailable. Cost: $0.
+    """
+    if room_dimensions is None:
+        return DimensionMatchResult(matches=None, detail="No room dimensions")
+
+    if not exa_dimensions_str:
+        return DimensionMatchResult(matches=None, detail="No product dimensions")
+
+    constraint_key = _match_category(target_item)
+    if not constraint_key:
+        return DimensionMatchResult(matches=None, detail="Category has no size constraints")
+
+    constraints = _compute_room_constraints(room_dimensions)
+    cat_constraint = constraints.get(constraint_key)
+    if not cat_constraint:
+        return DimensionMatchResult(matches=None, detail="No constraint for category")
+
+    item_category = target_item.get("category")
+    parsed = _parse_product_dims_cm(exa_dimensions_str, category=item_category)
+    if not parsed:
+        return DimensionMatchResult(matches=None, detail="Could not parse dimensions")
+
+    is_rug = constraint_key == "rug"
+    if is_rug:
+        max_w = float(cat_constraint.get("width_cm", 0))
+        max_l = float(cat_constraint.get("length_cm", 0))
+        if max_w <= 0 or max_l <= 0:
+            return DimensionMatchResult(matches=None, detail="Invalid rug constraints")
+        rug_dims = sorted(parsed[:2])
+        rug_limits = sorted([max_w, max_l])
+        ratio = max(
+            rug_dims[0] / rug_limits[0] if rug_limits[0] > 0 else 0,
+            rug_dims[1] / rug_limits[1] if rug_limits[1] > 0 else 0,
+        )
+    else:
+        max_cm = float(
+            cat_constraint.get("max_width_cm")
+            or cat_constraint.get("max_length_cm")
+            or cat_constraint.get("max_height_cm")
+            or "0"
+        )
+        if max_cm <= 0:
+            return DimensionMatchResult(matches=None, detail="Invalid constraint")
+        ratio = max(parsed) / max_cm
+
+    if ratio <= 1.15:  # 15% tolerance
+        return DimensionMatchResult(
+            matches=True,
+            detail=f"Ratio {ratio:.2f} <= 1.15 (fits with tolerance)",
+        )
+    return DimensionMatchResult(
+        matches=False,
+        detail=f"Ratio {ratio:.2f} > 1.15 (exceeds room constraint)",
+    )

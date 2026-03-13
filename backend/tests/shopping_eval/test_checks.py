@@ -102,3 +102,60 @@ class TestProductMatches:
             target_item={"category": "sofa", "material": "leather"},
         )
         assert result.matches is False
+
+
+# --- Check 3: Dimension match ---
+
+from shopping_eval.checks import check_dimension_matches
+from app.models.contracts import RoomDimensions
+
+
+class TestDimensionMatches:
+    def test_sofa_fits(self):
+        """Sofa within room constraint → matches."""
+        dims = RoomDimensions(width_m=4.0, length_m=5.0, height_m=2.7)
+        result = check_dimension_matches(
+            exa_dimensions_str="84x36x32 inches",
+            target_item={"category": "sofa"},
+            room_dimensions=dims,
+        )
+        assert result.matches is True
+
+    def test_sofa_too_large(self):
+        """Sofa exceeds room constraint → does not match."""
+        dims = RoomDimensions(width_m=2.5, length_m=3.0, height_m=2.7)
+        result = check_dimension_matches(
+            exa_dimensions_str="120x40x32 inches",
+            target_item={"category": "sofa"},
+            room_dimensions=dims,
+        )
+        assert result.matches is False
+
+    def test_no_dimensions(self):
+        """No dimension string → None (inconclusive, not False)."""
+        dims = RoomDimensions(width_m=4.0, length_m=5.0, height_m=2.7)
+        result = check_dimension_matches(
+            exa_dimensions_str=None,
+            target_item={"category": "sofa"},
+            room_dimensions=dims,
+        )
+        assert result.matches is None
+
+    def test_no_room_dimensions(self):
+        """No room dimensions → None (can't check)."""
+        result = check_dimension_matches(
+            exa_dimensions_str="84x36 inches",
+            target_item={"category": "sofa"},
+            room_dimensions=None,
+        )
+        assert result.matches is None
+
+    def test_unconstrained_category(self):
+        """Category without size constraints (e.g., planter) → None."""
+        dims = RoomDimensions(width_m=4.0, length_m=5.0, height_m=2.7)
+        result = check_dimension_matches(
+            exa_dimensions_str="12x12x18 inches",
+            target_item={"category": "planter"},
+            room_dimensions=dims,
+        )
+        assert result.matches is None
