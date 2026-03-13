@@ -59,3 +59,46 @@ async def test_link_loads_empty_url():
     """Empty URL → False."""
     result = await check_link_loads("")
     assert result is False
+
+
+# --- Check 2: Product match ---
+
+from shopping_eval.checks import check_product_matches
+
+
+class TestProductMatches:
+    def test_category_match(self):
+        """Exa summary category contains target category."""
+        result = check_product_matches(
+            exa_summary={"product_name": "Modern Walnut Coffee Table", "material": "walnut"},
+            exa_text="Beautiful mid-century coffee table made from solid walnut.",
+            target_item={"category": "coffee table", "material": "walnut"},
+        )
+        assert result.matches is True
+
+    def test_category_mismatch(self):
+        """Product name doesn't match target category at all."""
+        result = check_product_matches(
+            exa_summary={"product_name": "Scented Candle Set", "material": "wax"},
+            exa_text="Luxury candle gift set",
+            target_item={"category": "coffee table", "material": "walnut"},
+        )
+        assert result.matches is False
+
+    def test_empty_summary(self):
+        """No summary data → falls back to text matching."""
+        result = check_product_matches(
+            exa_summary={},
+            exa_text="Walnut coffee table with tapered legs, 48 inches wide",
+            target_item={"category": "coffee table", "material": "walnut"},
+        )
+        assert result.matches is True
+
+    def test_no_data(self):
+        """No summary or text → False."""
+        result = check_product_matches(
+            exa_summary={},
+            exa_text="",
+            target_item={"category": "sofa", "material": "leather"},
+        )
+        assert result.matches is False
