@@ -12,15 +12,19 @@ from __future__ import annotations
 import json
 from collections import defaultdict
 from pathlib import Path
+from typing import Literal
 
 from app.activities.shopping import _RETAILER_DOMAINS, _build_search_queries_tagged
 from app.models.contracts import DesignBrief, RoomDimensions
 
 from .ablation import append_ablation
 from .models import BenchmarkCase, BenchmarkReport, TrialResult
+from .synthetic import generate_synthetic_listing
 from .trial_runner import run_trial
 
 FIXTURES_DIR = Path(__file__).parent / "fixtures"
+
+Strategy = Literal["tagged", "synthetic", "both"]
 
 
 def load_benchmark_cases(
@@ -62,13 +66,24 @@ async def run_benchmark(
     cases: list[BenchmarkCase] | None = None,
     *,
     skip_link_check: bool = False,
+    strategy: Strategy = "tagged",
+    anthropic_api_key: str | None = None,
 ) -> BenchmarkReport:
     """Run the full benchmark suite and produce an aggregate report.
 
-    For each case, builds queries using _build_search_queries_tagged, runs each
-    through SearchTrialRunner, and aggregates the 3 deterministic metrics.
-    Optionally appends ablation data for each trial.
+    strategy controls which query builders are exercised:
+        - "tagged"    — only _build_search_queries_tagged (default, no Claude calls)
+        - "synthetic" — only Score-Then-Search via generate_synthetic_listing
+        - "both"      — both, so tagged and synthetic queries can be A/B'd in one run
+
+    For strategies that include "synthetic", anthropic_api_key is required. Set
+    SYNTHETIC_LISTING_CACHE_DIR to make Claude calls cheap on re-run.
     """
+    if strategy in ("synthetic", "both") and not anthropic_api_key:
+        raise ValueError(
+            f"strategy={strategy!r} requires anthropic_api_key (set ANTHROPIC_API_KEY)"
+        )
+
     if cases is None:
         cases = load_benchmark_cases()
 
@@ -81,11 +96,20 @@ async def run_benchmark(
         brief = _deserialize_brief(case.design_brief_json)
         dims = _deserialize_dims(case.room_dimensions_json)
 
-        tagged_queries = _build_search_queries_tagged(
-            case.item, room_dimensions=dims, design_brief=brief
-        )
+        queries: list[tuple[str, list[str]]] = []
+        if strategy in ("tagged", "both"):
+            queries.extend(
+                _build_search_queries_tagged(case.item, room_dimensions=dims, design_brief=brief)
+            )
+        if strategy in ("synthetic", "both"):
+            assert anthropic_api_key is not None
+            listing = await generate_synthetic_listing(
+                case.item, anthropic_api_key=anthropic_api_key, design_brief=brief
+            )
+            if listing:
+                queries.append((listing, ["synthetic_listing"]))
 
-        for query, components in tagged_queries:
+        for query, components in queries:
             trial = await run_trial(
                 query=query,
                 query_components=components,
