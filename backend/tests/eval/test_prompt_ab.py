@@ -66,14 +66,7 @@ BATHROOM_BRIEF = DesignBrief(
 
 pytestmark = [
     pytest.mark.integration,
-    pytest.mark.skipif(
-        not os.environ.get("GOOGLE_AI_API_KEY"),
-        reason="GOOGLE_AI_API_KEY not set",
-    ),
-    pytest.mark.skipif(
-        not os.environ.get("ANTHROPIC_API_KEY"),
-        reason="ANTHROPIC_API_KEY not set (needed for VLM eval)",
-    ),
+    pytest.mark.usefixtures("load_env"),
 ]
 
 
@@ -486,7 +479,7 @@ def _run_ab_comparison(
 
         return a_all, b_all
 
-    return asyncio.get_event_loop().run_until_complete(_run())
+    return asyncio.run(_run())
 
 
 def _print_bootstrap_summary(
