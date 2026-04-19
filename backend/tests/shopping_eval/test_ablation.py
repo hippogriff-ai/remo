@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
-from pathlib import Path
+from typing import TYPE_CHECKING
 
 from shopping_eval.ablation import append_ablation, load_ablation_report
 from shopping_eval.models import CheckResult, TrialResult
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 
 def _make_trial(

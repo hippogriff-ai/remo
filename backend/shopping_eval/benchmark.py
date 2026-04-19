@@ -12,7 +12,6 @@ from __future__ import annotations
 import json
 from collections import defaultdict
 from pathlib import Path
-from typing import Any
 
 from app.activities.shopping import _RETAILER_DOMAINS, _build_search_queries_tagged
 from app.models.contracts import DesignBrief, RoomDimensions
@@ -82,7 +81,9 @@ async def run_benchmark(
         brief = _deserialize_brief(case.design_brief_json)
         dims = _deserialize_dims(case.room_dimensions_json)
 
-        tagged_queries = _build_search_queries_tagged(case.item, room_dimensions=dims, design_brief=brief)
+        tagged_queries = _build_search_queries_tagged(
+            case.item, room_dimensions=dims, design_brief=brief
+        )
 
         for query, components in tagged_queries:
             trial = await run_trial(

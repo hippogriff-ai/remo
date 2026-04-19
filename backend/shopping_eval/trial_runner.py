@@ -7,15 +7,17 @@ from __future__ import annotations
 
 import asyncio
 import time
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import httpx
 
 from app.activities.shopping import _search_exa
-from app.models.contracts import RoomDimensions
 
 from .checks import check_dimension_matches, check_link_loads, check_product_matches
 from .models import CheckResult, TrialResult
+
+if TYPE_CHECKING:
+    from app.models.contracts import RoomDimensions
 
 
 async def run_trial(
@@ -122,9 +124,7 @@ async def run_trial(
         results_count=len(check_results),
         check_results=check_results,
         link_alive_rate=(
-            sum(1 for c in link_checks if c.link_loads) / len(link_checks)
-            if link_checks
-            else 0.0
+            sum(1 for c in link_checks if c.link_loads) / len(link_checks) if link_checks else 0.0
         ),
         product_match_rate=(
             sum(1 for c in product_checks if c.product_matches) / len(product_checks)

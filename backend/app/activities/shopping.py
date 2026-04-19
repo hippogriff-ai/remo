@@ -676,10 +676,12 @@ def _build_search_queries_tagged(
                 max_inches = cat_constraint.get("inches", "")
                 size_label = _room_size_label(room_dimensions)
                 if max_inches:
-                    tagged.append((
-                        f"{category} {material} under {max_inches} inches {size_label} room",
-                        ["room_constrained"],
-                    ))
+                    tagged.append(
+                        (
+                            f"{category} {material} under {max_inches} inches {size_label} room",
+                            ["room_constrained"],
+                        )
+                    )
 
     return [(q.strip(), c) for q, c in tagged if q.strip()]
 

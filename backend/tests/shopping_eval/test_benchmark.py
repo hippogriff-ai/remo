@@ -2,13 +2,16 @@
 
 from __future__ import annotations
 
-from pathlib import Path
+from typing import TYPE_CHECKING
 from unittest.mock import AsyncMock, patch
 
 import pytest
 
 from shopping_eval.benchmark import load_benchmark_cases, run_benchmark
 from shopping_eval.models import BenchmarkCase, BenchmarkReport, CheckResult, TrialResult
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 
 def test_load_benchmark_cases():

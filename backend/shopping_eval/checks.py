@@ -9,8 +9,18 @@ Three checks, cheapest first:
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
 import httpx
+
+from app.activities.shopping import (
+    _compute_room_constraints,
+    _match_category,
+    _parse_product_dims_cm,
+)
+
+if TYPE_CHECKING:
+    from app.models.contracts import RoomDimensions
 
 _LINK_CHECK_TIMEOUT = 5.0
 
@@ -125,13 +135,6 @@ def check_product_matches(
 
 
 # --- Check 3: Dimension match ---
-
-from app.activities.shopping import (
-    _compute_room_constraints,
-    _match_category,
-    _parse_product_dims_cm,
-)
-from app.models.contracts import RoomDimensions
 
 
 @dataclass(frozen=True)

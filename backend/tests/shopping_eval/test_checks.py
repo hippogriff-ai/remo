@@ -6,7 +6,8 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from shopping_eval.checks import check_link_loads
+from app.models.contracts import RoomDimensions
+from shopping_eval.checks import check_dimension_matches, check_link_loads, check_product_matches
 
 
 @pytest.mark.asyncio
@@ -63,8 +64,6 @@ async def test_link_loads_empty_url():
 
 # --- Check 2: Product match ---
 
-from shopping_eval.checks import check_product_matches
-
 
 class TestProductMatches:
     def test_category_match(self):
@@ -105,9 +104,6 @@ class TestProductMatches:
 
 
 # --- Check 3: Dimension match ---
-
-from shopping_eval.checks import check_dimension_matches
-from app.models.contracts import RoomDimensions
 
 
 class TestDimensionMatches:

@@ -9,10 +9,12 @@ from __future__ import annotations
 
 import json
 from collections import defaultdict
-from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
-from .models import TrialResult
+if TYPE_CHECKING:
+    from pathlib import Path
+
+    from .models import TrialResult
 
 
 def append_ablation(
@@ -45,7 +47,9 @@ def load_ablation_report(
     Returns:
         {
             "sofa": {
-                "description": {"total": 10, "link_rate": 0.8, "product_rate": 0.6, "dim_rate": 0.4},
+                "description": {
+                    "total": 10, "link_rate": 0.8, "product_rate": 0.6, "dim_rate": 0.4,
+                },
                 "material": {"total": 5, "link_rate": 0.9, ...},
             },
             ...
@@ -55,7 +59,9 @@ def load_ablation_report(
         return {}
 
     acc: dict[str, dict[str, dict[str, Any]]] = defaultdict(
-        lambda: defaultdict(lambda: {"total": 0, "link_sum": 0.0, "product_sum": 0.0, "dim_sum": 0.0})
+        lambda: defaultdict(
+            lambda: {"total": 0, "link_sum": 0.0, "product_sum": 0.0, "dim_sum": 0.0}
+        )
     )
 
     with open(log_path) as f:

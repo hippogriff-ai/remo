@@ -10,11 +10,11 @@ class CheckResult:
     """Result of a single deterministic check on one search result."""
 
     url: str
-    link_loads: bool | None = None          # Check 1: HTTP HEAD returned 200
-    product_matches: bool | None = None     # Check 2: product at URL matches intended item
-    dimension_matches: bool | None = None   # Check 3: dimensions within room constraints
-    match_detail: str = ""                  # Why product_matches passed/failed
-    dimension_detail: str = ""              # Why dimension_matches passed/failed
+    link_loads: bool | None = None  # Check 1: HTTP HEAD returned 200
+    product_matches: bool | None = None  # Check 2: product at URL matches intended item
+    dimension_matches: bool | None = None  # Check 3: dimensions within room constraints
+    match_detail: str = ""  # Why product_matches passed/failed
+    dimension_detail: str = ""  # Why dimension_matches passed/failed
 
 
 @dataclass(frozen=True)
@@ -22,13 +22,13 @@ class TrialResult:
     """Outcome of running one query variant for one item through Exa + checks."""
 
     query: str
-    query_components: list[str]             # Which components built this query
-    search_type: str                        # "auto", "deep", "keyword"
+    query_components: list[str]  # Which components built this query
+    search_type: str  # "auto", "deep", "keyword"
     results_count: int
     check_results: list[CheckResult]
-    link_alive_rate: float                  # Fraction of results where link loads
-    product_match_rate: float               # Fraction where product actually matches
-    dimension_match_rate: float             # Fraction where dimensions match (or N/A)
+    link_alive_rate: float  # Fraction of results where link loads
+    product_match_rate: float  # Fraction where product actually matches
+    dimension_match_rate: float  # Fraction where dimensions match (or N/A)
     latency_ms: int = 0
 
 
@@ -36,14 +36,14 @@ class TrialResult:
 class BenchmarkCase:
     """A single test case: one extracted item + context for searching."""
 
-    item_id: str                            # Unique ID for this test case
-    item: dict                              # Extracted item dict (category, description, etc.)
-    design_brief_json: dict | None = None   # Serialized DesignBrief
+    item_id: str  # Unique ID for this test case
+    item: dict  # Extracted item dict (category, description, etc.)
+    design_brief_json: dict | None = None  # Serialized DesignBrief
     room_dimensions_json: dict | None = None
     expected_category: str = ""
     expected_material: str = ""
     expected_dimensions: str = ""
-    gold_url: str | None = None             # Optional known-good product URL
+    gold_url: str | None = None  # Optional known-good product URL
 
 
 @dataclass
