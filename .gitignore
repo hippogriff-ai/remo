@@ -50,6 +50,9 @@ htmlcov/
 .pytest_cache/
 backend/tests/fixtures/real_lidar_scan.json
 
+# Eval run artifacts (appended to on every test run — not source-of-truth)
+backend/tests/eval/*_history.jsonl
+
 # Maestro screenshots (test artifacts)
 *.png
 # But keep the app icon
