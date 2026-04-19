@@ -139,7 +139,8 @@ Reference docs in `specs/` (tracked). Agent prompts in `specs/PROMPT_*.md` (giti
 | `specs/ARCHITECTURE_AGENT_WORKFLOW.md` | Agent pipeline architecture: eager analysis, intake agent, shopping pipeline, room intelligence |
 | `specs/DESIGN_INTELLIGENCE.md` | Design reasoning reference for intake + shopping agents |
 | `specs/RESEARCH_GEMINI_PROMPTING.md` | Gemini 3 Pro Image prompt engineering research (quality eval, optimization) |
-| `docs/EVAL_PIPELINE.md` | Eval pipeline guide (setup, usage, metrics, rubrics) |
+| `docs/EVAL_PIPELINE.md` | Image-gen eval pipeline guide (setup, usage, metrics, rubrics) |
+| `docs/SHOPPING_EVAL.md` | Shopping-search feedback loop: metrics, CLI, Score-Then-Search strategy |
 
 ## Key Contracts
 
