@@ -10,6 +10,7 @@ specs/PROMPT_*.md
 
 # Planning scratch files
 specs/.planning/
+docs/superpowers/
 
 # Python
 __pycache__/
