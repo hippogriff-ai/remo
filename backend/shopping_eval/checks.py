@@ -8,6 +8,7 @@ Three checks, cheapest first:
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
@@ -122,7 +123,10 @@ def check_product_matches(
         keywords = [target_category]
 
     for keyword in keywords:
-        if keyword in corpus:
+        # Word-boundary match so short keywords like "art" (for wall art) don't
+        # spuriously match "cart" — benchmark runs always add include_text=
+        # ["add to cart"] to Exa, so every corpus contains that token.
+        if re.search(rf"\b{re.escape(keyword)}\b", corpus):
             return ProductMatchResult(
                 matches=True,
                 detail=f"Found '{keyword}' in product data",

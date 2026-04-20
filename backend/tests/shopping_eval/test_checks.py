@@ -102,6 +102,29 @@ class TestProductMatches:
         )
         assert result.matches is False
 
+    def test_wall_art_does_not_match_cart(self):
+        """Regression: "art" keyword must not match "cart" in "add to cart".
+
+        run_benchmark filters Exa results with include_text=["add to cart"],
+        so every corpus contains that phrase. Substring matching used to
+        spuriously accept any page for wall art queries.
+        """
+        result = check_product_matches(
+            exa_summary={"product_name": "Scented Candle Set"},
+            exa_text="Luxury candle gift set. Add to cart to purchase.",
+            target_item={"category": "wall art"},
+        )
+        assert result.matches is False
+
+    def test_wall_art_matches_actual_art(self):
+        """Sanity: real art product still matches after the word-boundary fix."""
+        result = check_product_matches(
+            exa_summary={"product_name": "Framed Canvas Art Print"},
+            exa_text="Modern abstract art print, 24x36 inches.",
+            target_item={"category": "wall art"},
+        )
+        assert result.matches is True
+
 
 # --- Check 3: Dimension match ---
 
