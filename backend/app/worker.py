@@ -17,9 +17,12 @@ from temporalio.contrib.pydantic import pydantic_data_converter
 from temporalio.worker import Worker
 
 from app.activities.purge import purge_project_data
+from app.activities.tile_cutsheet import generate_cut_sheet_pdf
+from app.activities.tile_render import render_tile_design
 from app.config import settings
 from app.logging import configure_logging
 from app.workflows.design_project import DesignProjectWorkflow
+from app.workflows.tile_project import TileProjectWorkflow
 
 logger = structlog.get_logger()
 
@@ -56,12 +59,15 @@ def _load_activities() -> list:
         analyze_room_photos,
         load_style_skill,
         purge_project_data,
+        # Tile-mode activities — render + cutsheet are stubs until PR 5.
+        render_tile_design,
+        generate_cut_sheet_pdf,
     ]
 
 
 ACTIVITIES = _load_activities()
 
-WORKFLOWS = [DesignProjectWorkflow]
+WORKFLOWS = [DesignProjectWorkflow, TileProjectWorkflow]
 
 
 async def create_temporal_client() -> Client:
