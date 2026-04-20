@@ -36,11 +36,28 @@ auto-accept or auto-revert. You own that decision.
 | `product_match_rate` | Fraction where Exa's `product_name` / page text contains a category keyword (`sofa`, `coffee table`, …) | Query returns the wrong *type* of product (candle when asking for a sofa) |
 | `dimension_match_rate` | Fraction where parsed product dimensions fit the room constraint within 15% tolerance | Query returns a sofa that won't fit the room |
 
-**Inconclusive handling:** dimension-match returns `None` when the product has
-no dimension string, the category has no size constraint (lamps, pillows, wall
-art, planter), or room data is missing. `None` is *excluded from the average*
-— so low `dimension_match_rate` can mean either "products don't fit" or
-"effective N is small." Check `per_category.num_queries` to disambiguate.
+**Inconclusive vs. failure — CRITICAL DISTINCTION.** Each metric returns
+`None` at the trial level when the check never ran (no results for the query,
+link check skipped, no parsable dimensions, etc.) and `0.0` when the check
+ran and every result failed. These are *not* the same:
+
+- Trial-level rates are `float | None`. `None` bubbles up.
+- Benchmark and ablation aggregates exclude `None` from their means — so
+  `avg_dimension_match_rate=None` means "never evaluated for any trial,"
+  `avg_dimension_match_rate=0.0` means "evaluated and nothing fit."
+- Reports render `None` as `n/a`. Ablation sorts `None` rows to the bottom
+  so they don't outrank components with real signal.
+- `compare` treats a `None` on either side as "skipped: not evaluated" for
+  that metric — it will not factor into the IMPROVED/REGRESSED verdict.
+  If *every* metric is skipped, the verdict is `NO SIGNAL`.
+
+Common causes of `None`:
+- `dimension_match_rate`: category has no size constraint (lamps, pillows,
+  wall art, planter), products lack parsable dimension strings, or the
+  benchmark case has no `room_dimensions_json`.
+- `link_alive_rate`: trial was run with `skip_link_check=True`, or Exa
+  returned zero results.
+- `product_match_rate`: Exa returned zero results.
 
 Product-match is keyword-only on purpose. Style / color / material match
 belongs to the live product-scorer; this check only catches gross category
@@ -65,6 +82,14 @@ python -m shopping_eval baseline --strategy both        # tagged + synthetic in 
 #   synthetic  → only generate_synthetic_listing (Claude + Exa)
 #   both       → both, so ablation can A/B them against each other
 ```
+
+**Per-strategy Exa `search_type`:**
+
+- Tagged queries use `"deep"` when `item.search_priority == "HIGH"`, otherwise
+  `"auto"` — mirrors production behavior.
+- Synthetic queries force `"neural"` regardless of priority. Score-Then-Search
+  is a neural-retrieval strategy; routing through `"auto"` would let Exa fall
+  back to keyword mode and measure the wrong thing.
 
 ### Required env vars
 
@@ -91,16 +116,26 @@ backend/shopping_eval/results/
 
 ```
 SOFA:
-  description            n=10  link=90%  product=80%
-  material_focused       n=10  link=90%  product=60%
-  style_context          n=10  link=90%  product=50%
-  room_constrained       n=10  link=90%  product=40%
+  description            n= 10  link= 90.0%  product= 80.0%
+  material_focused       n= 10  link= 90.0%  product= 60.0%
+  style_context          n= 10  link= 90.0%  product= 50.0%
+  room_constrained       n= 10  link= 90.0%  product= 40.0%
+MIRROR:
+  description            n=  6  link= 83.3%  product= 66.7%
+  synthetic_listing      n=  6  link=100.0%  product=    n/a
 ```
 
-Rows are sorted by `product_rate` descending. Higher = that component pulls
-better products for this category. Use this to spot wins (keep the top
-component, try harder on the bottom) and hedge against overfitting (a
-component that helps sofas but tanks lamps is a net neutral).
+Rows are sorted by `product_rate` descending, with `n/a` pushed to the
+bottom. Higher = that component pulls better products for this category.
+Each row also has hidden `link_n`, `product_n`, `dim_n` fields in the raw
+`load_ablation_report()` output; the printed CLI only shows the aggregate
+`n` (total trials that logged this component, regardless of metric), so a
+`n/a` rate means every single one of those `n` trials had that metric
+inconclusive — not that they all failed.
+
+Use this to spot wins (keep the top component, try harder on the bottom)
+and hedge against overfitting (a component that helps sofas but tanks
+lamps is a net neutral).
 
 Component names come straight from `_build_search_queries_tagged`:
 `description`, `style_context`, `brief_mood`, `brief_room`, `source_reference`,

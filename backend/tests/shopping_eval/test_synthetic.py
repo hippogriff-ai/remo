@@ -127,3 +127,14 @@ async def test_run_benchmark_both_strategy_emits_synthetic_query(tmp_path: Path)
         call.kwargs.get("query") == "Synthetic listing text for test item"
         for call in synthetic_calls
     )
+    # Score-Then-Search must hit Exa's neural retrieval, not whatever "auto" routes to.
+    assert all(call.kwargs.get("search_type") == "neural" for call in synthetic_calls)
+
+    tagged_calls = [
+        call
+        for call in mock_trial.await_args_list
+        if call.kwargs.get("query_components") != ["synthetic_listing"]
+    ]
+    # Tagged queries keep the existing priority-based search_type.
+    assert tagged_calls
+    assert all(call.kwargs.get("search_type") in ("auto", "deep") for call in tagged_calls)

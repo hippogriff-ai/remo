@@ -19,16 +19,23 @@ class CheckResult:
 
 @dataclass(frozen=True)
 class TrialResult:
-    """Outcome of running one query variant for one item through Exa + checks."""
+    """Outcome of running one query variant for one item through Exa + checks.
+
+    Rate fields are ``None`` when the underlying check produced no signal
+    (e.g., every result was inconclusive, link check skipped, dimensions
+    unparsable). Callers MUST distinguish ``None`` ("not evaluated") from
+    ``0.0`` ("evaluated, every result failed") — treating them the same skews
+    averages downward and can make passing runs look like regressions.
+    """
 
     query: str
     query_components: list[str]  # Which components built this query
-    search_type: str  # "auto", "deep", "keyword"
+    search_type: str  # "auto", "deep", "neural", "keyword"
     results_count: int
     check_results: list[CheckResult]
-    link_alive_rate: float  # Fraction of results where link loads
-    product_match_rate: float  # Fraction where product actually matches
-    dimension_match_rate: float  # Fraction where dimensions match (or N/A)
+    link_alive_rate: float | None  # None → link check skipped or no results
+    product_match_rate: float | None  # None → no product data on any result
+    dimension_match_rate: float | None  # None → no result had parsable dims
     latency_ms: int = 0
 
 
@@ -72,12 +79,17 @@ class AblationEntry:
 
 @dataclass
 class BenchmarkReport:
-    """Aggregate results from running the full benchmark suite."""
+    """Aggregate results from running the full benchmark suite.
+
+    ``avg_*_rate`` is ``None`` when every trial was inconclusive for that
+    metric (e.g., every case's category is unconstrained for dimension
+    checks, or link checks were skipped wholesale).
+    """
 
     num_cases: int
     total_queries: int
-    avg_link_alive_rate: float
-    avg_product_match_rate: float
-    avg_dimension_match_rate: float
-    per_category: dict[str, dict[str, float]] = field(default_factory=dict)
+    avg_link_alive_rate: float | None
+    avg_product_match_rate: float | None
+    avg_dimension_match_rate: float | None
+    per_category: dict[str, dict[str, float | None]] = field(default_factory=dict)
     trial_results: list[TrialResult] = field(default_factory=list)

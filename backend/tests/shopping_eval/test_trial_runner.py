@@ -62,5 +62,7 @@ async def test_run_trial_no_results():
         )
 
     assert result.results_count == 0
-    assert result.link_alive_rate == 0.0
-    assert result.product_match_rate == 0.0
+    # No results means "not evaluated", not "every check failed" — all rates None
+    assert result.link_alive_rate is None
+    assert result.product_match_rate is None
+    assert result.dimension_match_rate is None

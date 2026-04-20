@@ -72,9 +72,9 @@ async def run_trial(
             search_type=search_type,
             results_count=0,
             check_results=[],
-            link_alive_rate=0.0,
-            product_match_rate=0.0,
-            dimension_match_rate=0.0,
+            link_alive_rate=None,
+            product_match_rate=None,
+            dimension_match_rate=None,
             latency_ms=elapsed,
         )
 
@@ -124,17 +124,17 @@ async def run_trial(
         results_count=len(check_results),
         check_results=check_results,
         link_alive_rate=(
-            sum(1 for c in link_checks if c.link_loads) / len(link_checks) if link_checks else 0.0
+            sum(1 for c in link_checks if c.link_loads) / len(link_checks) if link_checks else None
         ),
         product_match_rate=(
             sum(1 for c in product_checks if c.product_matches) / len(product_checks)
             if product_checks
-            else 0.0
+            else None
         ),
         dimension_match_rate=(
             sum(1 for c in dim_checks if c.dimension_matches) / len(dim_checks)
             if dim_checks
-            else 0.0
+            else None
         ),
         latency_ms=elapsed,
     )

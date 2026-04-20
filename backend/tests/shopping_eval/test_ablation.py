@@ -61,3 +61,33 @@ def test_empty_log(tmp_path: Path):
     log_path = tmp_path / "ablation.jsonl"
     report = load_ablation_report(log_path)
     assert report == {}
+
+
+def test_inconclusive_metrics_report_none_not_zero(tmp_path: Path):
+    """A component where every trial had dimension_match_rate=None reports dim_rate=None.
+
+    Regression test: the ablation report must distinguish "never evaluated"
+    from "evaluated, always failed".
+    """
+    log_path = tmp_path / "ablation.jsonl"
+
+    trial = TrialResult(
+        query="test query",
+        query_components=["description"],
+        search_type="auto",
+        results_count=1,
+        check_results=[CheckResult(url="https://a.com", link_loads=True, product_matches=True)],
+        link_alive_rate=1.0,
+        product_match_rate=1.0,
+        dimension_match_rate=None,
+    )
+    append_ablation(log_path, trial, {"category": "mirror"})
+    append_ablation(log_path, trial, {"category": "mirror"})
+
+    report = load_ablation_report(log_path)
+    bucket = report["mirror"]["description"]
+    assert bucket["total"] == 2
+    assert bucket["link_rate"] == 1.0
+    assert bucket["link_n"] == 2
+    assert bucket["dim_rate"] is None
+    assert bucket["dim_n"] == 0

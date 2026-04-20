@@ -115,7 +115,7 @@ async def run_benchmark(
                 query_components=components,
                 target_item=case.item,
                 exa_api_key=exa_api_key,
-                search_type="deep" if case.item.get("search_priority") == "HIGH" else "auto",
+                search_type=_search_type_for(case.item, components),
                 room_dimensions=dims,
                 include_domains=_RETAILER_DOMAINS,
                 include_text=["add to cart"],
@@ -124,29 +124,34 @@ async def run_benchmark(
 
             all_trials.append(trial)
             category = (case.item.get("category") or "unknown").lower()
-            per_category[category]["link"].append(trial.link_alive_rate)
-            per_category[category]["product"].append(trial.product_match_rate)
-            per_category[category]["dim"].append(trial.dimension_match_rate)
+            if trial.link_alive_rate is not None:
+                per_category[category]["link"].append(trial.link_alive_rate)
+            if trial.product_match_rate is not None:
+                per_category[category]["product"].append(trial.product_match_rate)
+            if trial.dimension_match_rate is not None:
+                per_category[category]["dim"].append(trial.dimension_match_rate)
 
             if ablation_log_path:
                 append_ablation(ablation_log_path, trial, case.item)
 
     n_cases = len(cases)
 
-    def _avg(vals: list[float]) -> float:
-        return round(sum(vals) / len(vals), 3) if vals else 0.0
+    def _avg(vals: list[float]) -> float | None:
+        """Return rounded mean, or None when no trial produced signal."""
+        return round(sum(vals) / len(vals), 3) if vals else None
 
-    all_link = [t.link_alive_rate for t in all_trials]
-    all_product = [t.product_match_rate for t in all_trials]
-    all_dim = [t.dimension_match_rate for t in all_trials]
+    all_link = [t.link_alive_rate for t in all_trials if t.link_alive_rate is not None]
+    all_product = [t.product_match_rate for t in all_trials if t.product_match_rate is not None]
+    all_dim = [t.dimension_match_rate for t in all_trials if t.dimension_match_rate is not None]
 
-    cat_report: dict[str, dict[str, float]] = {}
+    cat_report: dict[str, dict[str, float | None]] = {}
     for cat, rates in per_category.items():
         cat_report[cat] = {
             "link_rate": _avg(rates["link"]),
             "product_rate": _avg(rates["product"]),
             "dim_rate": _avg(rates["dim"]),
-            "num_queries": len(rates["link"]),
+            # num_queries counts trials that contributed to at least one metric
+            "num_queries": max(len(rates["link"]), len(rates["product"]), len(rates["dim"])),
         }
 
     return BenchmarkReport(
@@ -158,3 +163,16 @@ async def run_benchmark(
         per_category=cat_report,
         trial_results=all_trials,
     )
+
+
+def _search_type_for(item: dict, components: list[str]) -> str:
+    """Pick the Exa search_type for a given query.
+
+    Score-Then-Search queries are listing-shaped text meant for Exa's neural
+    embedding search — forcing search_type="neural" ensures we test the
+    retrieval mode the strategy was designed around, not whatever "auto"
+    routes to on the day.
+    """
+    if "synthetic_listing" in components:
+        return "neural"
+    return "deep" if item.get("search_priority") == "HIGH" else "auto"

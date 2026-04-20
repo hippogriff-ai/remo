@@ -106,27 +106,34 @@ async def cmd_compare(exa_api_key: str, strategy: str, anthropic_api_key: str | 
         "avg_dimension_match_rate": report.avg_dimension_match_rate,
     }
 
+    metric_keys = ["avg_link_alive_rate", "avg_product_match_rate", "avg_dimension_match_rate"]
+
     print("\n=== COMPARISON ===")
-    for key in ["avg_link_alive_rate", "avg_product_match_rate", "avg_dimension_match_rate"]:
-        old = baseline[key]
+    deltas: list[float] = []
+    for key in metric_keys:
+        old = baseline.get(key)
         new = current[key]
-        delta = new - old
-        arrow = "+" if delta >= 0 else ""
         label = key.replace("avg_", "").replace("_", " ").title()
+        if old is None or new is None:
+            old_str = "n/a" if old is None else f"{old:.1%}"
+            new_str = "n/a" if new is None else f"{new:.1%}"
+            print(f"  {label}: {old_str} -> {new_str} (skipped: not evaluated)")
+            continue
+        delta = new - old
+        deltas.append(delta)
+        arrow = "+" if delta >= 0 else ""
         print(f"  {label}: {old:.1%} -> {new:.1%} ({arrow}{delta:.1%})")
 
-    overall_delta = (
-        current["avg_link_alive_rate"]
-        + current["avg_product_match_rate"]
-        - baseline["avg_link_alive_rate"]
-        - baseline["avg_product_match_rate"]
-    )
-    if overall_delta > 0:
-        print("\n  IMPROVED — consider accepting changes.")
-    elif overall_delta < -0.05:
-        print("\n  REGRESSED — consider reverting changes.")
+    if not deltas:
+        print("\n  NO SIGNAL — every metric was inconclusive on one side.")
     else:
-        print("\n  NEUTRAL — no significant change.")
+        overall_delta = sum(deltas)
+        if overall_delta > 0.01:
+            print("\n  IMPROVED — consider keeping the change.")
+        elif overall_delta < -0.05:
+            print("\n  REGRESSED — consider `git restore`-ing the change.")
+        else:
+            print("\n  NEUTRAL — no significant change.")
 
 
 def cmd_ablation() -> None:
@@ -145,17 +152,24 @@ def cmd_ablation() -> None:
     for category in sorted(report.keys()):
         components = report[category]
         print(f"  {category.upper()}:")
+        # Sort by product_rate desc, pushing None to the bottom so inconclusive
+        # rows don't outrank real signal.
         sorted_components = sorted(
             components.items(),
-            key=lambda x: x[1]["product_rate"],
+            key=lambda x: x[1]["product_rate"] if x[1]["product_rate"] is not None else -1.0,
             reverse=True,
         )
         for comp_name, stats in sorted_components:
             total = stats["total"]
-            link = stats["link_rate"]
-            product = stats["product_rate"]
-            print(f"    {comp_name:20s}  n={total:3d}  link={link:.0%}  product={product:.0%}")
+            link = _fmt_rate(stats["link_rate"])
+            product = _fmt_rate(stats["product_rate"])
+            print(f"    {comp_name:20s}  n={total:3d}  link={link:>6s}  product={product:>6s}")
         print()
+
+
+def _fmt_rate(value: float | None) -> str:
+    """Format a rate as a percentage, or 'n/a' when inconclusive."""
+    return "n/a" if value is None else f"{value:.1%}"
 
 
 def _print_report(data: dict) -> None:
@@ -163,16 +177,16 @@ def _print_report(data: dict) -> None:
     print("\n=== BENCHMARK RESULTS ===")
     print(f"  Cases: {data['num_cases']}")
     print(f"  Queries: {data['total_queries']}")
-    print(f"  Link alive rate:     {data['avg_link_alive_rate']:.1%}")
-    print(f"  Product match rate:  {data['avg_product_match_rate']:.1%}")
-    print(f"  Dimension match rate: {data['avg_dimension_match_rate']:.1%}")
+    print(f"  Link alive rate:      {_fmt_rate(data['avg_link_alive_rate'])}")
+    print(f"  Product match rate:   {_fmt_rate(data['avg_product_match_rate'])}")
+    print(f"  Dimension match rate: {_fmt_rate(data['avg_dimension_match_rate'])}")
 
     if data.get("per_category"):
         print("\n  Per category:")
         for cat, rates in sorted(data["per_category"].items()):
             print(
-                f"    {cat:20s}  link={rates['link_rate']:.0%}  "
-                f"product={rates['product_rate']:.0%}  "
+                f"    {cat:20s}  link={_fmt_rate(rates['link_rate']):>6s}  "
+                f"product={_fmt_rate(rates['product_rate']):>6s}  "
                 f"n={rates.get('num_queries', '?')}"
             )
 

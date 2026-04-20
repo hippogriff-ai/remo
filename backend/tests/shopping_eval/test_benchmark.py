@@ -52,3 +52,36 @@ async def test_run_benchmark_produces_report(tmp_path: Path):
     assert report.num_cases == 2
     assert report.avg_link_alive_rate == 1.0
     assert report.avg_product_match_rate == 1.0
+
+
+@pytest.mark.asyncio
+async def test_run_benchmark_inconclusive_metric_stays_none(tmp_path: Path):
+    """When every trial has dimension_match_rate=None, the aggregate is None — not 0.0.
+
+    Regression test for the P1 review comment: "not evaluated" must never be
+    silently coerced to a failure.
+    """
+    inconclusive_trial = TrialResult(
+        query="test",
+        query_components=["description"],
+        search_type="auto",
+        results_count=1,
+        check_results=[CheckResult(url="https://example.com", link_loads=True)],
+        link_alive_rate=1.0,
+        product_match_rate=1.0,
+        dimension_match_rate=None,  # every trial inconclusive
+    )
+
+    with patch("shopping_eval.benchmark.run_trial", new_callable=AsyncMock) as mock_trial:
+        mock_trial.return_value = inconclusive_trial
+
+        report = await run_benchmark(
+            exa_api_key="test-key",
+            ablation_log_path=tmp_path / "ablation.jsonl",
+            cases=load_benchmark_cases()[:2],
+        )
+
+    assert report.avg_dimension_match_rate is None
+    assert report.avg_link_alive_rate == 1.0
+    for cat_rates in report.per_category.values():
+        assert cat_rates["dim_rate"] is None
