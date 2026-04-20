@@ -54,6 +54,7 @@ select = ["E", "F", "I", "N", "UP", "B", "SIM", "TCH"]
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
+addopts = "-m 'not integration and not e2e' -p no:langsmith"
 markers = [
     "integration: marks tests that require real API keys and external services",
     "e2e: marks tests that require a running backend (docker compose up + API server + worker)",

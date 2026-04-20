@@ -1,0 +1,172 @@
+[
+  {
+    "item_id": "bench_sofa_01",
+    "item": {
+      "category": "sofa",
+      "description": "ivory boucle sofa with tapered walnut legs and down-blend cushions",
+      "style": "mid-century modern",
+      "material": "boucle",
+      "color": "ivory",
+      "source_tag": "BRIEF_ANCHORED",
+      "source_reference": "comfortable modern sofa",
+      "estimated_dimensions": "84 inch sofa",
+      "search_priority": "HIGH"
+    },
+    "expected_category": "sofa",
+    "expected_material": "boucle",
+    "expected_dimensions": "84x36x32 inches"
+  },
+  {
+    "item_id": "bench_coffee_table_01",
+    "item": {
+      "category": "coffee table",
+      "description": "round walnut coffee table with brass hairpin legs",
+      "style": "mid-century modern",
+      "material": "walnut",
+      "color": "natural walnut",
+      "source_tag": "IMAGE_ONLY",
+      "source_reference": "visible in design image",
+      "estimated_dimensions": "36 inch diameter",
+      "search_priority": "MEDIUM"
+    },
+    "expected_category": "coffee table",
+    "expected_material": "walnut",
+    "expected_dimensions": "36x36x16 inches"
+  },
+  {
+    "item_id": "bench_rug_01",
+    "item": {
+      "category": "rug",
+      "description": "hand-knotted wool area rug in muted sage and cream geometric pattern",
+      "style": "transitional",
+      "material": "wool",
+      "color": "sage",
+      "source_tag": "BRIEF_ANCHORED",
+      "source_reference": "large area rug that ties the room together",
+      "estimated_dimensions": "8x10",
+      "search_priority": "HIGH"
+    },
+    "expected_category": "rug",
+    "expected_material": "wool",
+    "expected_dimensions": "8x10 feet"
+  },
+  {
+    "item_id": "bench_floor_lamp_01",
+    "item": {
+      "category": "floor lamp",
+      "description": "brushed brass arc floor lamp with linen drum shade",
+      "style": "contemporary",
+      "material": "brushed brass",
+      "color": "brass",
+      "source_tag": "IMAGE_ONLY",
+      "source_reference": "visible in design image",
+      "estimated_dimensions": "72 inch height",
+      "search_priority": "MEDIUM"
+    },
+    "expected_category": "floor lamp",
+    "expected_material": "brass",
+    "expected_dimensions": "72 inches tall"
+  },
+  {
+    "item_id": "bench_accent_chair_01",
+    "item": {
+      "category": "accent chair",
+      "description": "navy velvet accent chair with channel tufting and gold legs",
+      "style": "glam",
+      "material": "velvet",
+      "color": "navy",
+      "source_tag": "ITERATION_ANCHORED",
+      "source_reference": "add a statement accent chair",
+      "estimated_dimensions": "30x32x34 inches",
+      "search_priority": "HIGH"
+    },
+    "expected_category": "accent chair",
+    "expected_material": "velvet",
+    "expected_dimensions": "30x32x34 inches"
+  },
+  {
+    "item_id": "bench_credenza_01",
+    "item": {
+      "category": "credenza",
+      "description": "walnut media console with slatted doors and tapered legs",
+      "style": "mid-century modern",
+      "material": "walnut",
+      "color": "walnut",
+      "source_tag": "IMAGE_ONLY",
+      "source_reference": "visible in design image",
+      "estimated_dimensions": "60x16x24 inches",
+      "search_priority": "MEDIUM"
+    },
+    "expected_category": "credenza",
+    "expected_material": "walnut",
+    "expected_dimensions": "60x16x24 inches"
+  },
+  {
+    "item_id": "bench_throw_pillow_01",
+    "item": {
+      "category": "throw pillow",
+      "description": "mustard velvet lumbar pillow with piped edges",
+      "style": "eclectic",
+      "material": "velvet",
+      "color": "mustard",
+      "source_tag": "IMAGE_ONLY",
+      "source_reference": "visible in design image",
+      "estimated_dimensions": "12x20 inches",
+      "search_priority": "LOW"
+    },
+    "expected_category": "throw pillow",
+    "expected_material": "velvet",
+    "expected_dimensions": "12x20 inches"
+  },
+  {
+    "item_id": "bench_dining_table_01",
+    "item": {
+      "category": "dining table",
+      "description": "extendable oak dining table with trestle base",
+      "style": "farmhouse modern",
+      "material": "oak",
+      "color": "natural oak",
+      "source_tag": "BRIEF_ANCHORED",
+      "source_reference": "family dining table that seats 6",
+      "estimated_dimensions": "72x36 inches",
+      "search_priority": "HIGH"
+    },
+    "expected_category": "dining table",
+    "expected_material": "oak",
+    "expected_dimensions": "72x36x30 inches"
+  },
+  {
+    "item_id": "bench_curtains_01",
+    "item": {
+      "category": "curtains",
+      "description": "linen curtain panels in warm oatmeal with blackout lining",
+      "style": "organic modern",
+      "material": "linen",
+      "color": "oatmeal",
+      "source_tag": "IMAGE_ONLY",
+      "source_reference": "visible in design image",
+      "estimated_dimensions": "84 inch length",
+      "search_priority": "MEDIUM"
+    },
+    "expected_category": "curtains",
+    "expected_material": "linen",
+    "expected_dimensions": "50x84 inches"
+  },
+  {
+    "item_id": "bench_wall_art_01",
+    "item": {
+      "category": "wall art",
+      "description": "abstract landscape canvas print in earth tones with floating frame",
+      "style": "contemporary",
+      "material": "canvas",
+      "color": "earth tones",
+      "source_tag": "IMAGE_ONLY",
+      "source_reference": "visible in design image",
+      "estimated_dimensions": "36x48 inches",
+      "search_priority": "LOW"
+    },
+    "expected_category": "wall art",
+    "expected_material": "canvas",
+    "expected_dimensions": "36x48 inches"
+  }
+]

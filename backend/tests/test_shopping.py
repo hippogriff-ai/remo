@@ -32,6 +32,7 @@ from app.activities.shopping import (
     _build_fit_detail,
     _build_scoring_prompt,
     _build_search_queries,
+    _build_search_queries_tagged,
     _compute_room_constraints,
     _expand_color_synonym,
     _extract_json,
@@ -51,6 +52,7 @@ from app.activities.shopping import (
     _strip_code_fence,
     _validate_extracted_items,
     apply_confidence_filtering,
+    build_synthetic_listing_query,
     extract_items,
     filter_by_dimensions,
     generate_shopping_list,
@@ -3509,3 +3511,55 @@ class TestExaTracingDecorators:
         assert inspect.iscoroutinefunction(search_products_for_item) or callable(
             search_products_for_item
         )
+
+
+def test_tagged_queries_return_components():
+    """Each query comes with component tags for ablation tracking."""
+    item = {
+        "category": "coffee table",
+        "description": "round walnut coffee table",
+        "style": "mid-century",
+        "material": "walnut",
+        "color": "ivory",
+        "source_tag": "IMAGE_ONLY",
+    }
+    tagged = _build_search_queries_tagged(item)
+    assert len(tagged) > 0
+    for query, components in tagged:
+        assert isinstance(query, str)
+        assert isinstance(components, list)
+        assert len(components) > 0
+    # First query should be description-based
+    assert "description" in tagged[0][1]
+
+
+def test_tagged_queries_match_untagged():
+    """Tagged version produces same queries as original (backward compat)."""
+    item = {
+        "category": "sofa",
+        "description": "ivory boucle sofa",
+        "style": "modern",
+        "material": "boucle",
+        "color": "ivory",
+        "source_tag": "IMAGE_ONLY",
+    }
+    tagged = _build_search_queries_tagged(item)
+    untagged = _build_search_queries(item)
+    assert [q for q, _ in tagged] == untagged
+
+
+def test_synthetic_listing_prompt_formatting():
+    """Synthetic listing prompt includes all item fields."""
+    item = {
+        "category": "sofa",
+        "description": "ivory boucle sofa",
+        "style": "mid-century modern",
+        "material": "boucle",
+        "color": "ivory",
+        "estimated_dimensions": "84 inches",
+    }
+    prompt = build_synthetic_listing_query(item)
+    assert "sofa" in prompt
+    assert "boucle" in prompt
+    assert "ivory" in prompt
+    assert "84 inches" in prompt
