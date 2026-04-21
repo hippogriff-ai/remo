@@ -116,9 +116,12 @@ class TileProjectWorkflow:
         await self._wait(lambda: self.wall_material is not None and self.floor_material is not None)
 
         # --- Phase: Estimate — compute inline, wait for render request ---
+        # confirm_estimate is a soft lock (surfaced via query so UI can show
+        # "locked"), NOT a phase trigger. Only request_render moves us forward
+        # — consuming a render credit must require an explicit user action.
         self.step = "replace_material_estimate"
         self._recompute_estimate()
-        await self._wait(lambda: self._render_requested or self._estimate_confirmed)
+        await self._wait(lambda: self._render_requested)
 
         # --- Phase: Render — call Gemini mask-edit (stub in PR 1) ---
         self.step = "replace_material_render"
@@ -260,7 +263,10 @@ class TileProjectWorkflow:
     async def set_materials(self, wall: MaterialSpec, floor: MaterialSpec) -> None:
         self.wall_material = wall
         self.floor_material = floor
-        if self.step == "replace_material_estimate":
+        # Same recompute-in-every-phase rule as set_policies and set_surfaces
+        # (Codex P1 on commit 25e0b35 — materials can change during render/
+        # export, and the stored estimate must track the stored materials).
+        if len(self.surfaces) > 0:
             self._recompute_estimate()
 
     @workflow.signal
@@ -319,4 +325,5 @@ class TileProjectWorkflow:
             error=self.error,
             render_attempt_count=self.render_attempt_count,
             export_attempt_count=self.export_attempt_count,
+            estimate_confirmed=self._estimate_confirmed,
         )

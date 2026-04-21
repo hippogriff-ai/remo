@@ -691,6 +691,10 @@ class TileWorkflowState(BaseModel):
     # Surfaced so iOS can show "Retry (2/3)" without guessing internal state.
     render_attempt_count: int = Field(ge=0, default=0)
     export_attempt_count: int = Field(ge=0, default=0)
+    # Soft lock from confirm_estimate. Does NOT trigger render — iOS uses
+    # it to swap the "Confirm" button for a "locked" chip next to a
+    # separate "Generate Render" button.
+    estimate_confirmed: bool = False
 
 
 # --- ProjectStep raw values for tile-mode phases ---

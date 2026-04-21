@@ -269,13 +269,17 @@ async def test_set_policies_recomputes_estimate(workflow_env: WorkflowEnvironmen
         assert initial_overage == OveragePolicy.FLAT_10
 
 
-async def test_confirm_estimate_advances_past_estimate_phase(
+async def test_confirm_estimate_sets_flag_but_does_not_advance_phase(
     workflow_env: WorkflowEnvironment, tq: str
 ) -> None:
-    """confirm_estimate (without request_render) should still advance the
-    workflow past the estimate phase into the render phase. That's the
-    distinction vs. request_render — it locks the estimate but iOS might
-    delay hitting /render until the user explicitly taps render.
+    """confirm_estimate is a soft lock. It surfaces via state.estimate_confirmed
+    so iOS can render a "locked" chip, but it MUST NOT move the workflow into
+    the render phase — rendering consumes a Gemini credit and must require an
+    explicit request_render signal.
+
+    Regression test for Codex P1 on commit 63880c7 where the wait condition
+    unblocked on either signal, accidentally burning a render on every
+    confirm.
     """
     async with Worker(
         workflow_env.client,
@@ -290,26 +294,99 @@ async def test_confirm_estimate_advances_past_estimate_phase(
         )
         await handle.signal(TileProjectWorkflow.set_materials, args=[_wall_spec(), _floor_spec()])
 
-        # Wait for estimate to land first
         state = None
-        for _ in range(20):
-            await asyncio.sleep(0)
+        for _ in range(30):
+            await asyncio.sleep(0.01)
             state = await handle.query(TileProjectWorkflow.get_state)
-            if state.estimate is not None:
+            if state.step == "replace_material_estimate" and state.estimate is not None:
                 break
-        assert state is not None and state.estimate is not None
+        assert state is not None and state.step == "replace_material_estimate"
+        assert state.estimate_confirmed is False
 
         await handle.signal(TileProjectWorkflow.confirm_estimate)
 
-        # Confirm the workflow transitions out of estimate (to render) even
-        # though request_render was never sent. Render activity is a stub
-        # that raises NotImplementedError → error field gets populated.
-        for _ in range(30):
-            await asyncio.sleep(0)
+        # Give the workflow ample time to (incorrectly) advance. If it does,
+        # this test catches it.
+        for _ in range(50):
+            await asyncio.sleep(0.01)
+            state = await handle.query(TileProjectWorkflow.get_state)
+            if state.estimate_confirmed:
+                break
+        assert state is not None
+        assert state.estimate_confirmed is True
+        # Critical: still parked in estimate, no render burned.
+        assert state.step == "replace_material_estimate"
+        assert state.render_attempt_count == 0
+        assert state.render_image_url is None
+
+        # Now send the actual render request and confirm the workflow DOES
+        # advance — confirming that the earlier "no advance" wasn't because
+        # the workflow was stuck.
+        await handle.signal(TileProjectWorkflow.request_render)
+        for _ in range(100):
+            await asyncio.sleep(0.01)
             state = await handle.query(TileProjectWorkflow.get_state)
             if state.step == "replace_material_render":
                 break
         assert state.step == "replace_material_render"
+
+
+async def test_set_materials_during_render_phase_recomputes_estimate(
+    workflow_env: WorkflowEnvironment, tq: str
+) -> None:
+    """Materials edits must refresh the estimate in any phase, not just
+    'replace_material_estimate'. Regression test for Codex P1 on commit
+    25e0b35 — set_materials had a stale phase-gate after I fixed the same
+    bug in set_policies. Parallel signal handlers must have parallel
+    recompute rules.
+    """
+    async with Worker(
+        workflow_env.client,
+        task_queue=tq,
+        workflows=[TileProjectWorkflow],
+        activities=_TILE_ACTIVITIES,
+    ):
+        handle = await _start_workflow(workflow_env, tq)
+        await handle.signal(
+            TileProjectWorkflow.set_surfaces,
+            [_rect_patch("wall-1", 2.4, 2.4), _rect_patch("floor", 2.4, 1.8, kind="floor")],
+        )
+        await handle.signal(TileProjectWorkflow.set_materials, args=[_wall_spec(), _floor_spec()])
+        await handle.signal(TileProjectWorkflow.request_render)
+
+        state = None
+        for _ in range(60):
+            await asyncio.sleep(0.01)
+            state = await handle.query(TileProjectWorkflow.get_state)
+            if state.step == "replace_material_render":
+                break
+        assert state is not None and state.step == "replace_material_render"
+        assert state.estimate is not None
+        initial_wall_tiles = state.estimate.wall_tiles_total
+
+        # Switch to a larger tile (60x60 for walls instead of 30x60) — packed
+        # count should strictly decrease since each tile covers more area.
+        larger_wall = MaterialSpec(
+            material_id="wall",
+            module_width_m=0.60,
+            module_height_m=0.60,
+            grout_width_mm=3.0,
+            modules_per_unit=10,
+            price_per_box_cents=4200,
+        )
+        await handle.signal(TileProjectWorkflow.set_materials, args=[larger_wall, _floor_spec()])
+        for _ in range(30):
+            await asyncio.sleep(0.01)
+            state = await handle.query(TileProjectWorkflow.get_state)
+            if state.wall_material and state.wall_material.module_width_m == pytest.approx(0.60):
+                break
+        assert state.wall_material is not None
+        assert state.wall_material.module_width_m == pytest.approx(0.60)
+        assert state.estimate is not None
+        # Estimate must reflect the new material — strictly fewer tiles needed.
+        assert state.estimate.wall_tiles_total < initial_wall_tiles
+        # And the packed material in the estimate must match the state material.
+        assert state.estimate.wall_material.module_width_m == pytest.approx(0.60)
 
 
 async def test_retry_render_actually_reinvokes_the_render_activity(
