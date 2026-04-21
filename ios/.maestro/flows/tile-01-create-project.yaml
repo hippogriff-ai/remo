@@ -1,0 +1,14 @@
+appId: com.hippogriff.remo
+---
+# Tile mode entry: tap "Replace Material" on HomeScreen, land on scan step.
+# Accessibility ID contract (PR 2 implements):
+#   home_new_tile_project — HomeScreen CTA
+#   tile_project_0        — first tile-project row
+#   tile_scan_start       — LiDAR start button on tile scan screen
+- assertVisible: "Replace Material"
+- tapOn:
+    id: "home_new_tile_project"
+- assertVisible: "Scan Your Room"
+- assertVisible:
+    id: "tile_scan_start"
+- takeScreenshot: tile-01-create-project

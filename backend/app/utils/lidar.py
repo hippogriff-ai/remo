@@ -235,21 +235,29 @@ def patches_from_room_dimensions(dims: RoomDimensions) -> list[SurfacePatch]:
         for opening in dims.openings:
             if opening.get("wall_id") != wall_id:
                 continue
+            position = opening.get("position") or {}
+            opening_type = str(opening.get("type", "opening")).lower()
             try:
-                hx = float(opening.get("position", {}).get("x", 0.0))
+                hx = float(position.get("x", 0.0))
                 hw = float(opening.get("width", 0.0))
                 hh = float(opening.get("height", 0.0))
             except (TypeError, ValueError):
                 continue
             if hw <= 0 or hh <= 0:
                 continue
+            hy = _opening_y_meters(position, opening_type, wall_height=w_height, opening_height=hh)
+            # Clamp so the hole stays within the wall polygon — a malformed
+            # RoomPlan frame shouldn't produce a SurfacePatch with a hole
+            # hanging off the top.
+            if hy + hh > w_height:
+                hy = max(0.0, w_height - hh)
             holes.append(
                 Hole(
                     x_m=hx,
-                    y_m=0.0,  # openings sit on the floor by default
+                    y_m=hy,
                     width_m=hw,
                     height_m=hh,
-                    label=str(opening.get("type", "opening")),
+                    label=opening_type,
                     kind=HoleKind.OPENING,
                 )
             )
@@ -284,3 +292,36 @@ def _infer_walls_from_bbox(dims: RoomDimensions) -> list[dict]:
         {"id": "wall_2", "width": dims.width_m, "height": dims.height_m},
         {"id": "wall_3", "width": dims.length_m, "height": dims.height_m},
     ]
+
+
+# Typical sill height — used when RoomPlan doesn't include position.y for a
+# window. 0.9m matches US residential code minimums (42" rail for openable
+# windows on upper floors, but sill itself commonly lands 30–36").
+_DEFAULT_WINDOW_SILL_M = 0.9
+
+
+def _opening_y_meters(
+    position: dict,
+    opening_type: str,
+    *,
+    wall_height: float,
+    opening_height: float,
+) -> float:
+    """Resolve the y-offset of an opening on its wall (surface-local meters).
+
+    Honors an explicit ``position.y`` when the client provides one. Falls back
+    to 0.0 for doors / generic openings and to a typical sill height for
+    windows, clamped to keep the opening on the wall.
+    """
+    try:
+        y_raw = position.get("y")
+    except AttributeError:
+        y_raw = None
+    if y_raw is not None:
+        try:
+            return max(0.0, float(y_raw))
+        except (TypeError, ValueError):
+            pass
+    if opening_type == "window":
+        return min(_DEFAULT_WINDOW_SILL_M, max(0.0, wall_height - opening_height))
+    return 0.0

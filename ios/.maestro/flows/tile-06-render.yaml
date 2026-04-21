@@ -1,0 +1,15 @@
+appId: com.hippogriff.remo
+---
+# Render step: tap "Generate Render", wait for photoreal bathroom to appear.
+# Accessibility ID contract (PR 5 implements):
+#   tile_render_start    — tap to begin render
+#   tile_render_image    — the rendered output (AsyncImage)
+#   tile_render_retry    — visible when render fails
+- assertVisible: "Render"
+- tapOn:
+    id: "tile_render_start"
+- extendedWaitUntil:
+    visible:
+      id: "tile_render_image"
+    timeout: 180000
+- takeScreenshot: tile-06-render

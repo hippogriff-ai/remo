@@ -688,6 +688,9 @@ class TileWorkflowState(BaseModel):
     render_image_url: str | None = None
     cut_sheet_pdf_url: str | None = None
     error: WorkflowError | None = None
+    # Surfaced so iOS can show "Retry (2/3)" without guessing internal state.
+    render_attempt_count: int = Field(ge=0, default=0)
+    export_attempt_count: int = Field(ge=0, default=0)
 
 
 # --- ProjectStep raw values for tile-mode phases ---

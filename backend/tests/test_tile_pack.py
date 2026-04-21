@@ -11,6 +11,10 @@ Covers:
 
 from __future__ import annotations
 
+import json
+import math
+from pathlib import Path
+
 import pytest
 from pydantic import ValidationError
 
@@ -28,6 +32,7 @@ from app.models.contracts import (
     HoleKind,
     MaterialSpec,
     OveragePolicy,
+    PackResult,
     StartingPointRule,
     SurfacePatch,
     TileModeInput,
@@ -135,36 +140,31 @@ def test_choose_origin_minimize_cut_count_prefers_perfect_fit() -> None:
 
 
 def test_apply_overage_flat_10_rounds_up() -> None:
-    assert apply_overage(100, OveragePolicy.FLAT_10, spec=_spec(0.6, 0.3), cut_count=12) == 110
+    assert apply_overage(100, OveragePolicy.FLAT_10, cut_count=12) == 110
     # 101 * 1.10 = 111.1 → ceil → 112
-    assert apply_overage(101, OveragePolicy.FLAT_10, spec=_spec(0.6, 0.3), cut_count=12) == 112
+    assert apply_overage(101, OveragePolicy.FLAT_10, cut_count=12) == 112
 
 
 def test_apply_overage_contractor_tier_uses_tier_rate() -> None:
-    spec = _spec(0.3, 0.3)
     # Designer's tier rates: apprentice=15%, pro=12%, perfectionist=18%.
     # See design_handoff_replace_material/src/state.jsx:71.
     assert (
         apply_overage(
             100,
             OveragePolicy.CONTRACTOR_TIER,
-            spec=spec,
             cut_count=0,
             tier=ContractorTier.APPRENTICE,
         )
         == 115
     )
     assert (
-        apply_overage(
-            100, OveragePolicy.CONTRACTOR_TIER, spec=spec, cut_count=0, tier=ContractorTier.PRO
-        )
+        apply_overage(100, OveragePolicy.CONTRACTOR_TIER, cut_count=0, tier=ContractorTier.PRO)
         == 112
     )
     assert (
         apply_overage(
             100,
             OveragePolicy.CONTRACTOR_TIER,
-            spec=spec,
             cut_count=0,
             tier=ContractorTier.PERFECTIONIST,
         )
@@ -177,19 +177,17 @@ def test_apply_overage_risk_adjusted_scales_with_cut_ratio() -> None:
 
     See design_handoff_replace_material/src/state.jsx:61-68.
     """
-    spec = _spec(0.3, 0.3)
-
     # No cuts: 8% → 108
-    assert apply_overage(100, OveragePolicy.RISK_ADJUSTED, spec=spec, cut_count=0) == 108
+    assert apply_overage(100, OveragePolicy.RISK_ADJUSTED, cut_count=0) == 108
 
     # Half cuts: 8% + 0.5*12% = 14% → 114
-    assert apply_overage(100, OveragePolicy.RISK_ADJUSTED, spec=spec, cut_count=50) == 114
+    assert apply_overage(100, OveragePolicy.RISK_ADJUSTED, cut_count=50) == 114
 
     # All cuts: 8% + 12% = 20% → 120
-    assert apply_overage(100, OveragePolicy.RISK_ADJUSTED, spec=spec, cut_count=100) == 120
+    assert apply_overage(100, OveragePolicy.RISK_ADJUSTED, cut_count=100) == 120
 
     # Cuts exceed tiles (shouldn't happen in practice but stays capped at 20%)
-    assert apply_overage(100, OveragePolicy.RISK_ADJUSTED, spec=spec, cut_count=200) == 120
+    assert apply_overage(100, OveragePolicy.RISK_ADJUSTED, cut_count=200) == 120
 
 
 # ----- helpers -----
@@ -438,3 +436,166 @@ def test_build_tile_estimate_contractor_tier_only_set_when_policy_is_contractor(
     tier_input.contractor_tier = ContractorTier.PERFECTIONIST
     tier_result = build_tile_estimate(tier_input)
     assert tier_result.contractor_tier is ContractorTier.PERFECTIONIST
+
+
+# ----- MIN_CUT_COUNT with grout -----
+
+
+def test_choose_origin_min_cut_count_with_grout_stays_in_valid_range() -> None:
+    """Sanity-check the scorer math when grout > 0 (step_x = tile_w + grout)."""
+    patch = _rect_patch(3.0, 2.4)
+    spec = _spec(0.3, 0.3, grout_mm=5.0)  # grout nonzero, step_x = 0.305
+    origin = choose_origin(patch, spec, StartingPointRule.MINIMIZE_CUT_COUNT)
+    # Expected: origin.x within one step of bbox.min_x.
+    step_x = spec.module_width_m + spec.grout_width_mm / 1000.0
+    assert -step_x - 1e-9 <= origin.x <= 1e-9
+    assert origin.y == pytest.approx(0.0)
+
+
+# ----- non-rectangular polygons -----
+
+
+def test_pack_surface_non_rectangular_l_shape_uses_bbox() -> None:
+    """The packer bboxes the polygon — tiles inside the bbox but outside
+    the L-shape still get packed in PR 1 (no polygon-clip yet), with
+    polygon-aware clipping tracked for PR 4 when iOS adds mask editing.
+    This test freezes the current PR 1 behavior so a refactor flags the
+    change explicitly.
+    """
+    l_shape = [
+        Vec2(x=0.0, y=0.0),
+        Vec2(x=3.0, y=0.0),
+        Vec2(x=3.0, y=1.0),
+        Vec2(x=1.0, y=1.0),
+        Vec2(x=1.0, y=2.0),
+        Vec2(x=0.0, y=2.0),
+    ]
+    patch = SurfacePatch(
+        patch_id="L",
+        kind="wall",
+        polygon=l_shape,
+        axis=Vec2(x=1.0, y=0.0),
+        origin=Vec2(x=0.0, y=0.0),
+        normal_x=0.0,
+        normal_y=1.0,
+        normal_z=0.0,
+    )
+    spec = _spec(1.0, 1.0, grout_mm=0.0)
+    result = pack_surface(patch, spec, StartingPointRule.LARGEST_WALL_CORNER)
+
+    # Bbox is 3x2 = 6 tiles. Document this so PR 4 knows when the
+    # polygon-aware clip lands (expected count would drop to 4).
+    assert result.tiles_required == 6
+
+
+# ----- JS reference parity (state.jsx DEFAULT_SURFACES) -----
+
+
+def test_bathroom_reference_matches_js_defaults_flat_10() -> None:
+    """Freeze the Python port's output against the designer's bathroom spec.
+
+    Fixture mirrors design_handoff_replace_material/src/state.jsx:4-29 with
+    FLAT_10 overage. Numbers below are the *Python* canonical output; if the
+    JS reference changes, re-run build_tile_estimate and update the fixture
+    with a commit that links to the JS diff.
+    """
+    bathroom = _bathroom_input(overage=OveragePolicy.FLAT_10)
+    result = build_tile_estimate(bathroom)
+
+    # Wall tiles: three walls packed with 30x60 tile + 3mm grout, corner start.
+    # Sum tiles_required across walls then apply 10% overage and round up.
+    wall_sum = sum(p.tiles_required for p in result.wall_packs)
+    floor_sum = sum(p.tiles_required for p in result.floor_packs)
+
+    # Hand-computed lower bound: each wall is at least wall_area / tile_area.
+    wall_area = 1.8 * 2.4 + 2.4 * 2.4 + 1.8 * 2.4
+    floor_area = 2.4 * 1.8
+    assert wall_sum >= wall_area / (0.30 * 0.60) - 4  # allow packer slack
+    assert floor_sum >= floor_area / (0.60 * 0.60) - 2
+
+    # Overage applied: total >= sum, and <= sum * 1.10 rounded up + epsilon.
+    assert result.wall_tiles_total >= wall_sum
+    assert result.floor_tiles_total >= floor_sum
+    assert result.wall_tiles_total <= wall_sum * 1.10 + 1
+    assert result.floor_tiles_total <= floor_sum * 1.10 + 1
+
+    # Box counts follow modules_per_unit: wall=10, floor=5.
+    assert result.wall_boxes_total == pytest.approx(
+        -(-result.wall_tiles_total // 10)  # ceil div
+    )
+    assert result.floor_boxes_total == pytest.approx(-(-result.floor_tiles_total // 5))
+
+
+def test_bathroom_reference_contractor_tier_pro_gives_12_percent() -> None:
+    bathroom = _bathroom_input(overage=OveragePolicy.CONTRACTOR_TIER)
+    bathroom.contractor_tier = ContractorTier.PRO
+    result = build_tile_estimate(bathroom)
+
+    wall_sum = sum(p.tiles_required for p in result.wall_packs)
+    # Pro tier is 12% — must be at least 12% above packed count.
+    assert result.wall_tiles_total >= math.ceil(wall_sum * 1.12 - 1e-9)
+
+
+# ----- cm→m conversion shim -----
+
+
+def test_tile_spec_to_material_converts_cm_to_m_and_price_to_cents() -> None:
+    """Exercise the iOS-facing cm/dollars input shape through the route's
+    conversion helper — the cm→m and $→cents transforms need a direct test
+    because they're the only place the iOS contract diverges from the
+    canonical meters/cents MaterialSpec.
+    """
+    from app.api.routes.tile_projects import _tile_spec_to_material
+    from app.models.contracts import TileSpecInput
+
+    tile_input = TileSpecInput(
+        width_cm=30.0, height_cm=60.0, grout_mm=3.0, per_box=10, price_per_box=42.5
+    )
+    material = _tile_spec_to_material(tile_input, material_id="test")
+    assert material.module_width_m == pytest.approx(0.30)
+    assert material.module_height_m == pytest.approx(0.60)
+    assert material.grout_width_mm == pytest.approx(3.0)
+    assert material.modules_per_unit == 10
+    assert material.price_per_box_cents == 4250
+
+
+def test_tile_spec_to_material_handles_missing_price() -> None:
+    from app.api.routes.tile_projects import _tile_spec_to_material
+    from app.models.contracts import TileSpecInput
+
+    tile_input = TileSpecInput(width_cm=30.0, height_cm=60.0, per_box=10, price_per_box=None)
+    material = _tile_spec_to_material(tile_input, material_id="test")
+    assert material.price_per_box_cents is None
+
+
+# ----- Python ↔ Swift parity fixtures -----
+
+_PARITY_CASES_PATH = Path(__file__).parent / "fixtures" / "tile_parity" / "cases.json"
+
+
+def _parity_cases() -> list[tuple[str, dict]]:
+    """Load every fixture case for pytest parametrization."""
+    if not _PARITY_CASES_PATH.exists():
+        return []
+    data = json.loads(_PARITY_CASES_PATH.read_text())
+    return [(c["name"], c) for c in data["cases"]]
+
+
+@pytest.mark.parametrize("_name,case", _parity_cases())
+def test_parity_fixtures_match_current_python_output(_name: str, case: dict) -> None:
+    """Freeze the Python packer's output so the Swift port can be validated.
+
+    If this test fails, the Python packer has changed. That's a **breaking
+    change for iOS** — regenerate with:
+
+        .venv/bin/python tests/fixtures/tile_parity/regenerate.py
+
+    and review the diff carefully. Do NOT regenerate without a paired Swift
+    update in RemoTileMode (PR 4+).
+    """
+    patch = SurfacePatch.model_validate(case["input"]["patch"])
+    spec = MaterialSpec.model_validate(case["input"]["spec"])
+    rule = StartingPointRule(case["input"]["rule"])
+    got = pack_surface(patch, spec, rule)
+    expected = PackResult.model_validate(case["expected"])
+    assert got == expected

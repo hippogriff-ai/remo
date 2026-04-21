@@ -1,0 +1,13 @@
+appId: com.hippogriff.remo
+---
+# Cut-sheet PDF export: tap "Download Cut Sheet", wait for share sheet.
+# Accessibility ID contract (PR 5 implements):
+#   tile_export_button    — triggers POST /tile-projects/{id}/export
+#   tile_export_pdf_image — the PDF preview thumbnail (tappable → share)
+- tapOn:
+    id: "tile_export_button"
+- extendedWaitUntil:
+    visible:
+      id: "tile_export_pdf_image"
+    timeout: 120000
+- takeScreenshot: tile-08-export-pdf

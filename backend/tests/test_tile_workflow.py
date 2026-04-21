@@ -25,6 +25,7 @@ from app.activities.mock_stubs import purge_project_data
 from app.activities.tile_cutsheet import generate_cut_sheet_pdf
 from app.activities.tile_render import render_tile_design
 from app.models.contracts import (
+    ContractorTier,
     Hole,
     HoleKind,
     MaterialSpec,
@@ -264,6 +265,179 @@ async def test_set_policies_recomputes_estimate(workflow_env: WorkflowEnvironmen
         assert state.estimate is not None
         assert state.estimate.overage_policy == OveragePolicy.RISK_ADJUSTED
         assert initial_overage == OveragePolicy.FLAT_10
+
+
+async def test_confirm_estimate_advances_past_estimate_phase(
+    workflow_env: WorkflowEnvironment, tq: str
+) -> None:
+    """confirm_estimate (without request_render) should still advance the
+    workflow past the estimate phase into the render phase. That's the
+    distinction vs. request_render — it locks the estimate but iOS might
+    delay hitting /render until the user explicitly taps render.
+    """
+    async with Worker(
+        workflow_env.client,
+        task_queue=tq,
+        workflows=[TileProjectWorkflow],
+        activities=_TILE_ACTIVITIES,
+    ):
+        handle = await _start_workflow(workflow_env, tq)
+        await handle.signal(
+            TileProjectWorkflow.set_surfaces,
+            [_rect_patch("wall-1", 1.8, 2.4), _rect_patch("floor", 2.4, 1.8, kind="floor")],
+        )
+        await handle.signal(TileProjectWorkflow.set_materials, args=[_wall_spec(), _floor_spec()])
+
+        # Wait for estimate to land first
+        state = None
+        for _ in range(20):
+            await asyncio.sleep(0)
+            state = await handle.query(TileProjectWorkflow.get_state)
+            if state.estimate is not None:
+                break
+        assert state is not None and state.estimate is not None
+
+        await handle.signal(TileProjectWorkflow.confirm_estimate)
+
+        # Confirm the workflow transitions out of estimate (to render) even
+        # though request_render was never sent. Render activity is a stub
+        # that raises NotImplementedError → error field gets populated.
+        for _ in range(30):
+            await asyncio.sleep(0)
+            state = await handle.query(TileProjectWorkflow.get_state)
+            if state.step == "replace_material_render":
+                break
+        assert state.step == "replace_material_render"
+
+
+async def test_retry_render_signal_bumps_attempt_count(
+    workflow_env: WorkflowEnvironment, tq: str
+) -> None:
+    """After a render failure, the workflow parks awaiting
+    request_render_retry. Sending it re-enters the render phase and bumps
+    render_attempt_count. The render activity is a stub (NotImplementedError)
+    so it'll fail again — but the attempt counter proves the retry landed.
+
+    Temporal's activity retry policy (maximum_attempts=2) wraps the activity
+    call; the workflow only sees one attempt per exec_activity invocation.
+    So the counter reflects *workflow-level* retries, not Temporal-internal ones.
+    """
+    async with Worker(
+        workflow_env.client,
+        task_queue=tq,
+        workflows=[TileProjectWorkflow],
+        activities=_TILE_ACTIVITIES,
+    ):
+        handle = await _start_workflow(workflow_env, tq)
+        await handle.signal(
+            TileProjectWorkflow.set_surfaces,
+            [_rect_patch("wall-1", 1.8, 2.4), _rect_patch("floor", 2.4, 1.8, kind="floor")],
+        )
+        await handle.signal(TileProjectWorkflow.set_materials, args=[_wall_spec(), _floor_spec()])
+        await handle.signal(TileProjectWorkflow.request_render)
+
+        # Wait for first render failure to surface as error. The activity
+        # retries internally (Temporal's RetryPolicy), so "error" flipping
+        # non-null is what signals that the workflow has parked.
+        state = None
+        for _ in range(200):
+            await asyncio.sleep(0.01)
+            state = await handle.query(TileProjectWorkflow.get_state)
+            if state.error is not None:
+                break
+        assert state is not None
+        assert state.error is not None
+        first_attempt = state.render_attempt_count
+        assert first_attempt >= 1
+
+        await handle.signal(TileProjectWorkflow.request_render_retry)
+        for _ in range(200):
+            await asyncio.sleep(0.01)
+            state = await handle.query(TileProjectWorkflow.get_state)
+            if state.render_attempt_count > first_attempt:
+                break
+        assert state.render_attempt_count > first_attempt
+
+
+async def test_cancel_from_scan_phase_terminates_cleanly(
+    workflow_env: WorkflowEnvironment, tq: str
+) -> None:
+    """cancel_project sent during the scan phase should transition the
+    workflow to the 'abandoned' step (the _wait helper treats cancel during
+    a wait as abandonment)."""
+    async with Worker(
+        workflow_env.client,
+        task_queue=tq,
+        workflows=[TileProjectWorkflow],
+        activities=_TILE_ACTIVITIES,
+    ):
+        handle = await _start_workflow(workflow_env, tq)
+        await handle.signal(TileProjectWorkflow.cancel_project)
+
+        state = None
+        for _ in range(30):
+            await asyncio.sleep(0.01)
+            state = await handle.query(TileProjectWorkflow.get_state)
+            if state.step in {"abandoned", "cancelled"}:
+                break
+        assert state is not None
+        assert state.step in {"abandoned", "cancelled"}
+
+
+async def test_set_policies_during_render_phase_recomputes_estimate(
+    workflow_env: WorkflowEnvironment, tq: str
+) -> None:
+    """Policy updates must refresh the estimate even outside the estimate
+    phase (e.g. during render or export). Prior to the PR review fix,
+    set_policies only recomputed when step == 'replace_material_estimate',
+    which left iOS showing a stale box count after the user edited the
+    overage policy post-render.
+    """
+    async with Worker(
+        workflow_env.client,
+        task_queue=tq,
+        workflows=[TileProjectWorkflow],
+        activities=_TILE_ACTIVITIES,
+    ):
+        handle = await _start_workflow(workflow_env, tq)
+        await handle.signal(
+            TileProjectWorkflow.set_surfaces,
+            [_rect_patch("wall-1", 2.4, 2.4), _rect_patch("floor", 2.4, 1.8, kind="floor")],
+        )
+        await handle.signal(TileProjectWorkflow.set_materials, args=[_wall_spec(), _floor_spec()])
+        await handle.signal(TileProjectWorkflow.request_render)
+
+        # Advance into render phase (render activity will fail since it's a
+        # stub, but we only need the workflow to be past estimate).
+        state = None
+        for _ in range(60):
+            await asyncio.sleep(0.01)
+            state = await handle.query(TileProjectWorkflow.get_state)
+            if state.step == "replace_material_render":
+                break
+        assert state is not None and state.step == "replace_material_render"
+        assert state.estimate is not None
+        initial_wall_boxes = state.estimate.wall_boxes_total
+        assert state.estimate.overage_policy is OveragePolicy.FLAT_10
+
+        await handle.signal(
+            TileProjectWorkflow.set_policies,
+            args=[
+                OveragePolicy.CONTRACTOR_TIER,
+                StartingPointRule.LARGEST_WALL_CORNER,
+                # Perfectionist tier has 18% overage vs FLAT_10's 10% → more boxes.
+                ContractorTier.PERFECTIONIST,
+            ],
+        )
+        for _ in range(30):
+            await asyncio.sleep(0.01)
+            state = await handle.query(TileProjectWorkflow.get_state)
+            if state.estimate and state.estimate.overage_policy is OveragePolicy.CONTRACTOR_TIER:
+                break
+        assert state.estimate is not None
+        assert state.estimate.overage_policy is OveragePolicy.CONTRACTOR_TIER
+        # Perfectionist's 18% should give >= the FLAT_10 count.
+        assert state.estimate.wall_boxes_total >= initial_wall_boxes
 
 
 async def test_masks_reduce_tile_count(workflow_env: WorkflowEnvironment, tq: str) -> None:

@@ -75,9 +75,14 @@ class TileProjectWorkflow:
         self.cut_sheet_pdf_url: str | None = None
         self.error: WorkflowError | None = None
         self._render_requested = False
+        self._render_retry_requested = False
         self._export_requested = False
         self._estimate_confirmed = False
         self._cancelled = False
+        # Incremented every time a render or cut-sheet activity fails. Surfaced
+        # via the query state so iOS can show "Retry (2/3)" and PR 5 can cap it.
+        self.render_attempt_count = 0
+        self.export_attempt_count = 0
 
     @workflow.run
     async def run(self, project_id: str) -> None:
@@ -117,36 +122,60 @@ class TileProjectWorkflow:
 
         # --- Phase: Render — call Gemini mask-edit (stub in PR 1) ---
         self.step = "replace_material_render"
-        try:
-            render_output = await workflow.execute_activity(
-                render_tile_design,
-                self._render_input(),
-                start_to_close_timeout=timedelta(minutes=5),
-                retry_policy=_RENDER_RETRY,
-            )
-            self.render_image_url = render_output.image_url
-        except Exception as exc:
-            workflow.logger.warning("render_tile_design failed or not yet implemented: %s", exc)
-            # PR 1: surface as a retryable error so iOS can reflect state.
-            self.error = WorkflowError(message="Render pipeline wired in PR 5.", retryable=True)
-            await self._wait(lambda: self._export_requested or self._cancelled)
+        while True:
+            self.render_attempt_count += 1
+            try:
+                render_output = await workflow.execute_activity(
+                    render_tile_design,
+                    self._render_input(),
+                    start_to_close_timeout=timedelta(minutes=5),
+                    retry_policy=_RENDER_RETRY,
+                )
+                self.render_image_url = render_output.image_url
+                self.error = None
+                break
+            except Exception as exc:
+                workflow.logger.warning("render_tile_design failed: %s", exc)
+                self.error = WorkflowError(
+                    message="Render failed — retry or cancel.",
+                    retryable=True,
+                )
+                # Park until the client sends a retry or cancels. Export is
+                # NOT a valid escape from a failed render.
+                self._render_retry_requested = False
+                await self._wait(lambda: self._render_retry_requested or self._cancelled)
+                if self._cancelled:
+                    break
 
         # --- Phase: Export — generate cut-sheet PDF (stub in PR 1) ---
-        self.step = "replace_material_export"
-        self._export_requested = False
-        self.error = None
-        try:
-            cutsheet_output = await workflow.execute_activity(
-                generate_cut_sheet_pdf,
-                self._cutsheet_input(),
-                start_to_close_timeout=timedelta(minutes=5),
-                retry_policy=_CUTSHEET_RETRY,
-            )
-            self.cut_sheet_pdf_url = cutsheet_output.pdf_url
-        except Exception as exc:
-            workflow.logger.warning("generate_cut_sheet_pdf failed or not yet implemented: %s", exc)
-            self.error = WorkflowError(message="Cut-sheet PDF wired in PR 5.", retryable=True)
-            await self._wait(lambda: self.error is None or self._cancelled)
+        # Only enter export if the render actually succeeded. A cancelled
+        # project exits the loop above with error still set; short-circuit
+        # straight to completed.
+        if not self._cancelled and self.render_image_url is not None:
+            self.step = "replace_material_export"
+            # Gate export on the user explicitly requesting it (tapping
+            # "Download Cut Sheet"). PR 5 may auto-fire on render completion.
+            await self._wait(lambda: self._export_requested or self._cancelled)
+            while not self._cancelled:
+                self.export_attempt_count += 1
+                try:
+                    cutsheet_output = await workflow.execute_activity(
+                        generate_cut_sheet_pdf,
+                        self._cutsheet_input(),
+                        start_to_close_timeout=timedelta(minutes=5),
+                        retry_policy=_CUTSHEET_RETRY,
+                    )
+                    self.cut_sheet_pdf_url = cutsheet_output.pdf_url
+                    self.error = None
+                    break
+                except Exception as exc:
+                    workflow.logger.warning("generate_cut_sheet_pdf failed: %s", exc)
+                    self.error = WorkflowError(
+                        message="Cut-sheet PDF failed — retry or cancel.",
+                        retryable=True,
+                    )
+                    self._export_requested = False
+                    await self._wait(lambda: self._export_requested or self._cancelled)
 
         # --- Phase: Completed + 24h purge timer ---
         self.step = "completed"
@@ -244,7 +273,11 @@ class TileProjectWorkflow:
         self.overage_policy = overage_policy
         self.starting_point_rule = starting_point_rule
         self.contractor_tier = contractor_tier
-        if self.step == "replace_material_estimate":
+        # Recompute whenever materials are known — the saved estimate must
+        # never be stale relative to the policy the client sees. iOS can send
+        # set_policies during render/export (e.g. user edits the cut sheet
+        # policy after seeing the render) and expects a fresh estimate.
+        if self.wall_material is not None and self.floor_material is not None:
             self._recompute_estimate()
 
     @workflow.signal
@@ -254,6 +287,11 @@ class TileProjectWorkflow:
     @workflow.signal
     async def request_render(self) -> None:
         self._render_requested = True
+
+    @workflow.signal
+    async def request_render_retry(self) -> None:
+        """Sent after a render failure to re-attempt the Gemini call."""
+        self._render_retry_requested = True
 
     @workflow.signal
     async def request_export(self) -> None:
@@ -279,4 +317,6 @@ class TileProjectWorkflow:
             render_image_url=self.render_image_url,
             cut_sheet_pdf_url=self.cut_sheet_pdf_url,
             error=self.error,
+            render_attempt_count=self.render_attempt_count,
+            export_attempt_count=self.export_attempt_count,
         )

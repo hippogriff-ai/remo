@@ -87,7 +87,6 @@ def apply_overage(
     tiles_needed: int,
     policy: OveragePolicy,
     *,
-    spec: MaterialSpec,
     cut_count: int,
     tier: ContractorTier = ContractorTier.PRO,
 ) -> int:
@@ -96,9 +95,6 @@ def apply_overage(
     Formulas match the designer's canonical math in
     design_handoff_replace_material/src/state.jsx:57-74.
     """
-    # `spec` is unused today; kept in signature for future per-material tuning
-    # (e.g., fragile materials that warrant more overage).
-    del spec
     if policy is OveragePolicy.FLAT_10:
         return math.ceil(tiles_needed * 1.10 - _CEIL_EPS)
     if policy is OveragePolicy.CONTRACTOR_TIER:
@@ -154,19 +150,6 @@ def _polygon_bbox(polygon: list[Vec2]) -> _BBox:
     xs = [p.x for p in polygon]
     ys = [p.y for p in polygon]
     return _BBox(min_x=min(xs), min_y=min(ys), max_x=max(xs), max_y=max(ys))
-
-
-def _candidate_origins(bbox: _BBox, spec: MaterialSpec) -> list[Vec2]:
-    """5 sensible starting points to try: 4 corners + center-aligned."""
-    cx = (bbox.min_x + bbox.max_x) / 2.0 - spec.module_width_m / 2.0
-    cy = (bbox.min_y + bbox.max_y) / 2.0 - spec.module_height_m / 2.0
-    return [
-        Vec2(x=bbox.min_x, y=bbox.min_y),
-        Vec2(x=bbox.max_x - spec.module_width_m, y=bbox.min_y),
-        Vec2(x=bbox.min_x, y=bbox.max_y - spec.module_height_m),
-        Vec2(x=bbox.max_x - spec.module_width_m, y=bbox.max_y - spec.module_height_m),
-        Vec2(x=cx, y=cy),
-    ]
 
 
 # ----- packer -----
@@ -307,14 +290,12 @@ def build_tile_estimate(tile_input: TileModeInput) -> TileModeEstimate:
     wall_tiles_total = apply_overage(
         wall_tiles_needed,
         tile_input.overage_policy,
-        spec=tile_input.wall_material,
         cut_count=wall_cut_count,
         tier=tile_input.contractor_tier,
     )
     floor_tiles_total = apply_overage(
         floor_tiles_needed,
         tile_input.overage_policy,
-        spec=tile_input.floor_material,
         cut_count=floor_cut_count,
         tier=tile_input.contractor_tier,
     )

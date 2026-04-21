@@ -1,0 +1,19 @@
+appId: com.hippogriff.remo
+---
+# End-to-end tile-mode happy path. Runs all 8 tile subflows in order.
+# Uses the reference_room RoomPlan fixture.
+- launchApp:
+    clearState: true
+    arguments:
+      maestro-test: "true"
+      lidar-fixture: "reference_room"
+    permissions:
+      photos: allow
+      camera: allow
+- runFlow: tile-01-create-project.yaml
+- runFlow: tile-02-scan.yaml
+- runFlow: tile-03-mask-editor.yaml
+- runFlow: tile-04-specs.yaml
+- runFlow: tile-05-estimate-live-toggle.yaml
+- runFlow: tile-06-render.yaml
+- runFlow: tile-08-export-pdf.yaml

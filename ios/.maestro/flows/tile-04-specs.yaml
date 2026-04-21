@@ -1,0 +1,41 @@
+appId: com.hippogriff.remo
+---
+# Tile specs form: fill wall + floor tile dimensions / grout / per-box, then
+# tap "See Estimate". Validation errors tested in tile-04-specs-validation.
+# Accessibility ID contract (PR 3 implements):
+#   tile_wall_width, tile_wall_height, tile_wall_grout, tile_wall_per_box
+#   tile_floor_width, tile_floor_height, tile_floor_grout, tile_floor_per_box
+#   tile_specs_continue — submit button
+- assertVisible: "Materials"
+- tapOn:
+    id: "tile_wall_width"
+- inputText: "30"
+- tapOn:
+    id: "tile_wall_height"
+- inputText: "60"
+- tapOn:
+    id: "tile_wall_grout"
+- inputText: "3"
+- tapOn:
+    id: "tile_wall_per_box"
+- inputText: "10"
+- hideKeyboard
+- tapOn:
+    id: "tile_floor_width"
+- inputText: "60"
+- tapOn:
+    id: "tile_floor_height"
+- inputText: "60"
+- tapOn:
+    id: "tile_floor_grout"
+- inputText: "3"
+- tapOn:
+    id: "tile_floor_per_box"
+- inputText: "5"
+- hideKeyboard
+- tapOn:
+    id: "tile_specs_continue"
+- extendedWaitUntil:
+    visible: "Estimate"
+    timeout: 5000
+- takeScreenshot: tile-04-specs

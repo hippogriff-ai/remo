@@ -1,0 +1,25 @@
+appId: com.hippogriff.remo
+---
+# Cancel a tile project mid-flow: enter specs, tap cancel / back-to-home,
+# confirm the project disappears from HomeScreen.
+# Accessibility ID contract (PR 2+ implements):
+#   tile_cancel_button   — present on every tile-mode screen after scan
+#   tile_cancel_confirm  — confirmation sheet "Delete Project" button
+- launchApp:
+    clearState: true
+    arguments:
+      maestro-test: "true"
+      lidar-fixture: "reference_room"
+    permissions:
+      photos: allow
+      camera: allow
+- runFlow: tile-01-create-project.yaml
+- runFlow: tile-02-scan.yaml
+- tapOn:
+    id: "tile_cancel_button"
+- tapOn:
+    id: "tile_cancel_confirm"
+- extendedWaitUntil:
+    visible: "No Projects Yet"
+    timeout: 5000
+- takeScreenshot: tile-09-cancel

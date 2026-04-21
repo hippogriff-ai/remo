@@ -15,16 +15,13 @@ from fastapi.responses import JSONResponse
 
 from app.config import settings
 from app.models.contracts import (
-    ContractorTier,
     CreateProjectResponse,
     CreateTileProjectRequest,
     ErrorResponse,
     MaterialSpec,
-    OveragePolicy,
     SetTileMaterialsRequest,
     SetTilePoliciesRequest,
     SetTileSurfacesRequest,
-    StartingPointRule,
     TileSpecInput,
     TileWorkflowState,
 )
@@ -40,6 +37,20 @@ router = APIRouter(tags=["tile-projects"])
 
 MAX_SCAN_BYTES = 1 * 1024 * 1024  # 1 MB — same limit as design-flow scan
 _NOT_FOUND = ("not_found", "Tile project not found.")
+_MOCK_NOT_IMPLEMENTED = (
+    "not_implemented",
+    "Tile mode requires Temporal (USE_TEMPORAL=true) — mock mode has no state store.",
+)
+
+
+def _mock_mode_501() -> JSONResponse:
+    """Uniform 501 returned by tile routes when Temporal is disabled.
+
+    Tile mode intentionally has no in-memory mock store (unlike the design
+    flow) — silent no-op signals would mask bugs during local dev. Callers
+    see a clear 501 instead.
+    """
+    return _error(501, *_MOCK_NOT_IMPLEMENTED)
 
 
 def _error(status: int, code: str, message: str, retryable: bool = False) -> JSONResponse:
@@ -135,13 +146,11 @@ async def create_tile_project(
     body: CreateTileProjectRequest, request: Request
 ) -> CreateProjectResponse | JSONResponse:
     """Start a new tile-mode project. Creates a TileProjectWorkflow."""
-    project_id = str(uuid.uuid4())
-
     if not settings.use_temporal:
-        # Mock mode: return an ID without starting a workflow. API tests that
-        # exercise the state-query path must use Temporal mode.
-        logger.info("tile_project_mock_created", project_id=project_id)
-        return CreateProjectResponse(project_id=project_id)
+        # Mock mode has no state store for tile projects; without a workflow
+        # to signal into, returning a project_id would be a lie.
+        return _mock_mode_501()
+    project_id = str(uuid.uuid4())
 
     from temporalio.service import RPCError
 
@@ -173,7 +182,7 @@ async def create_tile_project(
 )
 async def get_tile_project(project_id: str, request: Request) -> TileWorkflowState | JSONResponse:
     if not settings.use_temporal:
-        return _error(501, "not_implemented", "Tile mock state not implemented.")
+        return _mock_mode_501()
     state = await _query_state(request, project_id)
     if state is None:
         return _error(404, *_NOT_FOUND)
@@ -183,10 +192,18 @@ async def get_tile_project(project_id: str, request: Request) -> TileWorkflowSta
 @router.post("/tile-projects/{project_id}/scan")
 async def upload_tile_scan(project_id: str, request: Request, file: UploadFile) -> JSONResponse:
     """Upload RoomPlan JSON, parse, convert to SurfacePatches, signal workflow."""
+    if not settings.use_temporal:
+        return _mock_mode_501()
+
+    # file.size is None for streamed multipart uploads — we MUST also check the
+    # materialized body length after reading so a chunked client can't bypass
+    # the 1 MB cap.
     if file.size is not None and file.size > MAX_SCAN_BYTES:
         return _error(413, "file_too_large", f"Scan exceeds {MAX_SCAN_BYTES // 1024} KB.")
 
     raw = await file.read()
+    if len(raw) > MAX_SCAN_BYTES:
+        return _error(413, "file_too_large", f"Scan exceeds {MAX_SCAN_BYTES // 1024} KB.")
     try:
         data = json.loads(raw)
     except json.JSONDecodeError as exc:
@@ -199,11 +216,10 @@ async def upload_tile_scan(project_id: str, request: Request, file: UploadFile) 
 
     patches = patches_from_room_dimensions(dims)
 
-    if settings.use_temporal:
-        from app.workflows.tile_project import TileProjectWorkflow
+    from app.workflows.tile_project import TileProjectWorkflow
 
-        if err := await _signal(request, project_id, TileProjectWorkflow.set_surfaces, patches):
-            return err
+    if err := await _signal(request, project_id, TileProjectWorkflow.set_surfaces, patches):
+        return err
 
     return JSONResponse(content={"status": "ok", "surface_count": len(patches)})
 
@@ -214,20 +230,21 @@ async def set_tile_materials(
     body: SetTileMaterialsRequest,
     request: Request,
 ) -> JSONResponse:
+    if not settings.use_temporal:
+        return _mock_mode_501()
     wall_material = _tile_spec_to_material(body.wall, material_id="wall-tile")
     floor_material = _tile_spec_to_material(body.floor, material_id="floor-tile")
 
-    if settings.use_temporal:
-        from app.workflows.tile_project import TileProjectWorkflow
+    from app.workflows.tile_project import TileProjectWorkflow
 
-        if err := await _signal(
-            request,
-            project_id,
-            TileProjectWorkflow.set_materials,
-            wall_material,
-            floor_material,
-        ):
-            return err
+    if err := await _signal(
+        request,
+        project_id,
+        TileProjectWorkflow.set_materials,
+        wall_material,
+        floor_material,
+    ):
+        return err
 
     return JSONResponse(content={"status": "ok"})
 
@@ -238,18 +255,19 @@ async def set_tile_policies(
     body: SetTilePoliciesRequest,
     request: Request,
 ) -> JSONResponse:
-    if settings.use_temporal:
-        from app.workflows.tile_project import TileProjectWorkflow
+    if not settings.use_temporal:
+        return _mock_mode_501()
+    from app.workflows.tile_project import TileProjectWorkflow
 
-        if err := await _signal(
-            request,
-            project_id,
-            TileProjectWorkflow.set_policies,
-            body.overage_policy,
-            body.starting_point_rule,
-            body.contractor_tier,
-        ):
-            return err
+    if err := await _signal(
+        request,
+        project_id,
+        TileProjectWorkflow.set_policies,
+        body.overage_policy,
+        body.starting_point_rule,
+        body.contractor_tier,
+    ):
+        return err
 
     return JSONResponse(content={"status": "ok"})
 
@@ -262,44 +280,84 @@ async def set_tile_surfaces(
 ) -> JSONResponse:
     """Overwrite the surfaces list — used when iOS edits masks in the scan
     step (adds user-drawn mask holes to each SurfacePatch)."""
-    if settings.use_temporal:
-        from app.workflows.tile_project import TileProjectWorkflow
+    if not settings.use_temporal:
+        return _mock_mode_501()
+    from app.workflows.tile_project import TileProjectWorkflow
 
-        if err := await _signal(
-            request, project_id, TileProjectWorkflow.set_surfaces, body.surfaces
-        ):
-            return err
+    if err := await _signal(request, project_id, TileProjectWorkflow.set_surfaces, body.surfaces):
+        return err
 
     return JSONResponse(content={"status": "ok"})
 
 
 @router.post("/tile-projects/{project_id}/render")
 async def request_tile_render(project_id: str, request: Request) -> JSONResponse:
-    if settings.use_temporal:
-        from app.workflows.tile_project import TileProjectWorkflow
+    if not settings.use_temporal:
+        return _mock_mode_501()
+    from app.workflows.tile_project import TileProjectWorkflow
 
-        if err := await _signal(request, project_id, TileProjectWorkflow.request_render):
-            return err
+    if err := await _signal(request, project_id, TileProjectWorkflow.request_render):
+        return err
+
+    return JSONResponse(content={"status": "ok"})
+
+
+@router.post("/tile-projects/{project_id}/retry-render")
+async def retry_tile_render(project_id: str, request: Request) -> JSONResponse:
+    """Re-enter the render phase after a failed render attempt.
+
+    The workflow parks on render failure until the client sends this signal
+    (or cancels). Distinct from /render so PR 5 can distinguish a fresh
+    request from a retry for telemetry + retry-count enforcement.
+    """
+    if not settings.use_temporal:
+        return _mock_mode_501()
+    from app.workflows.tile_project import TileProjectWorkflow
+
+    if err := await _signal(request, project_id, TileProjectWorkflow.request_render_retry):
+        return err
+
+    return JSONResponse(content={"status": "ok"})
+
+
+@router.post("/tile-projects/{project_id}/export")
+async def request_tile_export(project_id: str, request: Request) -> JSONResponse:
+    """Kick off cut-sheet PDF generation (post-render)."""
+    if not settings.use_temporal:
+        return _mock_mode_501()
+    from app.workflows.tile_project import TileProjectWorkflow
+
+    if err := await _signal(request, project_id, TileProjectWorkflow.request_export):
+        return err
+
+    return JSONResponse(content={"status": "ok"})
+
+
+@router.post("/tile-projects/{project_id}/confirm-estimate")
+async def confirm_tile_estimate(project_id: str, request: Request) -> JSONResponse:
+    """Lock in the current estimate without immediately requesting a render.
+
+    iOS uses this when the user taps "Use This Estimate" but isn't ready to
+    burn a render credit yet — later they POST /render to actually kick off
+    the image generation.
+    """
+    if not settings.use_temporal:
+        return _mock_mode_501()
+    from app.workflows.tile_project import TileProjectWorkflow
+
+    if err := await _signal(request, project_id, TileProjectWorkflow.confirm_estimate):
+        return err
 
     return JSONResponse(content={"status": "ok"})
 
 
 @router.delete("/tile-projects/{project_id}")
 async def cancel_tile_project(project_id: str, request: Request) -> JSONResponse:
-    if settings.use_temporal:
-        from app.workflows.tile_project import TileProjectWorkflow
+    if not settings.use_temporal:
+        return _mock_mode_501()
+    from app.workflows.tile_project import TileProjectWorkflow
 
-        if err := await _signal(request, project_id, TileProjectWorkflow.cancel_project):
-            return err
+    if err := await _signal(request, project_id, TileProjectWorkflow.cancel_project):
+        return err
 
     return JSONResponse(content={"status": "ok"})
-
-
-# Default policy triple — echoed when the iOS client needs a baseline.
-# Also ensures OveragePolicy/ContractorTier/StartingPointRule stay referenced
-# at runtime (signal bodies pass them through Temporal serialization).
-_POLICY_DEFAULTS = (
-    OveragePolicy.FLAT_10,
-    ContractorTier.PRO,
-    StartingPointRule.CENTERED_FOCAL_WALL,
-)

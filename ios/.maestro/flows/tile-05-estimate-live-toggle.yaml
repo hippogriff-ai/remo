@@ -1,0 +1,40 @@
+appId: com.hippogriff.remo
+---
+# THE CRUX: EstimateScreen toggles overage policy live. This flow asserts the
+# tile count re-renders client-side (no network spinner visible between taps
+# → PR 4's Swift port of pack_surface is doing the math locally).
+#
+# Accessibility ID contract (PR 4 implements):
+#   tile_overage_flat_10          — FLAT_10 segment
+#   tile_overage_risk_adjusted    — RISK_ADJUSTED segment
+#   tile_overage_contractor_tier  — CONTRACTOR_TIER segment
+#   tile_tier_pro, tile_tier_apprentice, tile_tier_perfectionist
+#   tile_starting_rule_{centered_focal_wall,largest_wall_corner,minimize_cut_count}
+#   tile_wall_boxes_value         — wall box count label
+#   tile_floor_boxes_value        — floor box count label
+#   tile_estimate_loading         — spinner (MUST NOT appear during toggle)
+#   tile_estimate_confirm         — confirm button
+- assertVisible: "Estimate"
+- assertVisible:
+    id: "tile_wall_boxes_value"
+- takeScreenshot: tile-05-estimate-flat10
+# Switch to CONTRACTOR_TIER + PERFECTIONIST (18% overage → more boxes).
+- tapOn:
+    id: "tile_overage_contractor_tier"
+- tapOn:
+    id: "tile_tier_perfectionist"
+# Live re-render: the spinner must NEVER appear during these toggles.
+- assertNotVisible:
+    id: "tile_estimate_loading"
+- takeScreenshot: tile-05-estimate-perfectionist
+# Switch starting point to corner — also local math.
+- tapOn:
+    id: "tile_starting_rule_largest_wall_corner"
+- assertNotVisible:
+    id: "tile_estimate_loading"
+- takeScreenshot: tile-05-estimate-corner
+- tapOn:
+    id: "tile_estimate_confirm"
+- extendedWaitUntil:
+    visible: "Render"
+    timeout: 5000

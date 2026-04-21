@@ -477,6 +477,9 @@ class TestOpenAPISchema:
             "/api/v1/tile-projects/{project_id}/policies",
             "/api/v1/tile-projects/{project_id}/surfaces",
             "/api/v1/tile-projects/{project_id}/render",
+            "/api/v1/tile-projects/{project_id}/retry-render",
+            "/api/v1/tile-projects/{project_id}/export",
+            "/api/v1/tile-projects/{project_id}/confirm-estimate",
         }
         assert expected_paths == paths
 

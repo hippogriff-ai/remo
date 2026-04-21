@@ -1,0 +1,39 @@
+appId: com.hippogriff.remo
+---
+# Force a render failure (via -force-render-failure launch arg set in the
+# happy-path), then exercise the retry button.
+# Accessibility ID contract (PR 5 implements):
+#   tile_render_retry  — visible when error is non-null
+#   tile_render_error_message — the user-facing error text
+- launchApp:
+    clearState: true
+    arguments:
+      maestro-test: "true"
+      lidar-fixture: "reference_room"
+      force-render-failure: "true"
+    permissions:
+      photos: allow
+      camera: allow
+- runFlow: tile-01-create-project.yaml
+- runFlow: tile-02-scan.yaml
+- runFlow: tile-04-specs.yaml
+- runFlow: tile-05-estimate-live-toggle.yaml
+- assertVisible: "Render"
+- tapOn:
+    id: "tile_render_start"
+# Render fails → retry button appears.
+- extendedWaitUntil:
+    visible:
+      id: "tile_render_retry"
+    timeout: 30000
+- assertVisible:
+    id: "tile_render_error_message"
+- takeScreenshot: tile-07-retry-error
+- tapOn:
+    id: "tile_render_retry"
+# Second attempt should either succeed (if flag removed) or surface
+# error again — either way we've proven the retry button posts to
+# /tile-projects/{id}/retry-render.
+- extendedWaitUntil:
+    visible: "Render"
+    timeout: 30000
