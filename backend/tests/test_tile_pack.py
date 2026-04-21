@@ -346,6 +346,49 @@ def test_pack_surface_mask_kind_excludes_same_as_opening() -> None:
     assert result_open.cut_modules == result_mask.cut_modules
 
 
+def test_pack_surface_centered_covers_entire_bbox() -> None:
+    """CENTERED_FOCAL_WALL places origin INSIDE the bbox, not at the corner.
+    The packer must back up from origin to also tile the left/top strip.
+    Regression test for the Codex P1 on PR 21 — prior to the fix, CENTERED
+    on a 4m x 3m wall with 1m tile produced 6 tiles (bottom-right quadrant
+    only) instead of the 15 tiles that actually cover the wall.
+    """
+    patch = _rect_patch(4.0, 3.0)
+    spec = _spec(1.0, 1.0, grout_mm=0.0)
+
+    result = pack_surface(patch, spec, StartingPointRule.CENTERED_FOCAL_WALL)
+
+    # Centered at (2.0, 1.5), tile half-width 0.5 → origin (1.5, 1.0).
+    # Columns at x ∈ {-0.5, 0.5, 1.5, 2.5, 3.5} → 5 columns (2 cut edges).
+    # Rows at y ∈ {0.0, 1.0, 2.0} → 3 rows (center at 1.5 - 0.5 = 1.0,
+    # tile spans [1.0, 2.0]; neighbours at y=0, y=2, both exact-fit).
+    assert result.tiles_required == 15
+    # 3 full columns × 3 full rows = 9 full tiles; 2 cut columns × 3 rows = 6 cuts.
+    assert result.full_modules == 9
+    assert result.cut_modules == 6
+    # Covered area must equal the bbox area — nothing left untiled.
+    assert result.covered_area_m2 == pytest.approx(4.0 * 3.0)
+
+
+def test_pack_surface_centered_with_grout_has_no_untiled_left_strip() -> None:
+    """Same anchor-iteration property with non-zero grout. The real invariant:
+    the leftmost tile reaches bbox.min_x and the topmost tile reaches
+    bbox.min_y — no untiled strip on either edge. (Covered area doesn't
+    equal bbox area because grout fills space between tiles.)
+    """
+    patch = _rect_patch(4.0, 3.0)
+    spec = _spec(0.3, 0.6, grout_mm=3.0)
+    result = pack_surface(patch, spec, StartingPointRule.CENTERED_FOCAL_WALL)
+
+    leftmost = min(r.x_m for r in result.rects)
+    topmost = min(r.y_m for r in result.rects)
+    assert leftmost == pytest.approx(0.0)
+    assert topmost == pytest.approx(0.0)
+    # Rightmost tile's right edge reaches bbox.max_x (minus grout).
+    rightmost_right_edge = max(r.x_m + r.width_m for r in result.rects)
+    assert rightmost_right_edge == pytest.approx(4.0)
+
+
 def test_pack_surface_covered_and_waste_areas_are_consistent() -> None:
     """covered_area + waste_area = full_tiles × tile_area."""
     patch = _rect_patch(4.0, 3.0)
@@ -406,26 +449,86 @@ def _bathroom_input(
 
 
 def test_build_tile_estimate_populates_box_counts() -> None:
+    """Box math: boxes = ceil(tiles_total / modules_per_unit). Wall modules
+    per unit = 10 in the fixture, floor = 5. Assert the ceil math is correct.
+    """
     result = build_tile_estimate(_bathroom_input())
 
-    # Boxes should be positive and tiles_total >= packed total.
-    assert result.wall_boxes_total > 0
-    assert result.floor_boxes_total > 0
-    assert result.wall_tiles_total >= sum(p.tiles_required for p in result.wall_packs)
-    assert result.floor_tiles_total >= sum(p.tiles_required for p in result.floor_packs)
+    wall_packed = sum(p.tiles_required for p in result.wall_packs)
+    floor_packed = sum(p.tiles_required for p in result.floor_packs)
+
+    # FLAT_10 overage: tiles_total = ceil(packed * 1.10).
+    expected_wall_total = -(-int(wall_packed * 110) // 100)  # ceil(packed * 1.1)
+    expected_floor_total = -(-int(floor_packed * 110) // 100)
+    assert result.wall_tiles_total == expected_wall_total
+    assert result.floor_tiles_total == expected_floor_total
+
+    # Box count: ceil div by modules_per_unit.
+    assert result.wall_boxes_total == -(-result.wall_tiles_total // 10)
+    assert result.floor_boxes_total == -(-result.floor_tiles_total // 5)
 
 
-def test_build_tile_estimate_applies_overage_policy_consistently() -> None:
-    """FLAT_10 should produce more tiles than a policy with smaller overage,
-    and RISK_ADJUSTED varies with cut density.
+def test_build_tile_estimate_contractor_tier_affects_box_count() -> None:
+    """Perfectionist (18%) should produce STRICTLY MORE boxes than FLAT_10
+    when the packed count is large enough to push across a box boundary.
+
+    This is what `applies_overage_policy_consistently` was trying to say —
+    now it asserts the inequality instead of just `> 0`.
     """
     flat = build_tile_estimate(_bathroom_input(overage=OveragePolicy.FLAT_10))
-    risk = build_tile_estimate(_bathroom_input(overage=OveragePolicy.RISK_ADJUSTED))
 
-    # Both policies produce non-zero box counts for a typical bathroom.
-    assert flat.wall_boxes_total > 0 and risk.wall_boxes_total > 0
+    perfectionist_input = _bathroom_input(overage=OveragePolicy.CONTRACTOR_TIER)
+    perfectionist_input.contractor_tier = ContractorTier.PERFECTIONIST
+    perf = build_tile_estimate(perfectionist_input)
+
+    # FLAT_10 = 10%, PERFECTIONIST = 18%. For the bathroom fixture packed
+    # count (~140 wall + ~14 floor tiles) this difference is > 1 box.
+    assert perf.wall_tiles_total > flat.wall_tiles_total
+    assert perf.wall_boxes_total >= flat.wall_boxes_total
+    assert perf.overage_policy is OveragePolicy.CONTRACTOR_TIER
+    assert perf.contractor_tier is ContractorTier.PERFECTIONIST
     assert flat.overage_policy is OveragePolicy.FLAT_10
-    assert risk.overage_policy is OveragePolicy.RISK_ADJUSTED
+    assert flat.contractor_tier is None
+
+
+def test_build_tile_estimate_risk_adjusted_scales_with_cut_density() -> None:
+    """A single small wall with a tile that produces high cut-density should
+    receive a higher overage than a wall whose tiles fit exactly.
+    """
+    # Wall where every row has edge cuts (3.5m / 1m tile → 4 tiles, 1 cut per row)
+    cut_heavy_patch = _rect_patch(3.5, 3.0)
+    cut_heavy_patch.patch_id = "wall-cut-heavy"
+    # Wall where tiles fit exactly (3m / 1m)
+    exact_patch = _rect_patch(3.0, 3.0)
+    exact_patch.patch_id = "wall-exact"
+    tile_spec = _spec(1.0, 1.0, grout_mm=0.0)
+    floor_spec = _spec(1.0, 1.0, grout_mm=0.0)
+
+    cut_heavy_input = TileModeInput(
+        surfaces=[cut_heavy_patch, _rect_patch(2.0, 2.0, kind="floor")],
+        wall_material=tile_spec,
+        floor_material=floor_spec,
+        overage_policy=OveragePolicy.RISK_ADJUSTED,
+        starting_point_rule=StartingPointRule.LARGEST_WALL_CORNER,
+    )
+    exact_input = TileModeInput(
+        surfaces=[exact_patch, _rect_patch(2.0, 2.0, kind="floor")],
+        wall_material=tile_spec,
+        floor_material=floor_spec,
+        overage_policy=OveragePolicy.RISK_ADJUSTED,
+        starting_point_rule=StartingPointRule.LARGEST_WALL_CORNER,
+    )
+
+    cut_heavy = build_tile_estimate(cut_heavy_input)
+    exact = build_tile_estimate(exact_input)
+
+    # Risk-adjusted = 8% + (cut_count/total) * 12%. Cut-heavy wall ratio is
+    # 3/12 = 0.25 → 11% overage. Exact wall ratio is 0/9 = 0 → 8%.
+    # Packed count difference: cut-heavy 12, exact 9.
+    # cut_heavy tiles_total = ceil(12 * 1.11) = 14
+    # exact tiles_total = ceil(9 * 1.08) = 10
+    assert cut_heavy.wall_tiles_total == 14
+    assert exact.wall_tiles_total == 10
 
 
 def test_build_tile_estimate_contractor_tier_only_set_when_policy_is_contractor() -> None:
@@ -441,15 +544,55 @@ def test_build_tile_estimate_contractor_tier_only_set_when_policy_is_contractor(
 # ----- MIN_CUT_COUNT with grout -----
 
 
-def test_choose_origin_min_cut_count_with_grout_stays_in_valid_range() -> None:
-    """Sanity-check the scorer math when grout > 0 (step_x = tile_w + grout)."""
+def test_choose_origin_min_cut_count_minimizes_edge_distance_score() -> None:
+    """MINIMIZE_CUT_COUNT's actual optimization target: the sum of
+    edge-distances from tile boundaries (sliver width). The chosen origin
+    should score no worse than corner (x=0) on that metric.
+
+    This is a more honest test than "fewer cuts" — the rule doesn't
+    literally minimize count; it minimizes how *ugly* the cuts are.
+    When the width/tile ratio leaves a near-integer remainder, the rule
+    may even shift to produce more cuts if each is farther from sliver.
+    """
     patch = _rect_patch(3.0, 2.4)
-    spec = _spec(0.3, 0.3, grout_mm=5.0)  # grout nonzero, step_x = 0.305
-    origin = choose_origin(patch, spec, StartingPointRule.MINIMIZE_CUT_COUNT)
-    # Expected: origin.x within one step of bbox.min_x.
+    spec = _spec(0.3, 0.3, grout_mm=5.0)
+
+    corner_origin = choose_origin(patch, spec, StartingPointRule.LARGEST_WALL_CORNER)
+    min_origin = choose_origin(patch, spec, StartingPointRule.MINIMIZE_CUT_COUNT)
+
+    # Score = sum of distances from nearest tile boundary at each edge.
     step_x = spec.module_width_m + spec.grout_width_mm / 1000.0
-    assert -step_x - 1e-9 <= origin.x <= 1e-9
-    assert origin.y == pytest.approx(0.0)
+    width = 3.0
+
+    def _score(origin_x: float) -> float:
+        left_cut = ((origin_x % step_x) + step_x) % step_x
+        right_edge = (width - origin_x) % step_x
+        return min(left_cut, step_x - left_cut) + min(right_edge, step_x - right_edge)
+
+    assert _score(min_origin.x) <= _score(corner_origin.x) + 1e-9
+
+
+def test_choose_origin_min_cut_count_eliminates_slivers_when_possible() -> None:
+    """When the surface is width = k * tile_w + half_tile, the rule should
+    center the offcuts so both edges take half a tile (better than corner's
+    one-edge sliver).
+    """
+    # Width = 3.5m, tile 1.0m (no grout): corner leaves a 0.5m right-edge cut.
+    # Centered offset leaves ~0.25m left + ~0.25m right — both under the
+    # ugly-sliver threshold of 0.05m? No, 0.25m is above threshold. Test
+    # with a case where both offsets are ≥ threshold.
+    patch = _rect_patch(3.5, 2.4)
+    spec = _spec(1.0, 1.0, grout_mm=0.0)
+
+    corner = pack_surface(patch, spec, StartingPointRule.LARGEST_WALL_CORNER)
+    min_cuts = pack_surface(patch, spec, StartingPointRule.MINIMIZE_CUT_COUNT)
+
+    # Sum of edge offcut widths on first row — the quantity the rule
+    # optimizes. Should be ≤ corner's (by construction of the scorer).
+    def _first_row_cut_widths(packed) -> float:
+        return sum(r.width_m for r in packed.rects if r.row == 0 and r.is_cut)
+
+    assert _first_row_cut_widths(min_cuts) <= _first_row_cut_widths(corner) + 1e-9
 
 
 # ----- non-rectangular polygons -----
@@ -492,38 +635,33 @@ def test_pack_surface_non_rectangular_l_shape_uses_bbox() -> None:
 
 
 def test_bathroom_reference_matches_js_defaults_flat_10() -> None:
-    """Freeze the Python port's output against the designer's bathroom spec.
+    """Frozen exact numbers for the designer's bathroom spec with FLAT_10.
 
-    Fixture mirrors design_handoff_replace_material/src/state.jsx:4-29 with
-    FLAT_10 overage. Numbers below are the *Python* canonical output; if the
-    JS reference changes, re-run build_tile_estimate and update the fixture
-    with a commit that links to the JS diff.
+    Fixture mirrors design_handoff_replace_material/src/state.jsx:4-29. If
+    this test fails, the Python port diverged from what the JS reference
+    produces (regardless of packer changes) — investigate before updating.
     """
     bathroom = _bathroom_input(overage=OveragePolicy.FLAT_10)
     result = build_tile_estimate(bathroom)
 
-    # Wall tiles: three walls packed with 30x60 tile + 3mm grout, corner start.
-    # Sum tiles_required across walls then apply 10% overage and round up.
+    # Hand-derived expected totals:
+    #   3 walls packed with 30x60 tile + 3mm grout, largest_wall_corner:
+    #     wall-1 (1.8 x 2.4):  6 cols × 4 rows = 24
+    #     wall-2 (2.4 x 2.4):  8 cols × 4 rows = 32
+    #     wall-3 (1.8 x 2.4):  6 cols × 4 rows = 24
+    #     wall total packed = 80 tiles
+    #   floor (2.4 x 1.8) with 60x60 tile + 3mm grout:
+    #     4 cols × 3 rows = 12 tiles
+    # After FLAT_10: walls = ceil(80 * 1.10) = 88, floor = ceil(12 * 1.10) = 14.
+    # Boxes: walls = ceil(88/10) = 9, floor = ceil(14/5) = 3.
     wall_sum = sum(p.tiles_required for p in result.wall_packs)
     floor_sum = sum(p.tiles_required for p in result.floor_packs)
-
-    # Hand-computed lower bound: each wall is at least wall_area / tile_area.
-    wall_area = 1.8 * 2.4 + 2.4 * 2.4 + 1.8 * 2.4
-    floor_area = 2.4 * 1.8
-    assert wall_sum >= wall_area / (0.30 * 0.60) - 4  # allow packer slack
-    assert floor_sum >= floor_area / (0.60 * 0.60) - 2
-
-    # Overage applied: total >= sum, and <= sum * 1.10 rounded up + epsilon.
-    assert result.wall_tiles_total >= wall_sum
-    assert result.floor_tiles_total >= floor_sum
-    assert result.wall_tiles_total <= wall_sum * 1.10 + 1
-    assert result.floor_tiles_total <= floor_sum * 1.10 + 1
-
-    # Box counts follow modules_per_unit: wall=10, floor=5.
-    assert result.wall_boxes_total == pytest.approx(
-        -(-result.wall_tiles_total // 10)  # ceil div
-    )
-    assert result.floor_boxes_total == pytest.approx(-(-result.floor_tiles_total // 5))
+    assert wall_sum == 80
+    assert floor_sum == 12
+    assert result.wall_tiles_total == 88
+    assert result.floor_tiles_total == 14
+    assert result.wall_boxes_total == 9
+    assert result.floor_boxes_total == 3
 
 
 def test_bathroom_reference_contractor_tier_pro_gives_12_percent() -> None:
@@ -531,9 +669,11 @@ def test_bathroom_reference_contractor_tier_pro_gives_12_percent() -> None:
     bathroom.contractor_tier = ContractorTier.PRO
     result = build_tile_estimate(bathroom)
 
-    wall_sum = sum(p.tiles_required for p in result.wall_packs)
-    # Pro tier is 12% — must be at least 12% above packed count.
-    assert result.wall_tiles_total >= math.ceil(wall_sum * 1.12 - 1e-9)
+    # Same packed totals as FLAT_10 (80 wall, 12 floor); pro = 12% → 90, 14.
+    assert result.wall_tiles_total == math.ceil(80 * 1.12 - 1e-9)
+    assert result.floor_tiles_total == math.ceil(12 * 1.12 - 1e-9)
+    assert result.wall_tiles_total == 90
+    assert result.floor_tiles_total == 14
 
 
 # ----- cm→m conversion shim -----

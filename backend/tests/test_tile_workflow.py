@@ -30,6 +30,8 @@ from app.models.contracts import (
     HoleKind,
     MaterialSpec,
     OveragePolicy,
+    RenderTileInput,
+    RenderTileOutput,
     StartingPointRule,
     SurfacePatch,
     Vec2,
@@ -310,23 +312,32 @@ async def test_confirm_estimate_advances_past_estimate_phase(
         assert state.step == "replace_material_render"
 
 
-async def test_retry_render_signal_bumps_attempt_count(
+async def test_retry_render_actually_reinvokes_the_render_activity(
     workflow_env: WorkflowEnvironment, tq: str
 ) -> None:
-    """After a render failure, the workflow parks awaiting
-    request_render_retry. Sending it re-enters the render phase and bumps
-    render_attempt_count. The render activity is a stub (NotImplementedError)
-    so it'll fail again — but the attempt counter proves the retry landed.
-
-    Temporal's activity retry policy (maximum_attempts=2) wraps the activity
-    call; the workflow only sees one attempt per exec_activity invocation.
-    So the counter reflects *workflow-level* retries, not Temporal-internal ones.
+    """Stronger than "counter bumps" — this test replaces the stub render
+    activity with one that counts its own invocations and verifies that:
+      1. The failing activity is invoked once per request_render / retry,
+         so the counter-in-state-query matches real backend work.
+      2. request_render_retry re-enters the render phase (doesn't just
+         flip a flag).
+      3. The error field persists across the retry until a success.
     """
+    from temporalio import activity
+
+    invocation_count = 0
+
+    @activity.defn(name="render_tile_design")  # override the stub's registration
+    async def counting_render(tile_input: RenderTileInput) -> RenderTileOutput:
+        nonlocal invocation_count
+        invocation_count += 1
+        raise NotImplementedError("intentional test failure")
+
     async with Worker(
         workflow_env.client,
         task_queue=tq,
         workflows=[TileProjectWorkflow],
-        activities=_TILE_ACTIVITIES,
+        activities=[counting_render, generate_cut_sheet_pdf, purge_project_data],
     ):
         handle = await _start_workflow(workflow_env, tq)
         await handle.signal(
@@ -336,27 +347,35 @@ async def test_retry_render_signal_bumps_attempt_count(
         await handle.signal(TileProjectWorkflow.set_materials, args=[_wall_spec(), _floor_spec()])
         await handle.signal(TileProjectWorkflow.request_render)
 
-        # Wait for first render failure to surface as error. The activity
-        # retries internally (Temporal's RetryPolicy), so "error" flipping
-        # non-null is what signals that the workflow has parked.
+        # Wait for first render failure to park the workflow.
         state = None
-        for _ in range(200):
+        for _ in range(300):
             await asyncio.sleep(0.01)
             state = await handle.query(TileProjectWorkflow.get_state)
             if state.error is not None:
                 break
-        assert state is not None
+        assert state is not None, "workflow never parked on render failure"
         assert state.error is not None
-        first_attempt = state.render_attempt_count
-        assert first_attempt >= 1
+        assert state.render_attempt_count == 1
+        # The counting activity reports >=1 (Temporal's retry policy may
+        # cause multiple internal retries per exec_activity call, but
+        # workflow-level attempt_count reflects distinct exec_activity calls).
+        invocations_after_first = invocation_count
+        assert invocations_after_first >= 1
 
         await handle.signal(TileProjectWorkflow.request_render_retry)
-        for _ in range(200):
+        for _ in range(300):
             await asyncio.sleep(0.01)
             state = await handle.query(TileProjectWorkflow.get_state)
-            if state.render_attempt_count > first_attempt:
+            if state.render_attempt_count == 2:
                 break
-        assert state.render_attempt_count > first_attempt
+        assert state.render_attempt_count == 2
+        # The activity was invoked again after the retry signal.
+        assert invocation_count > invocations_after_first
+        # Error persists (second attempt also failed) — not silently cleared.
+        assert state.error is not None
+        # Render URL is never populated when the activity fails.
+        assert state.render_image_url is None
 
 
 async def test_cancel_from_scan_phase_terminates_cleanly(
@@ -418,14 +437,19 @@ async def test_set_policies_during_render_phase_recomputes_estimate(
         assert state is not None and state.step == "replace_material_render"
         assert state.estimate is not None
         initial_wall_boxes = state.estimate.wall_boxes_total
+        initial_wall_tiles = state.estimate.wall_tiles_total
         assert state.estimate.overage_policy is OveragePolicy.FLAT_10
 
+        initial_starting_rule = state.estimate.starting_point_rule
         await handle.signal(
             TileProjectWorkflow.set_policies,
             args=[
+                # Keep the starting rule constant — we're testing that overage
+                # policy changes propagate, not that rule changes swap the pack.
                 OveragePolicy.CONTRACTOR_TIER,
-                StartingPointRule.LARGEST_WALL_CORNER,
-                # Perfectionist tier has 18% overage vs FLAT_10's 10% → more boxes.
+                initial_starting_rule,
+                # Perfectionist tier = 18% overage vs FLAT_10's 10% → strictly
+                # more tiles_total, and boxes_total >= FLAT_10's.
                 ContractorTier.PERFECTIONIST,
             ],
         )
@@ -436,7 +460,11 @@ async def test_set_policies_during_render_phase_recomputes_estimate(
                 break
         assert state.estimate is not None
         assert state.estimate.overage_policy is OveragePolicy.CONTRACTOR_TIER
-        # Perfectionist's 18% should give >= the FLAT_10 count.
+        assert state.estimate.contractor_tier is ContractorTier.PERFECTIONIST
+        # Same packed count (same starting rule), higher overage → more tiles.
+        assert state.estimate.wall_tiles_total > initial_wall_tiles
+        # Boxes can equal (if overage didn't push across a box boundary) but
+        # must never be LESS.
         assert state.estimate.wall_boxes_total >= initial_wall_boxes
 
 

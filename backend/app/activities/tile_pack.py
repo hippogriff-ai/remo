@@ -178,21 +178,39 @@ def pack_surface(
     step_y = spec.module_height_m + grout_m
 
     origin = choose_origin(patch, spec, rule)
-    rects: list[TileRect] = []
 
-    y = origin.y
-    row = 0
+    # Tiles live on a grid anchored at `origin` with stride (step_x, step_y).
+    # Tile i occupies [origin.x + i*step_x, origin.x + i*step_x + module_width_m].
+    # We iterate every i whose tile intersects the bbox, which means backing
+    # up to i_lo_x — the smallest i with tile right edge > bbox.min_x.
+    #
+    # This matters for CENTERED_FOCAL_WALL (origin > bbox.min) — without the
+    # back-iteration the left/top strip of the surface gets no tiles and the
+    # count is silently low. (Caught by Codex review on PR 21.)
+    i_lo_x = math.floor((bbox.min_x - spec.module_width_m - origin.x) / step_x) + 1
+    j_lo_y = math.floor((bbox.min_y - spec.module_height_m - origin.y) / step_y) + 1
+
+    rects: list[TileRect] = []
     cut_threshold_eps = 1e-4  # matches JS "tile - 0.1" at cm scale
-    while y < bbox.max_y - 1e-9:
-        x = origin.x
+
+    j = j_lo_y
+    row = 0
+    while True:
+        y = origin.y + j * step_y
+        if y >= bbox.max_y - 1e-9:
+            break
+        i = i_lo_x
         col = 0
-        while x < bbox.max_x - 1e-9:
+        while True:
+            x = origin.x + i * step_x
+            if x >= bbox.max_x - 1e-9:
+                break
             left = max(x, bbox.min_x)
             top = max(y, bbox.min_y)
             right = min(x + spec.module_width_m, bbox.max_x)
             bottom = min(y + spec.module_height_m, bbox.max_y)
             if right <= left or bottom <= top:
-                x += step_x
+                i += 1
                 col += 1
                 continue
 
@@ -215,9 +233,9 @@ def pack_surface(
                         is_cut=is_cut,
                     )
                 )
-            x += step_x
+            i += 1
             col += 1
-        y += step_y
+        j += 1
         row += 1
 
     full_modules = sum(1 for r in rects if not r.is_cut)
