@@ -23,6 +23,8 @@ packages:
     path: Packages/RemoShoppingList
   RemoLiDAR:
     path: Packages/RemoLiDAR
+  RemoTileMode:
+    path: Packages/RemoTileMode
 
 targets:
   Remo:
@@ -42,6 +44,7 @@ targets:
       - package: RemoDesignViews
       - package: RemoShoppingList
       - package: RemoLiDAR
+      - package: RemoTileMode
     configFiles:
       Debug: local.xcconfig
       Release: local.xcconfig

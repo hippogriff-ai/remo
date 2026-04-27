@@ -12,14 +12,14 @@ private let captureLogger = Logger(subsystem: "com.remo.lidar", category: "captu
 ///
 /// Note: We use `RoomBuilder` instead of `RoomCaptureViewDelegate` because the view
 /// delegate requires `NSCoding` conformance (a UIKit archiving protocol not needed here).
-class RoomCaptureCoordinator: NSObject, RoomCaptureSessionDelegate {
+public class RoomCaptureCoordinator: NSObject, RoomCaptureSessionDelegate {
     let onComplete: (Result<CapturedRoom, Error>) -> Void
     /// Set by RoomCaptureViewWrapper so dismantleUIView can use guarded stop.
     weak var sessionRef: CaptureSessionRef?
     private let roomBuilder = RoomBuilder(options: [.beautifyObjects])
     private var buildTask: Task<Void, Never>?
 
-    init(onComplete: @escaping (Result<CapturedRoom, Error>) -> Void) {
+    public init(onComplete: @escaping (Result<CapturedRoom, Error>) -> Void) {
         self.onComplete = onComplete
     }
 
@@ -30,7 +30,7 @@ class RoomCaptureCoordinator: NSObject, RoomCaptureSessionDelegate {
         buildTask?.cancel()
     }
 
-    func captureSession(_ session: RoomCaptureSession, didEndWith data: CapturedRoomData, error: (any Error)?) {
+    public func captureSession(_ session: RoomCaptureSession, didEndWith data: CapturedRoomData, error: (any Error)?) {
         if let error {
             captureLogger.error("capture session ended with error: \(error.localizedDescription, privacy: .public)")
             Task { @MainActor [self] in
