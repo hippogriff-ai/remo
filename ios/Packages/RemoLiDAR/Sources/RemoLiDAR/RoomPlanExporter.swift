@@ -1,4 +1,5 @@
 import Foundation
+import simd
 
 #if canImport(RoomPlan)
 import RoomPlan
@@ -8,7 +9,7 @@ import RoomPlan
 ///
 /// The export path is: CapturedRoom → export() → [String: Any] → uploadScan().
 /// Dimension computation and rounding helpers are outside the RoomPlan guard for testability.
-struct RoomPlanExporter {
+public struct RoomPlanExporter {
 
     // MARK: - Testable types and helpers (no RoomPlan dependency)
 
@@ -63,7 +64,7 @@ struct RoomPlanExporter {
     /// differentiated by `.category`. Objects (furniture) are `CapturedRoom.Object`.
     /// Omits fields Apple doesn't provide: surface material, opening wall_id.
     /// All dimensions are in meters, rounded to 2 decimal places.
-    static func export(_ room: CapturedRoom) -> [String: Any] {
+    public static func export(_ room: CapturedRoom) -> [String: Any] {
         let wallData = extractWallData(room.walls)
         let (width, length, height) = computeRoomDimensions(wallData)
         let floorArea = ((width * length) * 100).rounded() / 100
@@ -76,7 +77,7 @@ struct RoomPlanExporter {
                 "unit": "meters"
             ] as [String: Any],
             "walls": exportWalls(room.walls),
-            "openings": exportOpenings(room.doors + room.windows + room.openings),
+            "openings": exportOpenings(room.doors + room.windows + room.openings, walls: room.walls),
             "furniture": exportObjects(room.objects),
             "surfaces": exportSurfaces(room.floors),
             "floor_area_sqm": floorArea
@@ -111,14 +112,63 @@ struct RoomPlanExporter {
         }
     }
 
-    private static func exportOpenings(_ openings: [CapturedRoom.Surface]) -> [[String: Any]] {
-        openings.map { opening in
-            [
+    private static func exportOpenings(
+        _ openings: [CapturedRoom.Surface],
+        walls: [CapturedRoom.Surface]
+    ) -> [[String: Any]] {
+        // Build wall_id lookup keyed by UUID. RoomPlan sets parentIdentifier on
+        // each opening to its containing wall's identifier.
+        let wallIndex: [UUID: (Int, CapturedRoom.Surface)] = Dictionary(
+            uniqueKeysWithValues: walls.enumerated().map { ($0.1.identifier, ($0.0, $0.1)) }
+        )
+
+        return openings.map { opening in
+            var dict: [String: Any] = [
                 "type": mapSurfaceToOpeningType(opening.category),
                 "width": round2(abs(opening.dimensions.x)),
-                "height": round2(abs(opening.dimensions.y))
-            ] as [String: Any]
+                "height": round2(abs(opening.dimensions.y)),
+            ]
+
+            // Match opening to parent wall (required by tile mode's
+            // patches_from_room_dimensions to project as a Hole on the wall).
+            if let parentID = opening.parentIdentifier,
+               let (wallIdx, wall) = wallIndex[parentID] {
+                dict["wall_id"] = "wall_\(wallIdx)"
+                let (px, py) = projectOntoWall(opening: opening, wall: wall)
+                dict["position"] = [
+                    "x": round2(px),
+                    "y": round2(py),
+                ] as [String: Any]
+            }
+            return dict
         }
+    }
+
+    /// Return the opening's (x, y) top-left in the wall's surface-local 2D
+    /// meters — x along the wall's width axis from the left edge, y from the
+    /// bottom of the wall. Used to produce a backend-compatible position dict.
+    private static func projectOntoWall(
+        opening: CapturedRoom.Surface, wall: CapturedRoom.Surface
+    ) -> (Float, Float) {
+        let wallPos = wall.transform.columns.3
+        let openingPos = opening.transform.columns.3
+        // Horizontal axis of the wall in world space (ignoring any tilt).
+        let wallAxisX = simd_float3(
+            wall.transform.columns.0.x, 0, wall.transform.columns.0.z
+        )
+        let lenX = simd_length(wallAxisX)
+        guard lenX > 1e-5 else { return (0, 0) }
+        let unitX = wallAxisX / lenX
+        let delta = simd_float3(
+            openingPos.x - wallPos.x, 0, openingPos.z - wallPos.z
+        )
+        let centerOffsetX = simd_dot(delta, unitX)
+        let halfWallWidth = abs(wall.dimensions.x) / 2
+        let halfWallHeight = abs(wall.dimensions.y) / 2
+        let positionX = halfWallWidth + centerOffsetX - abs(opening.dimensions.x) / 2
+        let wallBottomY = wallPos.y - halfWallHeight
+        let positionY = openingPos.y - abs(opening.dimensions.y) / 2 - wallBottomY
+        return (positionX, positionY)
     }
 
     private static func exportObjects(_ objects: [CapturedRoom.Object]) -> [[String: Any]] {

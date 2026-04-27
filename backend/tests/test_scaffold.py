@@ -469,6 +469,17 @@ class TestOpenAPISchema:
             "/api/v1/projects/{project_id}/retry",
             "/api/v1/projects/{project_id}/shopping/stream",
             "/api/v1/debug/force-failure",
+            # Tile-mode (Replace Material) endpoints — added in PR 1.
+            "/api/v1/tile-projects",
+            "/api/v1/tile-projects/{project_id}",
+            "/api/v1/tile-projects/{project_id}/scan",
+            "/api/v1/tile-projects/{project_id}/materials",
+            "/api/v1/tile-projects/{project_id}/policies",
+            "/api/v1/tile-projects/{project_id}/surfaces",
+            "/api/v1/tile-projects/{project_id}/render",
+            "/api/v1/tile-projects/{project_id}/retry-render",
+            "/api/v1/tile-projects/{project_id}/export",
+            "/api/v1/tile-projects/{project_id}/confirm-estimate",
         }
         assert expected_paths == paths
 

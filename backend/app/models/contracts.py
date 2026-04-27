@@ -7,6 +7,7 @@ Breaking changes require formal process with all consuming teams.
 
 from __future__ import annotations
 
+from enum import StrEnum
 from typing import Literal
 
 from pydantic import BaseModel, Field
@@ -463,3 +464,248 @@ class ErrorResponse(BaseModel):
     message: str
     retryable: bool
     detail: str | None = None
+
+
+# === Tile Mode (Material Swap) ===
+#
+# Parallel path from the intake/redesign flow. Keep layout, swap material,
+# output count + photoreal render + cut-sheet. Shared primitives — any future
+# material-estimation flow (hardwood planks, drywall, paint, wallpaper) should
+# consume SurfacePatch + MaterialSpec too.
+
+
+class Vec2(BaseModel):
+    x: float
+    y: float
+
+
+class HoleKind(StrEnum):
+    """Type of surface-local region to exclude from tile packing."""
+
+    OPENING = "opening"  # door or window — excluded from tile count
+    MASK = "mask"  # user-drawn region (niche, tub surround, vanity)
+
+
+class Hole(BaseModel):
+    """A rectangular, axis-aligned region within a SurfacePatch that should
+    not be tiled. Used for openings (doors/windows) and user masks.
+    """
+
+    x_m: float
+    y_m: float
+    width_m: float = Field(gt=0)
+    height_m: float = Field(gt=0)
+    label: str = ""
+    kind: HoleKind
+
+
+class SurfacePatch(BaseModel):
+    """A planar surface region for material estimation.
+
+    Coordinates in `polygon`/`holes`/`axis`/`origin` are surface-local 2D meters
+    (the patch has been unfolded into its own plane). `normal_*` gives the
+    world-space orientation used when projecting the patch back into a camera
+    frame for the mask-edit pipeline.
+    """
+
+    patch_id: str
+    kind: Literal["wall", "floor", "ceiling"]
+    polygon: list[Vec2] = Field(min_length=3)
+    holes: list[Hole] = []
+    axis: Vec2
+    origin: Vec2
+    normal_x: float
+    normal_y: float
+    normal_z: float
+
+
+class MaterialSpec(BaseModel):
+    """Unit-of-sale descriptor for a tile / plank / slab / roll."""
+
+    material_id: str
+    module_width_m: float = Field(gt=0)
+    module_height_m: float = Field(gt=0)
+    thickness_mm: float | None = None
+    unit_of_sale: Literal["each", "box", "sqft", "sqm"] = "box"
+    modules_per_unit: int = Field(ge=1, default=1)
+    grout_width_mm: float = Field(ge=0, default=3.0)
+    pattern_repeat_m: float | None = None
+    orientation_rule: Literal["any", "long_axis_horizontal", "long_axis_vertical"] = "any"
+    price_per_box_cents: int | None = None
+    reference_image_url: str | None = None
+
+
+class OveragePolicy(StrEnum):
+    FLAT_10 = "flat_10"
+    RISK_ADJUSTED = "risk_adjusted"
+    CONTRACTOR_TIER = "contractor_tier"
+
+
+class ContractorTier(StrEnum):
+    APPRENTICE = "apprentice"  # +15% — less experienced, more waste
+    PRO = "pro"  # +12% — default; experienced contractor
+    PERFECTIONIST = "perfectionist"  # +18% — demanding fit, more selective cuts
+
+
+class StartingPointRule(StrEnum):
+    CENTERED_FOCAL_WALL = "centered_focal_wall"
+    LARGEST_WALL_CORNER = "largest_wall_corner"
+    MINIMIZE_CUT_COUNT = "minimize_cut_count"
+
+
+class TileRect(BaseModel):
+    """One tile placed on a surface, in surface-local meters.
+
+    Produced by pack_surface. Used both for PDF cut-sheet rendering and as the
+    exact geometry iOS uses for its live-toggle SVG (Swift port of the same
+    algorithm — parity tested).
+    """
+
+    x_m: float
+    y_m: float
+    width_m: float = Field(gt=0)
+    height_m: float = Field(gt=0)
+    row: int = Field(ge=0)
+    col: int = Field(ge=0)
+    is_cut: bool
+
+
+class PackResult(BaseModel):
+    surface_id: str
+    full_modules: int = Field(ge=0)
+    cut_modules: int = Field(ge=0)
+    tiles_required: int = Field(ge=0)  # full + cut (no offcut reuse in PR 1)
+    rects: list[TileRect] = []
+    covered_area_m2: float = Field(ge=0)
+    waste_area_m2: float = Field(ge=0)
+    start_x_m: float = 0.0
+    start_y_m: float = 0.0
+
+
+class TileModeInput(BaseModel):
+    surfaces: list[SurfacePatch] = Field(min_length=1)
+    wall_material: MaterialSpec
+    floor_material: MaterialSpec
+    overage_policy: OveragePolicy = OveragePolicy.FLAT_10
+    contractor_tier: ContractorTier = ContractorTier.PRO
+    starting_point_rule: StartingPointRule = StartingPointRule.CENTERED_FOCAL_WALL
+
+
+class TileModeEstimate(BaseModel):
+    wall_material: MaterialSpec
+    floor_material: MaterialSpec
+    wall_packs: list[PackResult] = []
+    floor_packs: list[PackResult] = []
+    wall_tiles_total: int = Field(ge=0)
+    floor_tiles_total: int = Field(ge=0)
+    wall_boxes_total: int = Field(ge=0)
+    floor_boxes_total: int = Field(ge=0)
+    overage_policy: OveragePolicy
+    contractor_tier: ContractorTier | None = None
+    starting_point_rule: StartingPointRule
+
+
+# --- Tile-mode API request/response shapes ---
+
+
+class TileSpecInput(BaseModel):
+    """Designer's TileSpec (src/state.jsx) — cm-native for iOS form ergonomics.
+
+    The API converts to a MaterialSpec (meters) before signaling the workflow.
+    """
+
+    width_cm: float = Field(gt=0)
+    height_cm: float = Field(gt=0)
+    grout_mm: float = Field(ge=0, default=3.0)
+    per_box: int = Field(ge=1)
+    price_per_box: float | None = None
+
+
+class CreateTileProjectRequest(BaseModel):
+    device_fingerprint: str
+
+
+class SetTileSurfacesRequest(BaseModel):
+    surfaces: list[SurfacePatch] = Field(min_length=1)
+
+
+class SetTileMaterialsRequest(BaseModel):
+    wall: TileSpecInput
+    floor: TileSpecInput
+
+
+class SetTilePoliciesRequest(BaseModel):
+    overage_policy: OveragePolicy
+    contractor_tier: ContractorTier | None = None
+    starting_point_rule: StartingPointRule
+
+
+# --- Tile-mode activity IO (stubs in PR 1; full impl in PR 5) ---
+
+
+class RenderTileInput(BaseModel):
+    project_id: str
+    surfaces: list[SurfacePatch]
+    wall_material: MaterialSpec
+    floor_material: MaterialSpec
+    reference_photo_url: str | None = None
+
+
+class RenderTileOutput(BaseModel):
+    image_url: str
+    seed: int
+    duration_seconds: float
+
+
+class GenerateCutSheetInput(BaseModel):
+    project_id: str
+    estimate: TileModeEstimate
+    surfaces: list[SurfacePatch]
+
+
+class GenerateCutSheetOutput(BaseModel):
+    pdf_url: str
+    page_count: int
+
+
+# --- Tile-mode workflow query state ---
+
+
+class TileWorkflowState(BaseModel):
+    """Shape returned by `GET /api/v1/tile-projects/{id}` via workflow query.
+
+    Mirrors `WorkflowState` style but scoped to tile mode's fields.
+    """
+
+    step: str  # raw value of one of TILE_PROJECT_STEPS (+terminal states)
+    surfaces: list[SurfacePatch] = []
+    wall_material: MaterialSpec | None = None
+    floor_material: MaterialSpec | None = None
+    overage_policy: OveragePolicy = OveragePolicy.FLAT_10
+    contractor_tier: ContractorTier | None = None
+    starting_point_rule: StartingPointRule = StartingPointRule.CENTERED_FOCAL_WALL
+    estimate: TileModeEstimate | None = None
+    render_image_url: str | None = None
+    cut_sheet_pdf_url: str | None = None
+    error: WorkflowError | None = None
+    # Surfaced so iOS can show "Retry (2/3)" without guessing internal state.
+    render_attempt_count: int = Field(ge=0, default=0)
+    export_attempt_count: int = Field(ge=0, default=0)
+    # Soft lock from confirm_estimate. Does NOT trigger render — iOS uses
+    # it to swap the "Confirm" button for a "locked" chip next to a
+    # separate "Generate Render" button.
+    estimate_confirmed: bool = False
+
+
+# --- ProjectStep raw values for tile-mode phases ---
+# Extending the existing iOS ProjectStep enum (see
+# ios/Packages/RemoModels/Sources/RemoModels/ProjectStep.swift) — PR 2 adds
+# the Swift cases that map to these raw strings.
+
+TILE_PROJECT_STEPS: list[str] = [
+    "replace_material_scan",
+    "replace_material_specs",
+    "replace_material_estimate",
+    "replace_material_render",
+    "replace_material_export",
+]

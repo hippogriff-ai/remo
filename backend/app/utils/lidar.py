@@ -30,7 +30,7 @@ import math
 
 import structlog
 
-from app.models.contracts import RoomDimensions
+from app.models.contracts import Hole, HoleKind, RoomDimensions, SurfacePatch, Vec2
 
 logger = structlog.get_logger()
 
@@ -179,3 +179,149 @@ def parse_room_dimensions(raw: dict) -> RoomDimensions:
         floor_area_sqm=floor_area_sqm,
     )
     return dimensions
+
+
+def patches_from_room_dimensions(dims: RoomDimensions) -> list[SurfacePatch]:
+    """Project RoomDimensions → list[SurfacePatch] for tile mode.
+
+    Produces one floor patch (width × length) + one wall patch per entry in
+    ``dims.walls`` (falling back to inferring 4 walls from the room bbox when
+    ``dims.walls`` is empty).
+
+    Openings attached to a wall (``opening["wall_id"] == wall.id``) become
+    ``Hole(kind=OPENING)``. User-drawn masks are added later via the API
+    signal ``set_surfaces`` — not here.
+
+    All coordinates are in meters, surface-local. The patch's ``axis`` is
+    x-unit (tiles run left-to-right by default); ``origin`` is (0, 0) — the
+    packer chooses the real origin via ``choose_origin`` at pack time.
+    """
+    patches: list[SurfacePatch] = []
+
+    # --- Floor ---
+    floor_polygon = [
+        Vec2(x=0.0, y=0.0),
+        Vec2(x=dims.width_m, y=0.0),
+        Vec2(x=dims.width_m, y=dims.length_m),
+        Vec2(x=0.0, y=dims.length_m),
+    ]
+    patches.append(
+        SurfacePatch(
+            patch_id="floor",
+            kind="floor",
+            polygon=floor_polygon,
+            holes=[],
+            axis=Vec2(x=1.0, y=0.0),
+            origin=Vec2(x=0.0, y=0.0),
+            normal_x=0.0,
+            normal_y=0.0,
+            normal_z=1.0,
+        )
+    )
+
+    # --- Walls: use dims.walls when provided; else infer 4 from the bbox. ---
+    walls = dims.walls if dims.walls else _infer_walls_from_bbox(dims)
+    for i, wall in enumerate(walls):
+        try:
+            w_width = float(wall.get("width", 0.0))
+            w_height = float(wall.get("height", dims.height_m))
+        except (TypeError, ValueError):
+            continue
+        if w_width <= 0 or w_height <= 0:
+            continue
+        wall_id = wall.get("id") or f"wall_{i}"
+
+        holes: list[Hole] = []
+        for opening in dims.openings:
+            if opening.get("wall_id") != wall_id:
+                continue
+            position = opening.get("position") or {}
+            opening_type = str(opening.get("type", "opening")).lower()
+            try:
+                hx = float(position.get("x", 0.0))
+                hw = float(opening.get("width", 0.0))
+                hh = float(opening.get("height", 0.0))
+            except (TypeError, ValueError):
+                continue
+            if hw <= 0 or hh <= 0:
+                continue
+            hy = _opening_y_meters(position, opening_type, wall_height=w_height, opening_height=hh)
+            # Clamp so the hole stays within the wall polygon — a malformed
+            # RoomPlan frame shouldn't produce a SurfacePatch with a hole
+            # hanging off the top.
+            if hy + hh > w_height:
+                hy = max(0.0, w_height - hh)
+            holes.append(
+                Hole(
+                    x_m=hx,
+                    y_m=hy,
+                    width_m=hw,
+                    height_m=hh,
+                    label=opening_type,
+                    kind=HoleKind.OPENING,
+                )
+            )
+
+        patches.append(
+            SurfacePatch(
+                patch_id=str(wall_id),
+                kind="wall",
+                polygon=[
+                    Vec2(x=0.0, y=0.0),
+                    Vec2(x=w_width, y=0.0),
+                    Vec2(x=w_width, y=w_height),
+                    Vec2(x=0.0, y=w_height),
+                ],
+                holes=holes,
+                axis=Vec2(x=1.0, y=0.0),
+                origin=Vec2(x=0.0, y=0.0),
+                normal_x=0.0,
+                normal_y=1.0,
+                normal_z=0.0,
+            )
+        )
+
+    return patches
+
+
+def _infer_walls_from_bbox(dims: RoomDimensions) -> list[dict]:
+    """Fallback: infer 4 rectangular walls from room bbox when dims.walls is empty."""
+    return [
+        {"id": "wall_0", "width": dims.width_m, "height": dims.height_m},
+        {"id": "wall_1", "width": dims.length_m, "height": dims.height_m},
+        {"id": "wall_2", "width": dims.width_m, "height": dims.height_m},
+        {"id": "wall_3", "width": dims.length_m, "height": dims.height_m},
+    ]
+
+
+# Typical sill height — used when RoomPlan doesn't include position.y for a
+# window. 0.9m matches US residential code minimums (42" rail for openable
+# windows on upper floors, but sill itself commonly lands 30–36").
+_DEFAULT_WINDOW_SILL_M = 0.9
+
+
+def _opening_y_meters(
+    position: dict,
+    opening_type: str,
+    *,
+    wall_height: float,
+    opening_height: float,
+) -> float:
+    """Resolve the y-offset of an opening on its wall (surface-local meters).
+
+    Honors an explicit ``position.y`` when the client provides one. Falls back
+    to 0.0 for doors / generic openings and to a typical sill height for
+    windows, clamped to keep the opening on the wall.
+    """
+    try:
+        y_raw = position.get("y")
+    except AttributeError:
+        y_raw = None
+    if y_raw is not None:
+        try:
+            return max(0.0, float(y_raw))
+        except (TypeError, ValueError):
+            pass
+    if opening_type == "window":
+        return min(_DEFAULT_WINDOW_SILL_M, max(0.0, wall_height - opening_height))
+    return 0.0

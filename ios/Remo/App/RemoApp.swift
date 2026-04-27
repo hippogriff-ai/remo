@@ -1,10 +1,12 @@
 import SwiftUI
 import RemoModels
 import RemoNetworking
+import RemoTileMode
 
 @main
 struct RemoApp: App {
     private let client: any WorkflowClientProtocol
+    private let tileClient: any TileWorkflowClient
 
     init() {
         let isMaestroTest = UserDefaults.standard.bool(forKey: "maestro-test")
@@ -32,14 +34,18 @@ struct RemoApp: App {
 
         if !isMaestroTest, let url = isValidBackend {
             client = RealWorkflowClient(baseURL: url)
+            tileClient = RealTileWorkflowClient(baseURL: url)
         } else {
             client = MockWorkflowClient(skipPhotos: isMaestroTest)
+            // Tile mode has no mock client yet — use the real one pointed at
+            // a stub URL. Tile CTA will surface errors until Temporal is live.
+            tileClient = RealTileWorkflowClient(baseURL: URL(string: "http://localhost:8000")!)
         }
     }
 
     var body: some Scene {
         WindowGroup {
-            HomeScreen(client: client)
+            HomeScreen(client: client, tileClient: tileClient)
         }
     }
 }

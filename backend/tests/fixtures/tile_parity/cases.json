@@ -1,0 +1,2537 @@
+{
+  "schema_version": 1,
+  "description": "Python\u2194Swift parity fixtures for pack_surface. See README.md.",
+  "cases": [
+    {
+      "name": "exact_fit_4x3_wall_1m_tile",
+      "input": {
+        "patch": {
+          "patch_id": "wall_1",
+          "kind": "wall",
+          "polygon": [
+            {
+              "x": 0.0,
+              "y": 0.0
+            },
+            {
+              "x": 4.0,
+              "y": 0.0
+            },
+            {
+              "x": 4.0,
+              "y": 3.0
+            },
+            {
+              "x": 0.0,
+              "y": 3.0
+            }
+          ],
+          "holes": [],
+          "axis": {
+            "x": 1.0,
+            "y": 0.0
+          },
+          "origin": {
+            "x": 0.0,
+            "y": 0.0
+          },
+          "normal_x": 0.0,
+          "normal_y": 1.0,
+          "normal_z": 0.0
+        },
+        "spec": {
+          "material_id": "m1",
+          "module_width_m": 1.0,
+          "module_height_m": 1.0,
+          "grout_width_mm": 0.0,
+          "modules_per_unit": 10,
+          "unit_of_sale": "box"
+        },
+        "rule": "largest_wall_corner"
+      },
+      "expected": {
+        "surface_id": "wall_1",
+        "full_modules": 12,
+        "cut_modules": 0,
+        "tiles_required": 12,
+        "rects": [
+          {
+            "x_m": 0.0,
+            "y_m": 0.0,
+            "width_m": 1.0,
+            "height_m": 1.0,
+            "row": 0,
+            "col": 0,
+            "is_cut": false
+          },
+          {
+            "x_m": 1.0,
+            "y_m": 0.0,
+            "width_m": 1.0,
+            "height_m": 1.0,
+            "row": 0,
+            "col": 1,
+            "is_cut": false
+          },
+          {
+            "x_m": 2.0,
+            "y_m": 0.0,
+            "width_m": 1.0,
+            "height_m": 1.0,
+            "row": 0,
+            "col": 2,
+            "is_cut": false
+          },
+          {
+            "x_m": 3.0,
+            "y_m": 0.0,
+            "width_m": 1.0,
+            "height_m": 1.0,
+            "row": 0,
+            "col": 3,
+            "is_cut": false
+          },
+          {
+            "x_m": 0.0,
+            "y_m": 1.0,
+            "width_m": 1.0,
+            "height_m": 1.0,
+            "row": 1,
+            "col": 0,
+            "is_cut": false
+          },
+          {
+            "x_m": 1.0,
+            "y_m": 1.0,
+            "width_m": 1.0,
+            "height_m": 1.0,
+            "row": 1,
+            "col": 1,
+            "is_cut": false
+          },
+          {
+            "x_m": 2.0,
+            "y_m": 1.0,
+            "width_m": 1.0,
+            "height_m": 1.0,
+            "row": 1,
+            "col": 2,
+            "is_cut": false
+          },
+          {
+            "x_m": 3.0,
+            "y_m": 1.0,
+            "width_m": 1.0,
+            "height_m": 1.0,
+            "row": 1,
+            "col": 3,
+            "is_cut": false
+          },
+          {
+            "x_m": 0.0,
+            "y_m": 2.0,
+            "width_m": 1.0,
+            "height_m": 1.0,
+            "row": 2,
+            "col": 0,
+            "is_cut": false
+          },
+          {
+            "x_m": 1.0,
+            "y_m": 2.0,
+            "width_m": 1.0,
+            "height_m": 1.0,
+            "row": 2,
+            "col": 1,
+            "is_cut": false
+          },
+          {
+            "x_m": 2.0,
+            "y_m": 2.0,
+            "width_m": 1.0,
+            "height_m": 1.0,
+            "row": 2,
+            "col": 2,
+            "is_cut": false
+          },
+          {
+            "x_m": 3.0,
+            "y_m": 2.0,
+            "width_m": 1.0,
+            "height_m": 1.0,
+            "row": 2,
+            "col": 3,
+            "is_cut": false
+          }
+        ],
+        "covered_area_m2": 12.0,
+        "waste_area_m2": 0.0,
+        "start_x_m": 0.0,
+        "start_y_m": 0.0
+      }
+    },
+    {
+      "name": "inexact_fit_4x3_wall_30x60_tile_corner_start",
+      "input": {
+        "patch": {
+          "patch_id": "wall_2",
+          "kind": "wall",
+          "polygon": [
+            {
+              "x": 0.0,
+              "y": 0.0
+            },
+            {
+              "x": 4.0,
+              "y": 0.0
+            },
+            {
+              "x": 4.0,
+              "y": 3.0
+            },
+            {
+              "x": 0.0,
+              "y": 3.0
+            }
+          ],
+          "holes": [],
+          "axis": {
+            "x": 1.0,
+            "y": 0.0
+          },
+          "origin": {
+            "x": 0.0,
+            "y": 0.0
+          },
+          "normal_x": 0.0,
+          "normal_y": 1.0,
+          "normal_z": 0.0
+        },
+        "spec": {
+          "material_id": "m2",
+          "module_width_m": 0.3,
+          "module_height_m": 0.6,
+          "grout_width_mm": 3.0,
+          "modules_per_unit": 10,
+          "unit_of_sale": "box"
+        },
+        "rule": "largest_wall_corner"
+      },
+      "expected": {
+        "surface_id": "wall_2",
+        "full_modules": 52,
+        "cut_modules": 18,
+        "tiles_required": 70,
+        "rects": [
+          {
+            "x_m": 0.0,
+            "y_m": 0.0,
+            "width_m": 0.3,
+            "height_m": 0.6,
+            "row": 0,
+            "col": 0,
+            "is_cut": false
+          },
+          {
+            "x_m": 0.303,
+            "y_m": 0.0,
+            "width_m": 0.3,
+            "height_m": 0.6,
+            "row": 0,
+            "col": 1,
+            "is_cut": false
+          },
+          {
+            "x_m": 0.606,
+            "y_m": 0.0,
+            "width_m": 0.29999999999999993,
+            "height_m": 0.6,
+            "row": 0,
+            "col": 2,
+            "is_cut": false
+          },
+          {
+            "x_m": 0.909,
+            "y_m": 0.0,
+            "width_m": 0.30000000000000004,
+            "height_m": 0.6,
+            "row": 0,
+            "col": 3,
+            "is_cut": false
+          },
+          {
+            "x_m": 1.212,
+            "y_m": 0.0,
+            "width_m": 0.30000000000000004,
+            "height_m": 0.6,
+            "row": 0,
+            "col": 4,
+            "is_cut": false
+          },
+          {
+            "x_m": 1.515,
+            "y_m": 0.0,
+            "width_m": 0.30000000000000004,
+            "height_m": 0.6,
+            "row": 0,
+            "col": 5,
+            "is_cut": false
+          },
+          {
+            "x_m": 1.818,
+            "y_m": 0.0,
+            "width_m": 0.2999999999999998,
+            "height_m": 0.6,
+            "row": 0,
+            "col": 6,
+            "is_cut": false
+          },
+          {
+            "x_m": 2.121,
+            "y_m": 0.0,
+            "width_m": 0.2999999999999998,
+            "height_m": 0.6,
+            "row": 0,
+            "col": 7,
+            "is_cut": false
+          },
+          {
+            "x_m": 2.424,
+            "y_m": 0.0,
+            "width_m": 0.2999999999999998,
+            "height_m": 0.6,
+            "row": 0,
+            "col": 8,
+            "is_cut": false
+          },
+          {
+            "x_m": 2.727,
+            "y_m": 0.0,
+            "width_m": 0.2999999999999998,
+            "height_m": 0.6,
+            "row": 0,
+            "col": 9,
+            "is_cut": false
+          },
+          {
+            "x_m": 3.03,
+            "y_m": 0.0,
+            "width_m": 0.2999999999999998,
+            "height_m": 0.6,
+            "row": 0,
+            "col": 10,
+            "is_cut": false
+          },
+          {
+            "x_m": 3.3329999999999997,
+            "y_m": 0.0,
+            "width_m": 0.2999999999999998,
+            "height_m": 0.6,
+            "row": 0,
+            "col": 11,
+            "is_cut": false
+          },
+          {
+            "x_m": 3.636,
+            "y_m": 0.0,
+            "width_m": 0.2999999999999998,
+            "height_m": 0.6,
+            "row": 0,
+            "col": 12,
+            "is_cut": false
+          },
+          {
+            "x_m": 3.939,
+            "y_m": 0.0,
+            "width_m": 0.06099999999999994,
+            "height_m": 0.6,
+            "row": 0,
+            "col": 13,
+            "is_cut": true
+          },
+          {
+            "x_m": 0.0,
+            "y_m": 0.603,
+            "width_m": 0.3,
+            "height_m": 0.5999999999999999,
+            "row": 1,
+            "col": 0,
+            "is_cut": false
+          },
+          {
+            "x_m": 0.303,
+            "y_m": 0.603,
+            "width_m": 0.3,
+            "height_m": 0.5999999999999999,
+            "row": 1,
+            "col": 1,
+            "is_cut": false
+          },
+          {
+            "x_m": 0.606,
+            "y_m": 0.603,
+            "width_m": 0.29999999999999993,
+            "height_m": 0.5999999999999999,
+            "row": 1,
+            "col": 2,
+            "is_cut": false
+          },
+          {
+            "x_m": 0.909,
+            "y_m": 0.603,
+            "width_m": 0.30000000000000004,
+            "height_m": 0.5999999999999999,
+            "row": 1,
+            "col": 3,
+            "is_cut": false
+          },
+          {
+            "x_m": 1.212,
+            "y_m": 0.603,
+            "width_m": 0.30000000000000004,
+            "height_m": 0.5999999999999999,
+            "row": 1,
+            "col": 4,
+            "is_cut": false
+          },
+          {
+            "x_m": 1.515,
+            "y_m": 0.603,
+            "width_m": 0.30000000000000004,
+            "height_m": 0.5999999999999999,
+            "row": 1,
+            "col": 5,
+            "is_cut": false
+          },
+          {
+            "x_m": 1.818,
+            "y_m": 0.603,
+            "width_m": 0.2999999999999998,
+            "height_m": 0.5999999999999999,
+            "row": 1,
+            "col": 6,
+            "is_cut": false
+          },
+          {
+            "x_m": 2.121,
+            "y_m": 0.603,
+            "width_m": 0.2999999999999998,
+            "height_m": 0.5999999999999999,
+            "row": 1,
+            "col": 7,
+            "is_cut": false
+          },
+          {
+            "x_m": 2.424,
+            "y_m": 0.603,
+            "width_m": 0.2999999999999998,
+            "height_m": 0.5999999999999999,
+            "row": 1,
+            "col": 8,
+            "is_cut": false
+          },
+          {
+            "x_m": 2.727,
+            "y_m": 0.603,
+            "width_m": 0.2999999999999998,
+            "height_m": 0.5999999999999999,
+            "row": 1,
+            "col": 9,
+            "is_cut": false
+          },
+          {
+            "x_m": 3.03,
+            "y_m": 0.603,
+            "width_m": 0.2999999999999998,
+            "height_m": 0.5999999999999999,
+            "row": 1,
+            "col": 10,
+            "is_cut": false
+          },
+          {
+            "x_m": 3.3329999999999997,
+            "y_m": 0.603,
+            "width_m": 0.2999999999999998,
+            "height_m": 0.5999999999999999,
+            "row": 1,
+            "col": 11,
+            "is_cut": false
+          },
+          {
+            "x_m": 3.636,
+            "y_m": 0.603,
+            "width_m": 0.2999999999999998,
+            "height_m": 0.5999999999999999,
+            "row": 1,
+            "col": 12,
+            "is_cut": false
+          },
+          {
+            "x_m": 3.939,
+            "y_m": 0.603,
+            "width_m": 0.06099999999999994,
+            "height_m": 0.5999999999999999,
+            "row": 1,
+            "col": 13,
+            "is_cut": true
+          },
+          {
+            "x_m": 0.0,
+            "y_m": 1.206,
+            "width_m": 0.3,
+            "height_m": 0.6000000000000001,
+            "row": 2,
+            "col": 0,
+            "is_cut": false
+          },
+          {
+            "x_m": 0.303,
+            "y_m": 1.206,
+            "width_m": 0.3,
+            "height_m": 0.6000000000000001,
+            "row": 2,
+            "col": 1,
+            "is_cut": false
+          },
+          {
+            "x_m": 0.606,
+            "y_m": 1.206,
+            "width_m": 0.29999999999999993,
+            "height_m": 0.6000000000000001,
+            "row": 2,
+            "col": 2,
+            "is_cut": false
+          },
+          {
+            "x_m": 0.909,
+            "y_m": 1.206,
+            "width_m": 0.30000000000000004,
+            "height_m": 0.6000000000000001,
+            "row": 2,
+            "col": 3,
+            "is_cut": false
+          },
+          {
+            "x_m": 1.212,
+            "y_m": 1.206,
+            "width_m": 0.30000000000000004,
+            "height_m": 0.6000000000000001,
+            "row": 2,
+            "col": 4,
+            "is_cut": false
+          },
+          {
+            "x_m": 1.515,
+            "y_m": 1.206,
+            "width_m": 0.30000000000000004,
+            "height_m": 0.6000000000000001,
+            "row": 2,
+            "col": 5,
+            "is_cut": false
+          },
+          {
+            "x_m": 1.818,
+            "y_m": 1.206,
+            "width_m": 0.2999999999999998,
+            "height_m": 0.6000000000000001,
+            "row": 2,
+            "col": 6,
+            "is_cut": false
+          },
+          {
+            "x_m": 2.121,
+            "y_m": 1.206,
+            "width_m": 0.2999999999999998,
+            "height_m": 0.6000000000000001,
+            "row": 2,
+            "col": 7,
+            "is_cut": false
+          },
+          {
+            "x_m": 2.424,
+            "y_m": 1.206,
+            "width_m": 0.2999999999999998,
+            "height_m": 0.6000000000000001,
+            "row": 2,
+            "col": 8,
+            "is_cut": false
+          },
+          {
+            "x_m": 2.727,
+            "y_m": 1.206,
+            "width_m": 0.2999999999999998,
+            "height_m": 0.6000000000000001,
+            "row": 2,
+            "col": 9,
+            "is_cut": false
+          },
+          {
+            "x_m": 3.03,
+            "y_m": 1.206,
+            "width_m": 0.2999999999999998,
+            "height_m": 0.6000000000000001,
+            "row": 2,
+            "col": 10,
+            "is_cut": false
+          },
+          {
+            "x_m": 3.3329999999999997,
+            "y_m": 1.206,
+            "width_m": 0.2999999999999998,
+            "height_m": 0.6000000000000001,
+            "row": 2,
+            "col": 11,
+            "is_cut": false
+          },
+          {
+            "x_m": 3.636,
+            "y_m": 1.206,
+            "width_m": 0.2999999999999998,
+            "height_m": 0.6000000000000001,
+            "row": 2,
+            "col": 12,
+            "is_cut": false
+          },
+          {
+            "x_m": 3.939,
+            "y_m": 1.206,
+            "width_m": 0.06099999999999994,
+            "height_m": 0.6000000000000001,
+            "row": 2,
+            "col": 13,
+            "is_cut": true
+          },
+          {
+            "x_m": 0.0,
+            "y_m": 1.809,
+            "width_m": 0.3,
+            "height_m": 0.5999999999999999,
+            "row": 3,
+            "col": 0,
+            "is_cut": false
+          },
+          {
+            "x_m": 0.303,
+            "y_m": 1.809,
+            "width_m": 0.3,
+            "height_m": 0.5999999999999999,
+            "row": 3,
+            "col": 1,
+            "is_cut": false
+          },
+          {
+            "x_m": 0.606,
+            "y_m": 1.809,
+            "width_m": 0.29999999999999993,
+            "height_m": 0.5999999999999999,
+            "row": 3,
+            "col": 2,
+            "is_cut": false
+          },
+          {
+            "x_m": 0.909,
+            "y_m": 1.809,
+            "width_m": 0.30000000000000004,
+            "height_m": 0.5999999999999999,
+            "row": 3,
+            "col": 3,
+            "is_cut": false
+          },
+          {
+            "x_m": 1.212,
+            "y_m": 1.809,
+            "width_m": 0.30000000000000004,
+            "height_m": 0.5999999999999999,
+            "row": 3,
+            "col": 4,
+            "is_cut": false
+          },
+          {
+            "x_m": 1.515,
+            "y_m": 1.809,
+            "width_m": 0.30000000000000004,
+            "height_m": 0.5999999999999999,
+            "row": 3,
+            "col": 5,
+            "is_cut": false
+          },
+          {
+            "x_m": 1.818,
+            "y_m": 1.809,
+            "width_m": 0.2999999999999998,
+            "height_m": 0.5999999999999999,
+            "row": 3,
+            "col": 6,
+            "is_cut": false
+          },
+          {
+            "x_m": 2.121,
+            "y_m": 1.809,
+            "width_m": 0.2999999999999998,
+            "height_m": 0.5999999999999999,
+            "row": 3,
+            "col": 7,
+            "is_cut": false
+          },
+          {
+            "x_m": 2.424,
+            "y_m": 1.809,
+            "width_m": 0.2999999999999998,
+            "height_m": 0.5999999999999999,
+            "row": 3,
+            "col": 8,
+            "is_cut": false
+          },
+          {
+            "x_m": 2.727,
+            "y_m": 1.809,
+            "width_m": 0.2999999999999998,
+            "height_m": 0.5999999999999999,
+            "row": 3,
+            "col": 9,
+            "is_cut": false
+          },
+          {
+            "x_m": 3.03,
+            "y_m": 1.809,
+            "width_m": 0.2999999999999998,
+            "height_m": 0.5999999999999999,
+            "row": 3,
+            "col": 10,
+            "is_cut": false
+          },
+          {
+            "x_m": 3.3329999999999997,
+            "y_m": 1.809,
+            "width_m": 0.2999999999999998,
+            "height_m": 0.5999999999999999,
+            "row": 3,
+            "col": 11,
+            "is_cut": false
+          },
+          {
+            "x_m": 3.636,
+            "y_m": 1.809,
+            "width_m": 0.2999999999999998,
+            "height_m": 0.5999999999999999,
+            "row": 3,
+            "col": 12,
+            "is_cut": false
+          },
+          {
+            "x_m": 3.939,
+            "y_m": 1.809,
+            "width_m": 0.06099999999999994,
+            "height_m": 0.5999999999999999,
+            "row": 3,
+            "col": 13,
+            "is_cut": true
+          },
+          {
+            "x_m": 0.0,
+            "y_m": 2.412,
+            "width_m": 0.3,
+            "height_m": 0.5880000000000001,
+            "row": 4,
+            "col": 0,
+            "is_cut": true
+          },
+          {
+            "x_m": 0.303,
+            "y_m": 2.412,
+            "width_m": 0.3,
+            "height_m": 0.5880000000000001,
+            "row": 4,
+            "col": 1,
+            "is_cut": true
+          },
+          {
+            "x_m": 0.606,
+            "y_m": 2.412,
+            "width_m": 0.29999999999999993,
+            "height_m": 0.5880000000000001,
+            "row": 4,
+            "col": 2,
+            "is_cut": true
+          },
+          {
+            "x_m": 0.909,
+            "y_m": 2.412,
+            "width_m": 0.30000000000000004,
+            "height_m": 0.5880000000000001,
+            "row": 4,
+            "col": 3,
+            "is_cut": true
+          },
+          {
+            "x_m": 1.212,
+            "y_m": 2.412,
+            "width_m": 0.30000000000000004,
+            "height_m": 0.5880000000000001,
+            "row": 4,
+            "col": 4,
+            "is_cut": true
+          },
+          {
+            "x_m": 1.515,
+            "y_m": 2.412,
+            "width_m": 0.30000000000000004,
+            "height_m": 0.5880000000000001,
+            "row": 4,
+            "col": 5,
+            "is_cut": true
+          },
+          {
+            "x_m": 1.818,
+            "y_m": 2.412,
+            "width_m": 0.2999999999999998,
+            "height_m": 0.5880000000000001,
+            "row": 4,
+            "col": 6,
+            "is_cut": true
+          },
+          {
+            "x_m": 2.121,
+            "y_m": 2.412,
+            "width_m": 0.2999999999999998,
+            "height_m": 0.5880000000000001,
+            "row": 4,
+            "col": 7,
+            "is_cut": true
+          },
+          {
+            "x_m": 2.424,
+            "y_m": 2.412,
+            "width_m": 0.2999999999999998,
+            "height_m": 0.5880000000000001,
+            "row": 4,
+            "col": 8,
+            "is_cut": true
+          },
+          {
+            "x_m": 2.727,
+            "y_m": 2.412,
+            "width_m": 0.2999999999999998,
+            "height_m": 0.5880000000000001,
+            "row": 4,
+            "col": 9,
+            "is_cut": true
+          },
+          {
+            "x_m": 3.03,
+            "y_m": 2.412,
+            "width_m": 0.2999999999999998,
+            "height_m": 0.5880000000000001,
+            "row": 4,
+            "col": 10,
+            "is_cut": true
+          },
+          {
+            "x_m": 3.3329999999999997,
+            "y_m": 2.412,
+            "width_m": 0.2999999999999998,
+            "height_m": 0.5880000000000001,
+            "row": 4,
+            "col": 11,
+            "is_cut": true
+          },
+          {
+            "x_m": 3.636,
+            "y_m": 2.412,
+            "width_m": 0.2999999999999998,
+            "height_m": 0.5880000000000001,
+            "row": 4,
+            "col": 12,
+            "is_cut": true
+          },
+          {
+            "x_m": 3.939,
+            "y_m": 2.412,
+            "width_m": 0.06099999999999994,
+            "height_m": 0.5880000000000001,
+            "row": 4,
+            "col": 13,
+            "is_cut": true
+          }
+        ],
+        "covered_area_m2": 11.835467999999995,
+        "waste_area_m2": 0.7645320000000038,
+        "start_x_m": 0.0,
+        "start_y_m": 0.0
+      }
+    },
+    {
+      "name": "wall_with_door_opening",
+      "input": {
+        "patch": {
+          "patch_id": "wall_with_door",
+          "kind": "wall",
+          "polygon": [
+            {
+              "x": 0.0,
+              "y": 0.0
+            },
+            {
+              "x": 4.0,
+              "y": 0.0
+            },
+            {
+              "x": 4.0,
+              "y": 3.0
+            },
+            {
+              "x": 0.0,
+              "y": 3.0
+            }
+          ],
+          "holes": [
+            {
+              "x_m": 1.0,
+              "y_m": 0.0,
+              "width_m": 1.0,
+              "height_m": 2.1,
+              "label": "door",
+              "kind": "opening"
+            }
+          ],
+          "axis": {
+            "x": 1.0,
+            "y": 0.0
+          },
+          "origin": {
+            "x": 0.0,
+            "y": 0.0
+          },
+          "normal_x": 0.0,
+          "normal_y": 1.0,
+          "normal_z": 0.0
+        },
+        "spec": {
+          "material_id": "m1",
+          "module_width_m": 1.0,
+          "module_height_m": 1.0,
+          "grout_width_mm": 0.0,
+          "modules_per_unit": 10,
+          "unit_of_sale": "box"
+        },
+        "rule": "largest_wall_corner"
+      },
+      "expected": {
+        "surface_id": "wall_with_door",
+        "full_modules": 10,
+        "cut_modules": 0,
+        "tiles_required": 10,
+        "rects": [
+          {
+            "x_m": 0.0,
+            "y_m": 0.0,
+            "width_m": 1.0,
+            "height_m": 1.0,
+            "row": 0,
+            "col": 0,
+            "is_cut": false
+          },
+          {
+            "x_m": 2.0,
+            "y_m": 0.0,
+            "width_m": 1.0,
+            "height_m": 1.0,
+            "row": 0,
+            "col": 2,
+            "is_cut": false
+          },
+          {
+            "x_m": 3.0,
+            "y_m": 0.0,
+            "width_m": 1.0,
+            "height_m": 1.0,
+            "row": 0,
+            "col": 3,
+            "is_cut": false
+          },
+          {
+            "x_m": 0.0,
+            "y_m": 1.0,
+            "width_m": 1.0,
+            "height_m": 1.0,
+            "row": 1,
+            "col": 0,
+            "is_cut": false
+          },
+          {
+            "x_m": 2.0,
+            "y_m": 1.0,
+            "width_m": 1.0,
+            "height_m": 1.0,
+            "row": 1,
+            "col": 2,
+            "is_cut": false
+          },
+          {
+            "x_m": 3.0,
+            "y_m": 1.0,
+            "width_m": 1.0,
+            "height_m": 1.0,
+            "row": 1,
+            "col": 3,
+            "is_cut": false
+          },
+          {
+            "x_m": 0.0,
+            "y_m": 2.0,
+            "width_m": 1.0,
+            "height_m": 1.0,
+            "row": 2,
+            "col": 0,
+            "is_cut": false
+          },
+          {
+            "x_m": 1.0,
+            "y_m": 2.0,
+            "width_m": 1.0,
+            "height_m": 1.0,
+            "row": 2,
+            "col": 1,
+            "is_cut": false
+          },
+          {
+            "x_m": 2.0,
+            "y_m": 2.0,
+            "width_m": 1.0,
+            "height_m": 1.0,
+            "row": 2,
+            "col": 2,
+            "is_cut": false
+          },
+          {
+            "x_m": 3.0,
+            "y_m": 2.0,
+            "width_m": 1.0,
+            "height_m": 1.0,
+            "row": 2,
+            "col": 3,
+            "is_cut": false
+          }
+        ],
+        "covered_area_m2": 10.0,
+        "waste_area_m2": 0.0,
+        "start_x_m": 0.0,
+        "start_y_m": 0.0
+      }
+    },
+    {
+      "name": "wall_with_mask_hole_same_as_opening",
+      "input": {
+        "patch": {
+          "patch_id": "wall_with_mask",
+          "kind": "wall",
+          "polygon": [
+            {
+              "x": 0.0,
+              "y": 0.0
+            },
+            {
+              "x": 4.0,
+              "y": 0.0
+            },
+            {
+              "x": 4.0,
+              "y": 3.0
+            },
+            {
+              "x": 0.0,
+              "y": 3.0
+            }
+          ],
+          "holes": [
+            {
+              "x_m": 1.0,
+              "y_m": 0.0,
+              "width_m": 1.0,
+              "height_m": 2.1,
+              "label": "niche",
+              "kind": "mask"
+            }
+          ],
+          "axis": {
+            "x": 1.0,
+            "y": 0.0
+          },
+          "origin": {
+            "x": 0.0,
+            "y": 0.0
+          },
+          "normal_x": 0.0,
+          "normal_y": 1.0,
+          "normal_z": 0.0
+        },
+        "spec": {
+          "material_id": "m1",
+          "module_width_m": 1.0,
+          "module_height_m": 1.0,
+          "grout_width_mm": 0.0,
+          "modules_per_unit": 10,
+          "unit_of_sale": "box"
+        },
+        "rule": "largest_wall_corner"
+      },
+      "expected": {
+        "surface_id": "wall_with_mask",
+        "full_modules": 10,
+        "cut_modules": 0,
+        "tiles_required": 10,
+        "rects": [
+          {
+            "x_m": 0.0,
+            "y_m": 0.0,
+            "width_m": 1.0,
+            "height_m": 1.0,
+            "row": 0,
+            "col": 0,
+            "is_cut": false
+          },
+          {
+            "x_m": 2.0,
+            "y_m": 0.0,
+            "width_m": 1.0,
+            "height_m": 1.0,
+            "row": 0,
+            "col": 2,
+            "is_cut": false
+          },
+          {
+            "x_m": 3.0,
+            "y_m": 0.0,
+            "width_m": 1.0,
+            "height_m": 1.0,
+            "row": 0,
+            "col": 3,
+            "is_cut": false
+          },
+          {
+            "x_m": 0.0,
+            "y_m": 1.0,
+            "width_m": 1.0,
+            "height_m": 1.0,
+            "row": 1,
+            "col": 0,
+            "is_cut": false
+          },
+          {
+            "x_m": 2.0,
+            "y_m": 1.0,
+            "width_m": 1.0,
+            "height_m": 1.0,
+            "row": 1,
+            "col": 2,
+            "is_cut": false
+          },
+          {
+            "x_m": 3.0,
+            "y_m": 1.0,
+            "width_m": 1.0,
+            "height_m": 1.0,
+            "row": 1,
+            "col": 3,
+            "is_cut": false
+          },
+          {
+            "x_m": 0.0,
+            "y_m": 2.0,
+            "width_m": 1.0,
+            "height_m": 1.0,
+            "row": 2,
+            "col": 0,
+            "is_cut": false
+          },
+          {
+            "x_m": 1.0,
+            "y_m": 2.0,
+            "width_m": 1.0,
+            "height_m": 1.0,
+            "row": 2,
+            "col": 1,
+            "is_cut": false
+          },
+          {
+            "x_m": 2.0,
+            "y_m": 2.0,
+            "width_m": 1.0,
+            "height_m": 1.0,
+            "row": 2,
+            "col": 2,
+            "is_cut": false
+          },
+          {
+            "x_m": 3.0,
+            "y_m": 2.0,
+            "width_m": 1.0,
+            "height_m": 1.0,
+            "row": 2,
+            "col": 3,
+            "is_cut": false
+          }
+        ],
+        "covered_area_m2": 10.0,
+        "waste_area_m2": 0.0,
+        "start_x_m": 0.0,
+        "start_y_m": 0.0
+      }
+    },
+    {
+      "name": "centered_focal_wall_origin_is_negative",
+      "input": {
+        "patch": {
+          "patch_id": "wall_centered",
+          "kind": "wall",
+          "polygon": [
+            {
+              "x": 0.0,
+              "y": 0.0
+            },
+            {
+              "x": 4.0,
+              "y": 0.0
+            },
+            {
+              "x": 4.0,
+              "y": 3.0
+            },
+            {
+              "x": 0.0,
+              "y": 3.0
+            }
+          ],
+          "holes": [],
+          "axis": {
+            "x": 1.0,
+            "y": 0.0
+          },
+          "origin": {
+            "x": 0.0,
+            "y": 0.0
+          },
+          "normal_x": 0.0,
+          "normal_y": 1.0,
+          "normal_z": 0.0
+        },
+        "spec": {
+          "material_id": "m2",
+          "module_width_m": 0.6,
+          "module_height_m": 0.3,
+          "grout_width_mm": 0.0,
+          "modules_per_unit": 10,
+          "unit_of_sale": "box"
+        },
+        "rule": "centered_focal_wall"
+      },
+      "expected": {
+        "surface_id": "wall_centered",
+        "full_modules": 45,
+        "cut_modules": 32,
+        "tiles_required": 77,
+        "rects": [
+          {
+            "x_m": 0.0,
+            "y_m": 0.0,
+            "width_m": 0.5000000000000001,
+            "height_m": 0.15000000000000008,
+            "row": 0,
+            "col": 0,
+            "is_cut": true
+          },
+          {
+            "x_m": 0.5,
+            "y_m": 0.0,
+            "width_m": 0.6000000000000001,
+            "height_m": 0.15000000000000008,
+            "row": 0,
+            "col": 1,
+            "is_cut": true
+          },
+          {
+            "x_m": 1.1,
+            "y_m": 0.0,
+            "width_m": 0.6000000000000001,
+            "height_m": 0.15000000000000008,
+            "row": 0,
+            "col": 2,
+            "is_cut": true
+          },
+          {
+            "x_m": 1.7,
+            "y_m": 0.0,
+            "width_m": 0.5999999999999999,
+            "height_m": 0.15000000000000008,
+            "row": 0,
+            "col": 3,
+            "is_cut": true
+          },
+          {
+            "x_m": 2.3,
+            "y_m": 0.0,
+            "width_m": 0.6000000000000001,
+            "height_m": 0.15000000000000008,
+            "row": 0,
+            "col": 4,
+            "is_cut": true
+          },
+          {
+            "x_m": 2.9,
+            "y_m": 0.0,
+            "width_m": 0.6000000000000001,
+            "height_m": 0.15000000000000008,
+            "row": 0,
+            "col": 5,
+            "is_cut": true
+          },
+          {
+            "x_m": 3.5,
+            "y_m": 0.0,
+            "width_m": 0.5,
+            "height_m": 0.15000000000000008,
+            "row": 0,
+            "col": 6,
+            "is_cut": true
+          },
+          {
+            "x_m": 0.0,
+            "y_m": 0.15000000000000013,
+            "width_m": 0.5000000000000001,
+            "height_m": 0.3,
+            "row": 1,
+            "col": 0,
+            "is_cut": true
+          },
+          {
+            "x_m": 0.5,
+            "y_m": 0.15000000000000013,
+            "width_m": 0.6000000000000001,
+            "height_m": 0.3,
+            "row": 1,
+            "col": 1,
+            "is_cut": false
+          },
+          {
+            "x_m": 1.1,
+            "y_m": 0.15000000000000013,
+            "width_m": 0.6000000000000001,
+            "height_m": 0.3,
+            "row": 1,
+            "col": 2,
+            "is_cut": false
+          },
+          {
+            "x_m": 1.7,
+            "y_m": 0.15000000000000013,
+            "width_m": 0.5999999999999999,
+            "height_m": 0.3,
+            "row": 1,
+            "col": 3,
+            "is_cut": false
+          },
+          {
+            "x_m": 2.3,
+            "y_m": 0.15000000000000013,
+            "width_m": 0.6000000000000001,
+            "height_m": 0.3,
+            "row": 1,
+            "col": 4,
+            "is_cut": false
+          },
+          {
+            "x_m": 2.9,
+            "y_m": 0.15000000000000013,
+            "width_m": 0.6000000000000001,
+            "height_m": 0.3,
+            "row": 1,
+            "col": 5,
+            "is_cut": false
+          },
+          {
+            "x_m": 3.5,
+            "y_m": 0.15000000000000013,
+            "width_m": 0.5,
+            "height_m": 0.3,
+            "row": 1,
+            "col": 6,
+            "is_cut": true
+          },
+          {
+            "x_m": 0.0,
+            "y_m": 0.4500000000000002,
+            "width_m": 0.5000000000000001,
+            "height_m": 0.30000000000000004,
+            "row": 2,
+            "col": 0,
+            "is_cut": true
+          },
+          {
+            "x_m": 0.5,
+            "y_m": 0.4500000000000002,
+            "width_m": 0.6000000000000001,
+            "height_m": 0.30000000000000004,
+            "row": 2,
+            "col": 1,
+            "is_cut": false
+          },
+          {
+            "x_m": 1.1,
+            "y_m": 0.4500000000000002,
+            "width_m": 0.6000000000000001,
+            "height_m": 0.30000000000000004,
+            "row": 2,
+            "col": 2,
+            "is_cut": false
+          },
+          {
+            "x_m": 1.7,
+            "y_m": 0.4500000000000002,
+            "width_m": 0.5999999999999999,
+            "height_m": 0.30000000000000004,
+            "row": 2,
+            "col": 3,
+            "is_cut": false
+          },
+          {
+            "x_m": 2.3,
+            "y_m": 0.4500000000000002,
+            "width_m": 0.6000000000000001,
+            "height_m": 0.30000000000000004,
+            "row": 2,
+            "col": 4,
+            "is_cut": false
+          },
+          {
+            "x_m": 2.9,
+            "y_m": 0.4500000000000002,
+            "width_m": 0.6000000000000001,
+            "height_m": 0.30000000000000004,
+            "row": 2,
+            "col": 5,
+            "is_cut": false
+          },
+          {
+            "x_m": 3.5,
+            "y_m": 0.4500000000000002,
+            "width_m": 0.5,
+            "height_m": 0.30000000000000004,
+            "row": 2,
+            "col": 6,
+            "is_cut": true
+          },
+          {
+            "x_m": 0.0,
+            "y_m": 0.7500000000000001,
+            "width_m": 0.5000000000000001,
+            "height_m": 0.29999999999999993,
+            "row": 3,
+            "col": 0,
+            "is_cut": true
+          },
+          {
+            "x_m": 0.5,
+            "y_m": 0.7500000000000001,
+            "width_m": 0.6000000000000001,
+            "height_m": 0.29999999999999993,
+            "row": 3,
+            "col": 1,
+            "is_cut": false
+          },
+          {
+            "x_m": 1.1,
+            "y_m": 0.7500000000000001,
+            "width_m": 0.6000000000000001,
+            "height_m": 0.29999999999999993,
+            "row": 3,
+            "col": 2,
+            "is_cut": false
+          },
+          {
+            "x_m": 1.7,
+            "y_m": 0.7500000000000001,
+            "width_m": 0.5999999999999999,
+            "height_m": 0.29999999999999993,
+            "row": 3,
+            "col": 3,
+            "is_cut": false
+          },
+          {
+            "x_m": 2.3,
+            "y_m": 0.7500000000000001,
+            "width_m": 0.6000000000000001,
+            "height_m": 0.29999999999999993,
+            "row": 3,
+            "col": 4,
+            "is_cut": false
+          },
+          {
+            "x_m": 2.9,
+            "y_m": 0.7500000000000001,
+            "width_m": 0.6000000000000001,
+            "height_m": 0.29999999999999993,
+            "row": 3,
+            "col": 5,
+            "is_cut": false
+          },
+          {
+            "x_m": 3.5,
+            "y_m": 0.7500000000000001,
+            "width_m": 0.5,
+            "height_m": 0.29999999999999993,
+            "row": 3,
+            "col": 6,
+            "is_cut": true
+          },
+          {
+            "x_m": 0.0,
+            "y_m": 1.05,
+            "width_m": 0.5000000000000001,
+            "height_m": 0.30000000000000004,
+            "row": 4,
+            "col": 0,
+            "is_cut": true
+          },
+          {
+            "x_m": 0.5,
+            "y_m": 1.05,
+            "width_m": 0.6000000000000001,
+            "height_m": 0.30000000000000004,
+            "row": 4,
+            "col": 1,
+            "is_cut": false
+          },
+          {
+            "x_m": 1.1,
+            "y_m": 1.05,
+            "width_m": 0.6000000000000001,
+            "height_m": 0.30000000000000004,
+            "row": 4,
+            "col": 2,
+            "is_cut": false
+          },
+          {
+            "x_m": 1.7,
+            "y_m": 1.05,
+            "width_m": 0.5999999999999999,
+            "height_m": 0.30000000000000004,
+            "row": 4,
+            "col": 3,
+            "is_cut": false
+          },
+          {
+            "x_m": 2.3,
+            "y_m": 1.05,
+            "width_m": 0.6000000000000001,
+            "height_m": 0.30000000000000004,
+            "row": 4,
+            "col": 4,
+            "is_cut": false
+          },
+          {
+            "x_m": 2.9,
+            "y_m": 1.05,
+            "width_m": 0.6000000000000001,
+            "height_m": 0.30000000000000004,
+            "row": 4,
+            "col": 5,
+            "is_cut": false
+          },
+          {
+            "x_m": 3.5,
+            "y_m": 1.05,
+            "width_m": 0.5,
+            "height_m": 0.30000000000000004,
+            "row": 4,
+            "col": 6,
+            "is_cut": true
+          },
+          {
+            "x_m": 0.0,
+            "y_m": 1.35,
+            "width_m": 0.5000000000000001,
+            "height_m": 0.30000000000000004,
+            "row": 5,
+            "col": 0,
+            "is_cut": true
+          },
+          {
+            "x_m": 0.5,
+            "y_m": 1.35,
+            "width_m": 0.6000000000000001,
+            "height_m": 0.30000000000000004,
+            "row": 5,
+            "col": 1,
+            "is_cut": false
+          },
+          {
+            "x_m": 1.1,
+            "y_m": 1.35,
+            "width_m": 0.6000000000000001,
+            "height_m": 0.30000000000000004,
+            "row": 5,
+            "col": 2,
+            "is_cut": false
+          },
+          {
+            "x_m": 1.7,
+            "y_m": 1.35,
+            "width_m": 0.5999999999999999,
+            "height_m": 0.30000000000000004,
+            "row": 5,
+            "col": 3,
+            "is_cut": false
+          },
+          {
+            "x_m": 2.3,
+            "y_m": 1.35,
+            "width_m": 0.6000000000000001,
+            "height_m": 0.30000000000000004,
+            "row": 5,
+            "col": 4,
+            "is_cut": false
+          },
+          {
+            "x_m": 2.9,
+            "y_m": 1.35,
+            "width_m": 0.6000000000000001,
+            "height_m": 0.30000000000000004,
+            "row": 5,
+            "col": 5,
+            "is_cut": false
+          },
+          {
+            "x_m": 3.5,
+            "y_m": 1.35,
+            "width_m": 0.5,
+            "height_m": 0.30000000000000004,
+            "row": 5,
+            "col": 6,
+            "is_cut": true
+          },
+          {
+            "x_m": 0.0,
+            "y_m": 1.6500000000000001,
+            "width_m": 0.5000000000000001,
+            "height_m": 0.30000000000000004,
+            "row": 6,
+            "col": 0,
+            "is_cut": true
+          },
+          {
+            "x_m": 0.5,
+            "y_m": 1.6500000000000001,
+            "width_m": 0.6000000000000001,
+            "height_m": 0.30000000000000004,
+            "row": 6,
+            "col": 1,
+            "is_cut": false
+          },
+          {
+            "x_m": 1.1,
+            "y_m": 1.6500000000000001,
+            "width_m": 0.6000000000000001,
+            "height_m": 0.30000000000000004,
+            "row": 6,
+            "col": 2,
+            "is_cut": false
+          },
+          {
+            "x_m": 1.7,
+            "y_m": 1.6500000000000001,
+            "width_m": 0.5999999999999999,
+            "height_m": 0.30000000000000004,
+            "row": 6,
+            "col": 3,
+            "is_cut": false
+          },
+          {
+            "x_m": 2.3,
+            "y_m": 1.6500000000000001,
+            "width_m": 0.6000000000000001,
+            "height_m": 0.30000000000000004,
+            "row": 6,
+            "col": 4,
+            "is_cut": false
+          },
+          {
+            "x_m": 2.9,
+            "y_m": 1.6500000000000001,
+            "width_m": 0.6000000000000001,
+            "height_m": 0.30000000000000004,
+            "row": 6,
+            "col": 5,
+            "is_cut": false
+          },
+          {
+            "x_m": 3.5,
+            "y_m": 1.6500000000000001,
+            "width_m": 0.5,
+            "height_m": 0.30000000000000004,
+            "row": 6,
+            "col": 6,
+            "is_cut": true
+          },
+          {
+            "x_m": 0.0,
+            "y_m": 1.9500000000000002,
+            "width_m": 0.5000000000000001,
+            "height_m": 0.2999999999999998,
+            "row": 7,
+            "col": 0,
+            "is_cut": true
+          },
+          {
+            "x_m": 0.5,
+            "y_m": 1.9500000000000002,
+            "width_m": 0.6000000000000001,
+            "height_m": 0.2999999999999998,
+            "row": 7,
+            "col": 1,
+            "is_cut": false
+          },
+          {
+            "x_m": 1.1,
+            "y_m": 1.9500000000000002,
+            "width_m": 0.6000000000000001,
+            "height_m": 0.2999999999999998,
+            "row": 7,
+            "col": 2,
+            "is_cut": false
+          },
+          {
+            "x_m": 1.7,
+            "y_m": 1.9500000000000002,
+            "width_m": 0.5999999999999999,
+            "height_m": 0.2999999999999998,
+            "row": 7,
+            "col": 3,
+            "is_cut": false
+          },
+          {
+            "x_m": 2.3,
+            "y_m": 1.9500000000000002,
+            "width_m": 0.6000000000000001,
+            "height_m": 0.2999999999999998,
+            "row": 7,
+            "col": 4,
+            "is_cut": false
+          },
+          {
+            "x_m": 2.9,
+            "y_m": 1.9500000000000002,
+            "width_m": 0.6000000000000001,
+            "height_m": 0.2999999999999998,
+            "row": 7,
+            "col": 5,
+            "is_cut": false
+          },
+          {
+            "x_m": 3.5,
+            "y_m": 1.9500000000000002,
+            "width_m": 0.5,
+            "height_m": 0.2999999999999998,
+            "row": 7,
+            "col": 6,
+            "is_cut": true
+          },
+          {
+            "x_m": 0.0,
+            "y_m": 2.25,
+            "width_m": 0.5000000000000001,
+            "height_m": 0.2999999999999998,
+            "row": 8,
+            "col": 0,
+            "is_cut": true
+          },
+          {
+            "x_m": 0.5,
+            "y_m": 2.25,
+            "width_m": 0.6000000000000001,
+            "height_m": 0.2999999999999998,
+            "row": 8,
+            "col": 1,
+            "is_cut": false
+          },
+          {
+            "x_m": 1.1,
+            "y_m": 2.25,
+            "width_m": 0.6000000000000001,
+            "height_m": 0.2999999999999998,
+            "row": 8,
+            "col": 2,
+            "is_cut": false
+          },
+          {
+            "x_m": 1.7,
+            "y_m": 2.25,
+            "width_m": 0.5999999999999999,
+            "height_m": 0.2999999999999998,
+            "row": 8,
+            "col": 3,
+            "is_cut": false
+          },
+          {
+            "x_m": 2.3,
+            "y_m": 2.25,
+            "width_m": 0.6000000000000001,
+            "height_m": 0.2999999999999998,
+            "row": 8,
+            "col": 4,
+            "is_cut": false
+          },
+          {
+            "x_m": 2.9,
+            "y_m": 2.25,
+            "width_m": 0.6000000000000001,
+            "height_m": 0.2999999999999998,
+            "row": 8,
+            "col": 5,
+            "is_cut": false
+          },
+          {
+            "x_m": 3.5,
+            "y_m": 2.25,
+            "width_m": 0.5,
+            "height_m": 0.2999999999999998,
+            "row": 8,
+            "col": 6,
+            "is_cut": true
+          },
+          {
+            "x_m": 0.0,
+            "y_m": 2.55,
+            "width_m": 0.5000000000000001,
+            "height_m": 0.2999999999999998,
+            "row": 9,
+            "col": 0,
+            "is_cut": true
+          },
+          {
+            "x_m": 0.5,
+            "y_m": 2.55,
+            "width_m": 0.6000000000000001,
+            "height_m": 0.2999999999999998,
+            "row": 9,
+            "col": 1,
+            "is_cut": false
+          },
+          {
+            "x_m": 1.1,
+            "y_m": 2.55,
+            "width_m": 0.6000000000000001,
+            "height_m": 0.2999999999999998,
+            "row": 9,
+            "col": 2,
+            "is_cut": false
+          },
+          {
+            "x_m": 1.7,
+            "y_m": 2.55,
+            "width_m": 0.5999999999999999,
+            "height_m": 0.2999999999999998,
+            "row": 9,
+            "col": 3,
+            "is_cut": false
+          },
+          {
+            "x_m": 2.3,
+            "y_m": 2.55,
+            "width_m": 0.6000000000000001,
+            "height_m": 0.2999999999999998,
+            "row": 9,
+            "col": 4,
+            "is_cut": false
+          },
+          {
+            "x_m": 2.9,
+            "y_m": 2.55,
+            "width_m": 0.6000000000000001,
+            "height_m": 0.2999999999999998,
+            "row": 9,
+            "col": 5,
+            "is_cut": false
+          },
+          {
+            "x_m": 3.5,
+            "y_m": 2.55,
+            "width_m": 0.5,
+            "height_m": 0.2999999999999998,
+            "row": 9,
+            "col": 6,
+            "is_cut": true
+          },
+          {
+            "x_m": 0.0,
+            "y_m": 2.85,
+            "width_m": 0.5000000000000001,
+            "height_m": 0.1499999999999999,
+            "row": 10,
+            "col": 0,
+            "is_cut": true
+          },
+          {
+            "x_m": 0.5,
+            "y_m": 2.85,
+            "width_m": 0.6000000000000001,
+            "height_m": 0.1499999999999999,
+            "row": 10,
+            "col": 1,
+            "is_cut": true
+          },
+          {
+            "x_m": 1.1,
+            "y_m": 2.85,
+            "width_m": 0.6000000000000001,
+            "height_m": 0.1499999999999999,
+            "row": 10,
+            "col": 2,
+            "is_cut": true
+          },
+          {
+            "x_m": 1.7,
+            "y_m": 2.85,
+            "width_m": 0.5999999999999999,
+            "height_m": 0.1499999999999999,
+            "row": 10,
+            "col": 3,
+            "is_cut": true
+          },
+          {
+            "x_m": 2.3,
+            "y_m": 2.85,
+            "width_m": 0.6000000000000001,
+            "height_m": 0.1499999999999999,
+            "row": 10,
+            "col": 4,
+            "is_cut": true
+          },
+          {
+            "x_m": 2.9,
+            "y_m": 2.85,
+            "width_m": 0.6000000000000001,
+            "height_m": 0.1499999999999999,
+            "row": 10,
+            "col": 5,
+            "is_cut": true
+          },
+          {
+            "x_m": 3.5,
+            "y_m": 2.85,
+            "width_m": 0.5,
+            "height_m": 0.1499999999999999,
+            "row": 10,
+            "col": 6,
+            "is_cut": true
+          }
+        ],
+        "covered_area_m2": 11.999999999999998,
+        "waste_area_m2": 1.8600000000000005,
+        "start_x_m": 1.7,
+        "start_y_m": 1.35
+      }
+    },
+    {
+      "name": "minimize_cut_count_on_narrow_wall",
+      "input": {
+        "patch": {
+          "patch_id": "wall_narrow",
+          "kind": "wall",
+          "polygon": [
+            {
+              "x": 0.0,
+              "y": 0.0
+            },
+            {
+              "x": 1.85,
+              "y": 0.0
+            },
+            {
+              "x": 1.85,
+              "y": 2.4
+            },
+            {
+              "x": 0.0,
+              "y": 2.4
+            }
+          ],
+          "holes": [],
+          "axis": {
+            "x": 1.0,
+            "y": 0.0
+          },
+          "origin": {
+            "x": 0.0,
+            "y": 0.0
+          },
+          "normal_x": 0.0,
+          "normal_y": 1.0,
+          "normal_z": 0.0
+        },
+        "spec": {
+          "material_id": "m3",
+          "module_width_m": 0.3,
+          "module_height_m": 0.6,
+          "grout_width_mm": 3.0,
+          "modules_per_unit": 10,
+          "unit_of_sale": "box"
+        },
+        "rule": "minimize_cut_count"
+      },
+      "expected": {
+        "surface_id": "wall_narrow",
+        "full_modules": 18,
+        "cut_modules": 10,
+        "tiles_required": 28,
+        "rects": [
+          {
+            "x_m": 0.0030000000000000027,
+            "y_m": 0.0,
+            "width_m": 0.3,
+            "height_m": 0.6,
+            "row": 0,
+            "col": 0,
+            "is_cut": false
+          },
+          {
+            "x_m": 0.306,
+            "y_m": 0.0,
+            "width_m": 0.3,
+            "height_m": 0.6,
+            "row": 0,
+            "col": 1,
+            "is_cut": false
+          },
+          {
+            "x_m": 0.609,
+            "y_m": 0.0,
+            "width_m": 0.30000000000000004,
+            "height_m": 0.6,
+            "row": 0,
+            "col": 2,
+            "is_cut": false
+          },
+          {
+            "x_m": 0.9119999999999999,
+            "y_m": 0.0,
+            "width_m": 0.30000000000000004,
+            "height_m": 0.6,
+            "row": 0,
+            "col": 3,
+            "is_cut": false
+          },
+          {
+            "x_m": 1.2149999999999999,
+            "y_m": 0.0,
+            "width_m": 0.30000000000000004,
+            "height_m": 0.6,
+            "row": 0,
+            "col": 4,
+            "is_cut": false
+          },
+          {
+            "x_m": 1.518,
+            "y_m": 0.0,
+            "width_m": 0.30000000000000004,
+            "height_m": 0.6,
+            "row": 0,
+            "col": 5,
+            "is_cut": false
+          },
+          {
+            "x_m": 1.821,
+            "y_m": 0.0,
+            "width_m": 0.029000000000000137,
+            "height_m": 0.6,
+            "row": 0,
+            "col": 6,
+            "is_cut": true
+          },
+          {
+            "x_m": 0.0030000000000000027,
+            "y_m": 0.603,
+            "width_m": 0.3,
+            "height_m": 0.5999999999999999,
+            "row": 1,
+            "col": 0,
+            "is_cut": false
+          },
+          {
+            "x_m": 0.306,
+            "y_m": 0.603,
+            "width_m": 0.3,
+            "height_m": 0.5999999999999999,
+            "row": 1,
+            "col": 1,
+            "is_cut": false
+          },
+          {
+            "x_m": 0.609,
+            "y_m": 0.603,
+            "width_m": 0.30000000000000004,
+            "height_m": 0.5999999999999999,
+            "row": 1,
+            "col": 2,
+            "is_cut": false
+          },
+          {
+            "x_m": 0.9119999999999999,
+            "y_m": 0.603,
+            "width_m": 0.30000000000000004,
+            "height_m": 0.5999999999999999,
+            "row": 1,
+            "col": 3,
+            "is_cut": false
+          },
+          {
+            "x_m": 1.2149999999999999,
+            "y_m": 0.603,
+            "width_m": 0.30000000000000004,
+            "height_m": 0.5999999999999999,
+            "row": 1,
+            "col": 4,
+            "is_cut": false
+          },
+          {
+            "x_m": 1.518,
+            "y_m": 0.603,
+            "width_m": 0.30000000000000004,
+            "height_m": 0.5999999999999999,
+            "row": 1,
+            "col": 5,
+            "is_cut": false
+          },
+          {
+            "x_m": 1.821,
+            "y_m": 0.603,
+            "width_m": 0.029000000000000137,
+            "height_m": 0.5999999999999999,
+            "row": 1,
+            "col": 6,
+            "is_cut": true
+          },
+          {
+            "x_m": 0.0030000000000000027,
+            "y_m": 1.206,
+            "width_m": 0.3,
+            "height_m": 0.6000000000000001,
+            "row": 2,
+            "col": 0,
+            "is_cut": false
+          },
+          {
+            "x_m": 0.306,
+            "y_m": 1.206,
+            "width_m": 0.3,
+            "height_m": 0.6000000000000001,
+            "row": 2,
+            "col": 1,
+            "is_cut": false
+          },
+          {
+            "x_m": 0.609,
+            "y_m": 1.206,
+            "width_m": 0.30000000000000004,
+            "height_m": 0.6000000000000001,
+            "row": 2,
+            "col": 2,
+            "is_cut": false
+          },
+          {
+            "x_m": 0.9119999999999999,
+            "y_m": 1.206,
+            "width_m": 0.30000000000000004,
+            "height_m": 0.6000000000000001,
+            "row": 2,
+            "col": 3,
+            "is_cut": false
+          },
+          {
+            "x_m": 1.2149999999999999,
+            "y_m": 1.206,
+            "width_m": 0.30000000000000004,
+            "height_m": 0.6000000000000001,
+            "row": 2,
+            "col": 4,
+            "is_cut": false
+          },
+          {
+            "x_m": 1.518,
+            "y_m": 1.206,
+            "width_m": 0.30000000000000004,
+            "height_m": 0.6000000000000001,
+            "row": 2,
+            "col": 5,
+            "is_cut": false
+          },
+          {
+            "x_m": 1.821,
+            "y_m": 1.206,
+            "width_m": 0.029000000000000137,
+            "height_m": 0.6000000000000001,
+            "row": 2,
+            "col": 6,
+            "is_cut": true
+          },
+          {
+            "x_m": 0.0030000000000000027,
+            "y_m": 1.809,
+            "width_m": 0.3,
+            "height_m": 0.591,
+            "row": 3,
+            "col": 0,
+            "is_cut": true
+          },
+          {
+            "x_m": 0.306,
+            "y_m": 1.809,
+            "width_m": 0.3,
+            "height_m": 0.591,
+            "row": 3,
+            "col": 1,
+            "is_cut": true
+          },
+          {
+            "x_m": 0.609,
+            "y_m": 1.809,
+            "width_m": 0.30000000000000004,
+            "height_m": 0.591,
+            "row": 3,
+            "col": 2,
+            "is_cut": true
+          },
+          {
+            "x_m": 0.9119999999999999,
+            "y_m": 1.809,
+            "width_m": 0.30000000000000004,
+            "height_m": 0.591,
+            "row": 3,
+            "col": 3,
+            "is_cut": true
+          },
+          {
+            "x_m": 1.2149999999999999,
+            "y_m": 1.809,
+            "width_m": 0.30000000000000004,
+            "height_m": 0.591,
+            "row": 3,
+            "col": 4,
+            "is_cut": true
+          },
+          {
+            "x_m": 1.518,
+            "y_m": 1.809,
+            "width_m": 0.30000000000000004,
+            "height_m": 0.591,
+            "row": 3,
+            "col": 5,
+            "is_cut": true
+          },
+          {
+            "x_m": 1.821,
+            "y_m": 1.809,
+            "width_m": 0.029000000000000137,
+            "height_m": 0.591,
+            "row": 3,
+            "col": 6,
+            "is_cut": true
+          }
+        ],
+        "covered_area_m2": 4.373139000000001,
+        "waste_area_m2": 0.6668609999999993,
+        "start_x_m": -0.3,
+        "start_y_m": 0.0
+      }
+    },
+    {
+      "name": "large_format_floor_60x120_5mm_grout",
+      "input": {
+        "patch": {
+          "patch_id": "floor",
+          "kind": "floor",
+          "polygon": [
+            {
+              "x": 0.0,
+              "y": 0.0
+            },
+            {
+              "x": 3.6,
+              "y": 0.0
+            },
+            {
+              "x": 3.6,
+              "y": 2.4
+            },
+            {
+              "x": 0.0,
+              "y": 2.4
+            }
+          ],
+          "holes": [],
+          "axis": {
+            "x": 1.0,
+            "y": 0.0
+          },
+          "origin": {
+            "x": 0.0,
+            "y": 0.0
+          },
+          "normal_x": 0.0,
+          "normal_y": 0.0,
+          "normal_z": 1.0
+        },
+        "spec": {
+          "material_id": "floor_lf",
+          "module_width_m": 0.6,
+          "module_height_m": 1.2,
+          "grout_width_mm": 5.0,
+          "modules_per_unit": 2,
+          "unit_of_sale": "box"
+        },
+        "rule": "largest_wall_corner"
+      },
+      "expected": {
+        "surface_id": "floor",
+        "full_modules": 5,
+        "cut_modules": 7,
+        "tiles_required": 12,
+        "rects": [
+          {
+            "x_m": 0.0,
+            "y_m": 0.0,
+            "width_m": 0.6,
+            "height_m": 1.2,
+            "row": 0,
+            "col": 0,
+            "is_cut": false
+          },
+          {
+            "x_m": 0.605,
+            "y_m": 0.0,
+            "width_m": 0.6000000000000001,
+            "height_m": 1.2,
+            "row": 0,
+            "col": 1,
+            "is_cut": false
+          },
+          {
+            "x_m": 1.21,
+            "y_m": 0.0,
+            "width_m": 0.6000000000000001,
+            "height_m": 1.2,
+            "row": 0,
+            "col": 2,
+            "is_cut": false
+          },
+          {
+            "x_m": 1.815,
+            "y_m": 0.0,
+            "width_m": 0.6000000000000001,
+            "height_m": 1.2,
+            "row": 0,
+            "col": 3,
+            "is_cut": false
+          },
+          {
+            "x_m": 2.42,
+            "y_m": 0.0,
+            "width_m": 0.6000000000000001,
+            "height_m": 1.2,
+            "row": 0,
+            "col": 4,
+            "is_cut": false
+          },
+          {
+            "x_m": 3.025,
+            "y_m": 0.0,
+            "width_m": 0.5750000000000002,
+            "height_m": 1.2,
+            "row": 0,
+            "col": 5,
+            "is_cut": true
+          },
+          {
+            "x_m": 0.0,
+            "y_m": 1.2049999999999998,
+            "width_m": 0.6,
+            "height_m": 1.195,
+            "row": 1,
+            "col": 0,
+            "is_cut": true
+          },
+          {
+            "x_m": 0.605,
+            "y_m": 1.2049999999999998,
+            "width_m": 0.6000000000000001,
+            "height_m": 1.195,
+            "row": 1,
+            "col": 1,
+            "is_cut": true
+          },
+          {
+            "x_m": 1.21,
+            "y_m": 1.2049999999999998,
+            "width_m": 0.6000000000000001,
+            "height_m": 1.195,
+            "row": 1,
+            "col": 2,
+            "is_cut": true
+          },
+          {
+            "x_m": 1.815,
+            "y_m": 1.2049999999999998,
+            "width_m": 0.6000000000000001,
+            "height_m": 1.195,
+            "row": 1,
+            "col": 3,
+            "is_cut": true
+          },
+          {
+            "x_m": 2.42,
+            "y_m": 1.2049999999999998,
+            "width_m": 0.6000000000000001,
+            "height_m": 1.195,
+            "row": 1,
+            "col": 4,
+            "is_cut": true
+          },
+          {
+            "x_m": 3.025,
+            "y_m": 1.2049999999999998,
+            "width_m": 0.5750000000000002,
+            "height_m": 1.195,
+            "row": 1,
+            "col": 5,
+            "is_cut": true
+          }
+        ],
+        "covered_area_m2": 8.562125000000002,
+        "waste_area_m2": 0.07787499999999825,
+        "start_x_m": 0.0,
+        "start_y_m": 0.0
+      }
+    },
+    {
+      "name": "l_shaped_wall_bbox_behavior_pr1",
+      "input": {
+        "patch": {
+          "patch_id": "L",
+          "kind": "wall",
+          "polygon": [
+            {
+              "x": 0.0,
+              "y": 0.0
+            },
+            {
+              "x": 3.0,
+              "y": 0.0
+            },
+            {
+              "x": 3.0,
+              "y": 1.0
+            },
+            {
+              "x": 1.0,
+              "y": 1.0
+            },
+            {
+              "x": 1.0,
+              "y": 2.0
+            },
+            {
+              "x": 0.0,
+              "y": 2.0
+            }
+          ],
+          "holes": [],
+          "axis": {
+            "x": 1.0,
+            "y": 0.0
+          },
+          "origin": {
+            "x": 0.0,
+            "y": 0.0
+          },
+          "normal_x": 0.0,
+          "normal_y": 1.0,
+          "normal_z": 0.0
+        },
+        "spec": {
+          "material_id": "m_l",
+          "module_width_m": 1.0,
+          "module_height_m": 1.0,
+          "grout_width_mm": 0.0,
+          "modules_per_unit": 10,
+          "unit_of_sale": "box"
+        },
+        "rule": "largest_wall_corner"
+      },
+      "expected": {
+        "surface_id": "L",
+        "full_modules": 6,
+        "cut_modules": 0,
+        "tiles_required": 6,
+        "rects": [
+          {
+            "x_m": 0.0,
+            "y_m": 0.0,
+            "width_m": 1.0,
+            "height_m": 1.0,
+            "row": 0,
+            "col": 0,
+            "is_cut": false
+          },
+          {
+            "x_m": 1.0,
+            "y_m": 0.0,
+            "width_m": 1.0,
+            "height_m": 1.0,
+            "row": 0,
+            "col": 1,
+            "is_cut": false
+          },
+          {
+            "x_m": 2.0,
+            "y_m": 0.0,
+            "width_m": 1.0,
+            "height_m": 1.0,
+            "row": 0,
+            "col": 2,
+            "is_cut": false
+          },
+          {
+            "x_m": 0.0,
+            "y_m": 1.0,
+            "width_m": 1.0,
+            "height_m": 1.0,
+            "row": 1,
+            "col": 0,
+            "is_cut": false
+          },
+          {
+            "x_m": 1.0,
+            "y_m": 1.0,
+            "width_m": 1.0,
+            "height_m": 1.0,
+            "row": 1,
+            "col": 1,
+            "is_cut": false
+          },
+          {
+            "x_m": 2.0,
+            "y_m": 1.0,
+            "width_m": 1.0,
+            "height_m": 1.0,
+            "row": 1,
+            "col": 2,
+            "is_cut": false
+          }
+        ],
+        "covered_area_m2": 6.0,
+        "waste_area_m2": 0.0,
+        "start_x_m": 0.0,
+        "start_y_m": 0.0
+      }
+    }
+  ]
+}

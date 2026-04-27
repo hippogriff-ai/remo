@@ -8,7 +8,7 @@ from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
-from app.api.routes import health, projects
+from app.api.routes import health, projects, tile_projects
 from app.config import settings
 from app.logging import configure_logging
 
@@ -138,3 +138,4 @@ async def unhandled_exception_handler(request: Request, exc: Exception) -> JSONR
 
 app.include_router(health.router)
 app.include_router(projects.router, prefix="/api/v1")
+app.include_router(tile_projects.router, prefix="/api/v1")

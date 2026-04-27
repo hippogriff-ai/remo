@@ -7,8 +7,13 @@ from pathlib import Path
 
 import pytest
 
-from app.models.contracts import RoomDimensions
-from app.utils.lidar import MIN_DIMENSION_M, LidarParseError, parse_room_dimensions
+from app.models.contracts import HoleKind, RoomDimensions
+from app.utils.lidar import (
+    MIN_DIMENSION_M,
+    LidarParseError,
+    parse_room_dimensions,
+    patches_from_room_dimensions,
+)
 
 FIXTURE_PATH = (
     Path(__file__).parent.parent.parent / "ios" / ".maestro" / "fixtures" / "reference_room.json"
@@ -651,3 +656,179 @@ class TestReferenceFixture:
         assert len(dims.openings) == 2
         assert len(dims.furniture) == 3
         assert len(dims.surfaces) == 1
+
+
+class TestPatchesFromRoomDimensions:
+    """patches_from_room_dimensions — RoomDimensions → list[SurfacePatch] for
+    tile mode. Exercises the opening→Hole projection logic plus the walls
+    fallback when dims.walls is empty.
+    """
+
+    @staticmethod
+    def _dims(**overrides) -> RoomDimensions:
+        base = dict(
+            width_m=2.4,
+            length_m=1.8,
+            height_m=2.4,
+            walls=[{"id": "wall_0", "width": 2.4, "height": 2.4}],
+            openings=[],
+            furniture=[],
+            surfaces=[],
+            floor_area_sqm=4.32,
+        )
+        base.update(overrides)
+        return RoomDimensions(**base)  # type: ignore[arg-type]
+
+    def test_produces_floor_plus_one_patch_per_wall(self) -> None:
+        dims = self._dims(
+            walls=[
+                {"id": "wall_0", "width": 2.4, "height": 2.4},
+                {"id": "wall_1", "width": 1.8, "height": 2.4},
+            ]
+        )
+        patches = patches_from_room_dimensions(dims)
+        assert len(patches) == 3
+        kinds = [p.kind for p in patches]
+        assert kinds == ["floor", "wall", "wall"]
+
+    def test_door_opening_becomes_hole_at_y_zero(self) -> None:
+        dims = self._dims(
+            walls=[{"id": "wall_0", "width": 2.4, "height": 2.4}],
+            openings=[
+                {
+                    "type": "door",
+                    "wall_id": "wall_0",
+                    "width": 0.9,
+                    "height": 2.1,
+                    "position": {"x": 0.3},
+                }
+            ],
+        )
+        patches = patches_from_room_dimensions(dims)
+        wall = next(p for p in patches if p.patch_id == "wall_0")
+        assert len(wall.holes) == 1
+        hole = wall.holes[0]
+        assert hole.kind is HoleKind.OPENING
+        assert hole.y_m == pytest.approx(0.0)
+        assert hole.label == "door"
+
+    def test_window_opening_without_y_defaults_to_typical_sill(self) -> None:
+        """Windows without position.y should land at ~0.9m (typical sill),
+        not y=0 which would have them sitting on the floor. This was a bug
+        in the original PR — windows were silently placed flush with the
+        floor, causing tiles around them to be under-counted.
+        """
+        dims = self._dims(
+            walls=[{"id": "wall_0", "width": 2.4, "height": 2.4}],
+            openings=[
+                {
+                    "type": "window",
+                    "wall_id": "wall_0",
+                    "width": 1.2,
+                    "height": 0.9,
+                    "position": {"x": 0.3},  # no y
+                }
+            ],
+        )
+        patches = patches_from_room_dimensions(dims)
+        wall = next(p for p in patches if p.patch_id == "wall_0")
+        assert wall.holes[0].y_m == pytest.approx(0.9)
+        assert wall.holes[0].label == "window"
+
+    def test_window_with_explicit_y_is_honored(self) -> None:
+        dims = self._dims(
+            walls=[{"id": "wall_0", "width": 2.4, "height": 2.4}],
+            openings=[
+                {
+                    "type": "window",
+                    "wall_id": "wall_0",
+                    "width": 1.2,
+                    "height": 0.9,
+                    "position": {"x": 0.3, "y": 1.1},
+                }
+            ],
+        )
+        patches = patches_from_room_dimensions(dims)
+        wall = next(p for p in patches if p.patch_id == "wall_0")
+        assert wall.holes[0].y_m == pytest.approx(1.1)
+
+    def test_opening_clamped_into_wall_bounds(self) -> None:
+        """A malformed opening that would extend past the top of the wall
+        is pushed down so the polygon validation still passes."""
+        dims = self._dims(
+            walls=[{"id": "wall_0", "width": 2.4, "height": 2.4}],
+            openings=[
+                {
+                    "type": "window",
+                    "wall_id": "wall_0",
+                    "width": 1.0,
+                    "height": 1.0,
+                    "position": {"x": 0.5, "y": 2.2},  # would overshoot 2.4
+                }
+            ],
+        )
+        patches = patches_from_room_dimensions(dims)
+        wall = next(p for p in patches if p.patch_id == "wall_0")
+        hole = wall.holes[0]
+        assert hole.y_m + hole.height_m <= 2.4 + 1e-9
+
+    def test_opening_with_unknown_wall_id_is_dropped(self) -> None:
+        dims = self._dims(
+            walls=[{"id": "wall_0", "width": 2.4, "height": 2.4}],
+            openings=[
+                {
+                    "type": "door",
+                    "wall_id": "wall_nonexistent",
+                    "width": 0.9,
+                    "height": 2.1,
+                    "position": {"x": 0.0},
+                }
+            ],
+        )
+        patches = patches_from_room_dimensions(dims)
+        wall = next(p for p in patches if p.patch_id == "wall_0")
+        assert wall.holes == []
+
+    def test_opening_with_missing_position_is_dropped_gracefully(self) -> None:
+        """Malformed openings (missing dimensions / bad types) must not raise."""
+        dims = self._dims(
+            walls=[{"id": "wall_0", "width": 2.4, "height": 2.4}],
+            openings=[
+                {"type": "door", "wall_id": "wall_0"},  # no dims at all
+                {
+                    "type": "window",
+                    "wall_id": "wall_0",
+                    "width": "not-a-number",
+                    "height": 0.9,
+                    "position": {"x": 0.3},
+                },
+            ],
+        )
+        patches = patches_from_room_dimensions(dims)
+        wall = next(p for p in patches if p.patch_id == "wall_0")
+        assert wall.holes == []
+
+    def test_walls_fallback_inferred_from_bbox_when_empty(self) -> None:
+        """When dims.walls is empty the helper infers 4 walls from the room
+        bbox — critical for older RoomPlan scans that omit the walls array.
+        """
+        dims = self._dims(walls=[])
+        patches = patches_from_room_dimensions(dims)
+        assert len(patches) == 5  # 1 floor + 4 inferred walls
+        wall_kinds = [p.kind for p in patches if p.kind == "wall"]
+        assert len(wall_kinds) == 4
+        # Two pairs of walls match room.width and room.length.
+        wall_widths = sorted(p.polygon[1].x for p in patches if p.kind == "wall")
+        assert wall_widths == pytest.approx([1.8, 1.8, 2.4, 2.4])
+
+    def test_wall_with_invalid_width_is_skipped(self) -> None:
+        dims = self._dims(
+            walls=[
+                {"id": "wall_good", "width": 2.4, "height": 2.4},
+                {"id": "wall_bad", "width": 0, "height": 2.4},
+                {"id": "wall_bad_type", "width": "oops", "height": 2.4},
+            ]
+        )
+        patches = patches_from_room_dimensions(dims)
+        wall_ids = {p.patch_id for p in patches if p.kind == "wall"}
+        assert wall_ids == {"wall_good"}

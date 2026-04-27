@@ -1,0 +1,18 @@
+appId: com.hippogriff.remo
+---
+# Tile scan: upload RoomPlan fixture (via -lidar-fixture launch arg), land on
+# Specs step with N surfaces visible.
+# Accessibility ID contract (PR 3 implements):
+#   tile_surface_list  — list of surface rows
+#   tile_surface_0     — first surface row (tappable → mask editor)
+- assertVisible: "Scan Your Room"
+- tapOn:
+    id: "tile_scan_start"
+- extendedWaitUntil:
+    visible: "Materials"
+    timeout: 10000
+- assertVisible:
+    id: "tile_surface_list"
+- assertVisible:
+    id: "tile_surface_0"
+- takeScreenshot: tile-02-scan

@@ -1,14 +1,18 @@
 import SwiftUI
 import RemoModels
 import RemoNetworking
+import RemoTileMode
 
 /// Landing screen: shows pending projects and a "New Project" button.
 /// Persists project IDs to UserDefaults so resume works across app restarts.
 struct HomeScreen: View {
     let client: any WorkflowClientProtocol
+    let tileClient: any TileWorkflowClient
 
     @State private var projects: [(id: String, state: ProjectState)] = []
+    @State private var tileProjectIds: [String] = []
     @State private var isCreating = false
+    @State private var isCreatingTile = false
     @State private var isLoading = true
     @State private var errorMessage: String?
     @State private var navigationPath = NavigationPath()
@@ -21,37 +25,96 @@ struct HomeScreen: View {
             Group {
                 if isLoading {
                     ProgressView("Loading projects...")
-                } else if projects.isEmpty {
-                    ContentUnavailableView(
-                        "No Projects Yet",
-                        systemImage: "house.fill",
-                        description: Text("Tap the button below to redesign your first room.")
-                    )
-                    .accessibilityIdentifier("home_empty_state")
                 } else {
-                    List {
-                        ForEach(Array(projects.enumerated()), id: \.element.id) { index, project in
-                            NavigationLink(value: project.id) {
-                                ProjectRow(projectState: project.state)
+                    VStack(spacing: 0) {
+                        // Two big action cards at the top
+                        HStack(spacing: 12) {
+                            HomeActionCard(
+                                title: "New Project",
+                                subtitle: "Redesign a room",
+                                systemImage: "sparkles",
+                                style: .outlined,
+                                isLoading: isCreating,
+                                identifier: "home_new_project"
+                            ) {
+                                Task { await createProject() }
                             }
-                            .accessibilityIdentifier("home_project_\(index)")
+                            HomeActionCard(
+                                title: "Replace Material",
+                                subtitle: "Swap tile only",
+                                systemImage: "square.grid.2x2.fill",
+                                style: .filled,
+                                isLoading: isCreatingTile,
+                                identifier: "home_new_tile_project"
+                            ) {
+                                Task { await createTileProject() }
+                            }
                         }
-                        .onDelete { indexSet in
-                            deleteProjects(at: indexSet)
+                        .padding(.horizontal, 20)
+                        .padding(.top, 12)
+
+                        if projects.isEmpty && tileProjectIds.isEmpty {
+                            ContentUnavailableView(
+                                "No Projects Yet",
+                                systemImage: "house.fill",
+                                description: Text("Tap one of the cards above to start.")
+                            )
+                            .accessibilityIdentifier("home_empty_state")
+                        } else {
+                            List {
+                                if !tileProjectIds.isEmpty {
+                                    Section("Tile projects") {
+                                        ForEach(Array(tileProjectIds.enumerated()), id: \.element) { index, id in
+                                            NavigationLink(value: HomeDestination.tileProject(id)) {
+                                                HStack {
+                                                    Image(systemName: "square.grid.2x2.fill")
+                                                        .foregroundStyle(.blue)
+                                                    VStack(alignment: .leading, spacing: 2) {
+                                                        Text("Replace Material").font(.headline)
+                                                        Text("Tap to resume").font(.caption).foregroundStyle(.secondary)
+                                                    }
+                                                }
+                                            }
+                                            .accessibilityIdentifier("tile_project_\(index)")
+                                        }
+                                        .onDelete { indexSet in
+                                            deleteTileProjects(at: indexSet)
+                                        }
+                                    }
+                                }
+                                if !projects.isEmpty {
+                                    Section("Design projects") {
+                                        ForEach(Array(projects.enumerated()), id: \.element.id) { index, project in
+                                            NavigationLink(value: HomeDestination.designProject(project.id)) {
+                                                ProjectRow(projectState: project.state)
+                                            }
+                                            .accessibilityIdentifier("home_project_\(index)")
+                                        }
+                                        .onDelete { indexSet in
+                                            deleteProjects(at: indexSet)
+                                        }
+                                    }
+                                }
+                            }
                         }
                     }
                 }
             }
             .navigationTitle("Remo")
-            .navigationDestination(for: String.self) { projectId in
-                if let project = projects.first(where: { $0.id == projectId }) {
-                    ProjectFlowScreen(projectState: project.state, client: client)
-                } else {
-                    ContentUnavailableView(
-                        "Project Not Found",
-                        systemImage: "exclamationmark.triangle",
-                        description: Text("This project may have been deleted.")
-                    )
+            .navigationDestination(for: HomeDestination.self) { dest in
+                switch dest {
+                case .designProject(let projectId):
+                    if let project = projects.first(where: { $0.id == projectId }) {
+                        ProjectFlowScreen(projectState: project.state, client: client)
+                    } else {
+                        ContentUnavailableView(
+                            "Project Not Found",
+                            systemImage: "exclamationmark.triangle",
+                            description: Text("This project may have been deleted.")
+                        )
+                    }
+                case .tileProject(let projectId):
+                    TileProjectFlowScreen(projectId: projectId, client: tileClient)
                 }
             }
             .alert("Error", isPresented: .init(get: { errorMessage != nil }, set: { if !$0 { errorMessage = nil } })) {
@@ -60,22 +123,11 @@ struct HomeScreen: View {
                 Text(errorMessage ?? "")
             }
             .toolbar {
-                if !projects.isEmpty {
+                if !projects.isEmpty || !tileProjectIds.isEmpty {
                     ToolbarItem(placement: .cancellationAction) {
                         EditButton()
                             .accessibilityIdentifier("home_edit")
                     }
-                }
-                ToolbarItem(placement: .primaryAction) {
-                    Button {
-                        Task { await createProject() }
-                    } label: {
-                        Image(systemName: "plus.circle.fill")
-                            .font(.title2)
-                    }
-                    .disabled(isCreating)
-                    .accessibilityLabel("New Project")
-                    .accessibilityIdentifier("home_new_project")
                 }
             }
             .task {
@@ -86,6 +138,7 @@ struct HomeScreen: View {
                     showOnboardingTip = true
                     UserDefaults.standard.set(true, forKey: "remo_has_seen_onboarding")
                 }
+                loadTileProjects()
                 await loadAndRefreshProjects()
             }
             .alert("Welcome to Remo", isPresented: $showOnboardingTip) {
@@ -223,6 +276,88 @@ struct HomeScreen: View {
         // Placeholder: returns false. Real check in RemoLiDAR package.
         false
     }
+
+    // MARK: - Tile projects
+
+    private static let tileProjectIdsKey = "remo_tile_project_ids"
+
+    private func loadTileProjects() {
+        tileProjectIds = UserDefaults.standard.stringArray(forKey: Self.tileProjectIdsKey) ?? []
+    }
+
+    private func createTileProject() async {
+        isCreatingTile = true
+        defer { isCreatingTile = false }
+        do {
+            #if os(iOS)
+            let fingerprint = UIDevice.current.identifierForVendor?.uuidString ?? UUID().uuidString
+            #else
+            let fingerprint = UUID().uuidString
+            #endif
+            let id = try await tileClient.createProject(deviceFingerprint: fingerprint)
+            tileProjectIds.append(id)
+            UserDefaults.standard.set(tileProjectIds, forKey: Self.tileProjectIdsKey)
+            navigationPath.append(HomeDestination.tileProject(id))
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
+
+    private func deleteTileProjects(at offsets: IndexSet) {
+        let removed = offsets.map { tileProjectIds[$0] }
+        tileProjectIds.remove(atOffsets: offsets)
+        UserDefaults.standard.set(tileProjectIds, forKey: Self.tileProjectIdsKey)
+        for id in removed {
+            Task { try? await tileClient.cancelProject(projectId: id) }
+        }
+    }
+}
+
+enum HomeDestination: Hashable {
+    case designProject(String)
+    case tileProject(String)
+}
+
+struct HomeActionCard: View {
+    let title: String
+    let subtitle: String
+    let systemImage: String
+    let style: Style
+    let isLoading: Bool
+    let identifier: String
+    let action: () -> Void
+
+    enum Style { case outlined, filled }
+
+    var body: some View {
+        Button(action: action) {
+            VStack(alignment: .leading, spacing: 8) {
+                HStack {
+                    Image(systemName: systemImage)
+                        .font(.title2)
+                    Spacer()
+                    if isLoading { ProgressView().tint(style == .filled ? .white : .accentColor) }
+                }
+                Spacer()
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(title).font(.headline)
+                    Text(subtitle).font(.caption).opacity(0.8)
+                }
+            }
+            .frame(maxWidth: .infinity, minHeight: 110, alignment: .leading)
+            .padding(14)
+            .background(style == .filled ? Color.accentColor : Color(.systemBackground))
+            .foregroundStyle(style == .filled ? Color.white : Color.primary)
+            .overlay(
+                RoundedRectangle(cornerRadius: 18)
+                    .stroke(style == .filled ? Color.clear : Color.accentColor, lineWidth: 1.5)
+            )
+            .clipShape(RoundedRectangle(cornerRadius: 18))
+        }
+        .buttonStyle(.plain)
+        .disabled(isLoading)
+        .accessibilityIdentifier(identifier)
+    }
 }
 
 // MARK: - Project Row
@@ -323,5 +458,8 @@ struct ProjectRow: View {
 }
 
 #Preview {
-    HomeScreen(client: MockWorkflowClient())
+    HomeScreen(
+        client: MockWorkflowClient(),
+        tileClient: RealTileWorkflowClient(baseURL: URL(string: "http://localhost:8000")!)
+    )
 }

@@ -1,0 +1,28 @@
+appId: com.hippogriff.remo
+---
+# Tile mask editor: tap a surface, draw a rectangular mask, confirm tile
+# count updates (live re-render, no network).
+# Accessibility ID contract (PR 3 implements):
+#   tile_surface_0          — surface row to edit
+#   tile_mask_canvas        — drawable canvas view
+#   tile_mask_add           — button to confirm the drawn mask
+#   tile_tile_count_wall    — wall tile count label (baseline)
+#   tile_tile_count_wall_new — wall tile count label (post-mask)
+- tapOn:
+    id: "tile_surface_0"
+- assertVisible:
+    id: "tile_mask_canvas"
+# Record the pre-mask wall count (assumption: 80 tiles for reference fixture).
+- assertVisible:
+    id: "tile_tile_count_wall"
+- takeScreenshot: tile-03-before-mask
+# Drag a rectangle on the canvas (40% → 60% horizontally, 30% → 60% vertically).
+- swipe:
+    start: "40%, 30%"
+    end: "60%, 60%"
+- tapOn:
+    id: "tile_mask_add"
+# Post-mask the count should be strictly lower (mask removed tiles).
+- assertVisible:
+    id: "tile_tile_count_wall_new"
+- takeScreenshot: tile-03-after-mask

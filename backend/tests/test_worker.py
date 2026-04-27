@@ -16,14 +16,17 @@ from app.activities.mock_stubs import (
 from app.activities.purge import purge_project_data
 from app.worker import ACTIVITIES, WORKFLOWS, _load_activities, create_temporal_client, run_worker
 from app.workflows.design_project import DesignProjectWorkflow
+from app.workflows.tile_project import TileProjectWorkflow
 
 
 class TestActivityRegistration:
     """Verify that the correct activities are registered with the worker."""
 
     def test_all_activities_registered(self) -> None:
-        """All 6 activities (5 mock + 1 real purge) should be in the ACTIVITIES list."""
-        assert len(ACTIVITIES) == 6
+        """All 8 activities should be in the ACTIVITIES list: 5 design-flow mock
+        activities + 1 real purge + 2 tile-mode stubs (render + cutsheet).
+        """
+        assert len(ACTIVITIES) == 8
 
     def test_generate_designs_registered(self) -> None:
         """generate_designs activity should be registered."""
@@ -49,9 +52,9 @@ class TestActivityRegistration:
 class TestWorkflowRegistration:
     """Verify that the correct workflows are registered with the worker."""
 
-    def test_design_project_workflow_registered(self) -> None:
-        """DesignProjectWorkflow should be the only registered workflow."""
-        assert [DesignProjectWorkflow] == WORKFLOWS
+    def test_design_and_tile_workflows_registered(self) -> None:
+        """Both DesignProjectWorkflow and TileProjectWorkflow are registered."""
+        assert set(WORKFLOWS) == {DesignProjectWorkflow, TileProjectWorkflow}
 
 
 class TestCreateTemporalClient:
@@ -158,7 +161,7 @@ class TestLoadActivities:
         with patch("app.worker.settings") as mock_settings:
             mock_settings.use_mock_activities = True
             activities = _load_activities()
-        assert len(activities) == 6
+        assert len(activities) == 8
         # Check all loaded activities have @activity.defn names
         names = [getattr(a, "__temporal_activity_definition").name for a in activities]
         assert "generate_designs" in names
@@ -173,7 +176,7 @@ class TestLoadActivities:
         with patch("app.worker.settings") as mock_settings:
             mock_settings.use_mock_activities = False
             activities = _load_activities()
-        assert len(activities) == 6
+        assert len(activities) == 8
         names = [getattr(a, "__temporal_activity_definition").name for a in activities]
         assert "generate_designs" in names
         assert "edit_design" in names
